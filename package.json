@@ -55,9 +55,9 @@
   },
   "scripts": {
     "lint": "node scripts/check-syntax.mjs",
-    "test": "node --test \"test/unit/*.test.js\" \"test/integration/*.test.js\"",
-    "test:unit": "node --test \"test/unit/*.test.js\"",
-    "test:integration": "node --test \"test/integration/*.test.js\"",
+    "test": "node --test test/unit/*.test.js test/integration/*.test.js",
+    "test:unit": "node --test test/unit/*.test.js",
+    "test:integration": "node --test test/integration/*.test.js",
     "pack:check": "npm pack --dry-run",
     "prepack": "npm run lint && npm test"
   }
