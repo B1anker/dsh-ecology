@@ -1,0 +1,64 @@
+{
+  "name": "@seaveyon/dsh-web-login",
+  "version": "0.1.0",
+  "description": "Cookie-session login gate for the dsh Web surface, replacing reverse-proxy HTTP Basic auth with a styled login page",
+  "keywords": [
+    "dsh",
+    "cordis",
+    "authentication",
+    "login",
+    "session",
+    "reverse-proxy"
+  ],
+  "license": "MIT",
+  "author": "B1anker",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "dsh-web-login-hash": "./scripts/hash-password.mjs"
+  },
+  "files": [
+    "src/",
+    "scripts/hash-password.mjs",
+    "examples/",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/B1anker/dsh-web-login.git"
+  },
+  "homepage": "https://github.com/B1anker/dsh-web-login#readme",
+  "bugs": {
+    "url": "https://github.com/B1anker/dsh-web-login/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.7"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "lint": "node scripts/check-syntax.mjs",
+    "test": "node --test \"test/unit/*.test.js\" \"test/integration/*.test.js\"",
+    "test:unit": "node --test \"test/unit/*.test.js\"",
+    "test:integration": "node --test \"test/integration/*.test.js\"",
+    "pack:check": "npm pack --dry-run",
+    "prepack": "npm run lint && npm test"
+  }
+}
