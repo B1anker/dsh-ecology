@@ -1,0 +1,25 @@
+# Dependencies and build output
+node_modules/
+dist/
+*.tgz
+coverage/
+.nyc_output/
+
+# Local runtime secrets and state
+.env
+.env.*
+!.env.example
+*.session
+sessions/
+
+# Tooling caches
+.rslib/
+.rstest/
+*.tsbuildinfo
+
+# Editor and operating-system files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
