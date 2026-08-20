@@ -1,0 +1,19 @@
+# Dependencies and generated package artifacts
+node_modules/
+*.tgz
+coverage/
+.nyc_output/
+
+# Local runtime secrets and state
+.env
+.env.*
+!.env.example
+*.session
+sessions/
+
+# Editor and operating-system files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
