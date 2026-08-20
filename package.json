@@ -27,6 +27,7 @@
     "scripts/hash-password.mjs",
     "examples/",
     "README.md",
+    "README.zh-CN.md",
     "SECURITY.md",
     "LICENSE"
   ],

@@ -1,5 +1,7 @@
 # dsh-web-login
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 A cookie-session login gate for the DSH Web surface. It replaces a reverse
 proxy's browser-native HTTP Basic prompt with a small self-contained sign-in
 page while protecting the Web UI, API routes, plugin assets, the SPA fallback,
