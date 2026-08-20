@@ -5,12 +5,19 @@
  * cannot pull anything from `/plugins` or `/api` (both sit behind the gate), and
  * it must not depend on the SPA bundle at all. Everything is inline, which is
  * also what lets the response carry a `default-src 'none'` policy — no scripts,
- * no fonts, no images fetched from anywhere.
+ * no fonts, no images fetched from anywhere. The one illustration is an inline
+ * `<svg>`, which is markup rather than a fetch, so it costs the policy nothing.
  *
  * The visual language is deliberately neutral rather than an imitation of any
- * vendor's shell: one accent, generous negative space, a single centered card,
- * and `prefers-color-scheme` honoured so the page does not flash white against
- * a dark desktop.
+ * vendor's shell: one accent, generous negative space, a single centered card
+ * floating over a soft aurora wash, and `prefers-color-scheme` honoured so the
+ * page does not flash white against a dark desktop. Motion is limited to one
+ * entrance transition and yields to `prefers-reduced-motion`.
+ *
+ * There is no JavaScript, so every interactive affordance here — focus rings,
+ * the hover lift, the lock glyph — is CSS or markup only. That constraint is the
+ * point: a sign-in page that needs a bundle to render is a sign-in page that can
+ * fail to render.
  *
  * @module @seaveyon/dsh-web-login/page
  */
@@ -54,35 +61,55 @@ export function renderLoginPage({ title, message = '' }) {
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #ffffff;
-    --bg-elevated: #ffffff;
-    --fg: #14161a;
-    --fg-muted: #6b7280;
-    --border: #e2e5ea;
-    --border-strong: #cdd2da;
-    --accent: #4f46e5;
+    --bg: #f6f7f9;
+    --bg-elevated: rgba(255, 255, 255, 0.86);
+    --fg: #10131a;
+    --fg-muted: #626b7b;
+    --fg-subtle: #8b93a3;
+    --border: rgba(16, 24, 40, 0.09);
+    --border-strong: rgba(16, 24, 40, 0.16);
+    --field-bg: rgba(255, 255, 255, 0.72);
+    --accent: #5b53f0;
+    --accent-hover: #6a62f7;
     --accent-fg: #ffffff;
     --danger: #b42318;
-    --danger-bg: #fef3f2;
-    --danger-border: #fda29b;
-    --ring: rgba(79, 70, 229, 0.16);
-    --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 12px 32px -12px rgba(16, 24, 40, 0.16);
+    --danger-bg: rgba(254, 243, 242, 0.9);
+    --danger-border: rgba(217, 45, 32, 0.28);
+    --ring: rgba(91, 83, 240, 0.18);
+    --glow-a: rgba(99, 102, 241, 0.30);
+    --glow-b: rgba(56, 189, 248, 0.22);
+    --glow-c: rgba(168, 85, 247, 0.18);
+    --card-shadow:
+      0 1px 2px rgba(16, 24, 40, 0.04),
+      0 8px 20px -8px rgba(16, 24, 40, 0.10),
+      0 28px 56px -20px rgba(16, 24, 40, 0.18);
+    --hairline: rgba(255, 255, 255, 0.7);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0b0d10;
-      --bg-elevated: #14171c;
-      --fg: #f2f4f7;
-      --fg-muted: #98a2b3;
-      --border: #23272f;
-      --border-strong: #333945;
-      --accent: #7c74f4;
-      --accent-fg: #0b0d10;
+      --bg: #070809;
+      --bg-elevated: rgba(21, 24, 30, 0.82);
+      --fg: #f3f5f8;
+      --fg-muted: #9aa3b2;
+      --fg-subtle: #6d7686;
+      --border: rgba(255, 255, 255, 0.09);
+      --border-strong: rgba(255, 255, 255, 0.16);
+      --field-bg: rgba(255, 255, 255, 0.04);
+      --accent: #7d76f8;
+      --accent-hover: #8d86ff;
+      --accent-fg: #0a0b0f;
       --danger: #fda29b;
-      --danger-bg: #2a1512;
-      --danger-border: #6b2a24;
-      --ring: rgba(124, 116, 244, 0.22);
-      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 16px 40px -12px rgba(0, 0, 0, 0.6);
+      --danger-bg: rgba(66, 26, 22, 0.66);
+      --danger-border: rgba(253, 162, 155, 0.26);
+      --ring: rgba(125, 118, 248, 0.28);
+      --glow-a: rgba(99, 102, 241, 0.26);
+      --glow-b: rgba(34, 211, 238, 0.16);
+      --glow-c: rgba(168, 85, 247, 0.20);
+      --card-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.5),
+        0 10px 24px -10px rgba(0, 0, 0, 0.6),
+        0 32px 64px -24px rgba(0, 0, 0, 0.8);
+      --hairline: rgba(255, 255, 255, 0.10);
     }
   }
   * { box-sizing: border-box; }
@@ -92,93 +119,181 @@ export function renderLoginPage({ title, message = '' }) {
     display: grid;
     place-items: center;
     padding: 24px;
-    background: var(--bg);
+    background-color: var(--bg);
     color: var(--fg);
-    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
+
+  /* Aurora wash. Three wide radial gradients on a fixed layer, so the card has
+     something to float over without loading an image. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: -25%;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(42% 38% at 18% 12%, var(--glow-a), transparent 68%),
+      radial-gradient(38% 34% at 84% 22%, var(--glow-b), transparent 66%),
+      radial-gradient(46% 42% at 62% 92%, var(--glow-c), transparent 70%);
+    filter: blur(8px);
+  }
+
   .card {
+    position: relative;
     width: 100%;
-    max-width: 380px;
-    padding: 32px;
+    max-width: 396px;
+    padding: 38px 34px 30px;
     border: 1px solid var(--border);
-    border-radius: 14px;
+    border-radius: 18px;
     background: var(--bg-elevated);
-    box-shadow: var(--shadow);
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(14px) saturate(150%);
+    -webkit-backdrop-filter: blur(14px) saturate(150%);
+    animation: rise .5s cubic-bezier(.22, 1, .36, 1) both;
   }
+  /* Top hairline: the specular edge that reads as glass rather than as a box. */
+  .card::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 1px;
+    border-radius: 18px 18px 0 0;
+    background: linear-gradient(90deg, transparent, var(--hairline) 22%, var(--hairline) 78%, transparent);
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(10px) scale(.985); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  .badge {
+    display: grid;
+    place-items: center;
+    width: 46px;
+    height: 46px;
+    margin: 0 0 20px;
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    background: linear-gradient(160deg, var(--field-bg), transparent);
+    color: var(--accent);
+  }
+  .badge svg { display: block; width: 22px; height: 22px; }
+
   h1 {
-    margin: 0 0 6px;
-    font-size: 19px;
-    font-weight: 620;
-    letter-spacing: -0.011em;
+    margin: 0 0 7px;
+    font-size: 21px;
+    font-weight: 640;
+    letter-spacing: -0.017em;
   }
   .sub {
-    margin: 0 0 24px;
+    margin: 0 0 26px;
     color: var(--fg-muted);
     font-size: 13.5px;
   }
+
   label {
     display: block;
-    margin-bottom: 7px;
-    font-size: 13px;
-    font-weight: 540;
+    margin-bottom: 8px;
+    font-size: 12.5px;
+    font-weight: 560;
+    letter-spacing: -0.003em;
   }
   input[type="password"] {
     width: 100%;
-    padding: 10px 12px;
+    padding: 11px 13px;
     border: 1px solid var(--border-strong);
-    border-radius: 9px;
-    background: var(--bg);
+    border-radius: 11px;
+    background: var(--field-bg);
     color: var(--fg);
     font: inherit;
-    transition: border-color .15s, box-shadow .15s;
+    letter-spacing: .06em;
+    transition: border-color .16s ease, box-shadow .16s ease, background-color .16s ease;
   }
+  input[type="password"]::placeholder { color: var(--fg-subtle); letter-spacing: normal; }
+  input[type="password"]:hover { border-color: var(--accent); }
   input[type="password"]:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 3.5px var(--ring);
+    box-shadow: 0 0 0 4px var(--ring);
   }
+
   button {
     width: 100%;
-    margin-top: 18px;
-    padding: 10px 14px;
+    margin-top: 20px;
+    padding: 11px 16px;
     border: 1px solid transparent;
-    border-radius: 9px;
+    border-radius: 11px;
     background: var(--accent);
     color: var(--accent-fg);
     font: inherit;
-    font-weight: 560;
+    font-weight: 580;
+    letter-spacing: -0.003em;
     cursor: pointer;
-    transition: filter .15s, transform .06s;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.10), 0 8px 18px -10px var(--accent);
+    transition: background-color .16s ease, transform .08s ease, box-shadow .16s ease;
   }
-  button:hover { filter: brightness(1.07); }
-  button:active { transform: translateY(0.5px); }
-  button:focus-visible { outline: none; box-shadow: 0 0 0 3.5px var(--ring); }
+  button:hover { background: var(--accent-hover); transform: translateY(-1px); }
+  button:active { transform: translateY(0.5px); box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12); }
+  button:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--ring); }
+
   .error {
-    margin: 0 0 18px;
-    padding: 9px 12px;
+    display: flex;
+    gap: 9px;
+    align-items: flex-start;
+    margin: 0 0 20px;
+    padding: 10px 13px;
     border: 1px solid var(--danger-border);
-    border-radius: 9px;
+    border-radius: 11px;
     background: var(--danger-bg);
     color: var(--danger);
     font-size: 13px;
+    animation: shake .34s cubic-bezier(.36, .07, .19, .97) both;
   }
+  @keyframes shake {
+    10%, 90% { transform: translateX(-1px); }
+    30%, 70% { transform: translateX(2px); }
+    50%      { transform: translateX(-2px); }
+  }
+
   .foot {
-    margin: 22px 0 0;
-    color: var(--fg-muted);
-    font-size: 12px;
+    margin: 26px 0 0;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    color: var(--fg-subtle);
+    font-size: 11.5px;
+    line-height: 1.5;
     text-align: center;
+  }
+
+  @media (max-width: 420px) {
+    .card { padding: 30px 22px 24px; border-radius: 16px; }
+    h1 { font-size: 19px; }
+  }
+  /* Honour a reduced-motion preference: keep the states, drop the movement. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    button:hover, button:active { transform: none; }
   }
 </style>
 </head>
 <body>
   <main class="card">
+    <div class="badge" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+           stroke-linecap="round" stroke-linejoin="round" focusable="false">
+        <rect x="4" y="10.5" width="16" height="10.5" rx="3"></rect>
+        <path d="M8.2 10.5V7.4a3.8 3.8 0 0 1 7.6 0v3.1"></path>
+        <circle cx="12" cy="15.8" r="1.35" fill="currentColor" stroke="none"></circle>
+      </svg>
+    </div>
     <h1>${safeTitle}</h1>
     <p class="sub">Enter the access password to continue.</p>
 ${banner}    <form method="post" action="/login">
       <label for="password">Password</label>
       <input id="password" name="password" type="password" autocomplete="current-password"
-             required autofocus spellcheck="false">
+             placeholder="Access password" required autofocus spellcheck="false">
       <button type="submit">Sign in</button>
     </form>
     <p class="foot">Sessions are held in memory and end when the server restarts.</p>
