@@ -322,7 +322,10 @@ export function apply(ctx, config) {
   // Published last. Anything that injects this service is guaranteed to see the
   // decorated registries, which is what makes route coverage deterministic
   // instead of dependent on loader timing.
-  ctx.provide?.(READY_SERVICE, true, true)
+  // The third `provide()` argument is an optional *function* that determines
+  // availability. Passing `true` here makes Cordis call a boolean as a
+  // function, leaving every injected route owner pending.
+  ctx.provide?.(READY_SERVICE, true, () => true)
   ctx.set?.(READY_SERVICE, true)
 
   ctx.logger.info('dsh-web-login: gate active; sign in at /login')
