@@ -154,7 +154,7 @@ export function resolveConfig(config: unknown = {}): ResolvedConfig {
   }
 
   const supplied = config as Record<string, unknown>
-  const unknown = Object.keys(supplied).filter((key) => !(key in DEFAULTS))
+  const unknown = Object.keys(supplied).filter((key) => !Object.hasOwn(DEFAULTS, key))
   if (unknown.length > 0) {
     throw new Error(`dsh-web-login: unknown config key(s): ${unknown.join(', ')}`)
   }

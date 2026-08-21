@@ -37,6 +37,14 @@ test('unknown keys are rejected rather than ignored', () => {
   // operator believes they changed.
   expect(bad({ sessionTtlMS: 1000 })).toThrow(/unknown config key\(s\): sessionTtlMS/)
   expect(bad({ secure: true, ttl: 1 })).toThrow(/secure, ttl/)
+  // `in` would accept these through Object.prototype even though none is a
+  // configuration key. YAML can produce them as ordinary own properties, so
+  // the allowlist must check DEFAULTS itself rather than its prototype chain.
+  for (const key of ['constructor', 'toString', '__proto__']) {
+    const supplied = Object.create(null) as Record<string, unknown>
+    supplied[key] = 'not a setting'
+    expect(bad(supplied), key).toThrow(new RegExp(`unknown config key\\(s\\): ${key}`))
+  }
 })
 
 test('a non-object config is rejected', () => {

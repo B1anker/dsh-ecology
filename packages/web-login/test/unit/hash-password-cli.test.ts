@@ -83,8 +83,9 @@ function run(args: readonly string[]): Promise<Result> {
 
 test('the built CLI is an executable script the shell can run directly', async () => {
   // The `bin` entry in package.json points here. If either property is missing,
-  // `npx dsh-web-login-hash` fails for every user and for nobody in CI, because
-  // every other test in this file spawns it through an explicit interpreter.
+  // The package-manager-created `dsh-web-login-hash` bin fails for every user
+  // and for nobody in CI if either property is wrong, because every other test
+  // in this file spawns it through an explicit interpreter.
   const source = await readFile(CLI, 'utf8')
   expect(source.startsWith('#!/usr/bin/env node'), 'the build must prepend the shebang').toBe(true)
 

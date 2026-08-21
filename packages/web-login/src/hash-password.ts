@@ -7,7 +7,7 @@
  * a value echoed to a terminal is a value that lives in scrollback, in a
  * screenshot, and eventually in a pasted bug report.
  *
- * Usage: npx dsh-web-login-hash [--env-path <path>] [--var <NAME>]
+ * Usage: dsh-web-login-hash [--env-path <path>] [--var <NAME>]
  *
  * The path flag is `--env-path`, not `--env-file`, because Node itself owns
  * `--env-file`: it consumes that flag wherever it appears — even after the
@@ -22,6 +22,7 @@
  * @module @seaveyon/dsh-web-login/hash-password
  */
 
+import { writeSync } from 'node:fs'
 import { argv, exit, stderr, stdout } from 'node:process'
 import { DEFAULTS } from './config.js'
 import { isEnvName, resolveEnvPath, writeEnvAssignment } from './env-file.js'
@@ -98,23 +99,32 @@ Options:
  *
  * @param message - the text to write to stderr.
  * @param code - process exit status.
- * @returns never; the process exits.
+ * @returns never; the process exits after the synchronous write completes.
  */
-function fail(message: string, code: number): never {
-  stderr.write(message)
+function writeAndExit(stream: typeof stdout | typeof stderr, message: string, code: number): never {
+  // `process.exit()` does not flush asynchronous stream writes. These messages
+  // are short, and writing the standard-stream descriptor synchronously makes
+  // help and diagnostics reliable through redirection and execFile/spawn.
+  writeSync(stream.fd, message)
   return exit(code)
 }
 
-let options: CliOptions
-try {
-  options = parseArgs(argv.slice(2))
-} catch (error) {
-  fail(`${error instanceof Error ? error.message : String(error)}\n\n${USAGE}`, 2)
+function fail(message: string, code: number): never {
+  return writeAndExit(stderr, message, code)
 }
 
+function readOptions(): CliOptions {
+  try {
+    return parseArgs(argv.slice(2))
+  } catch (error) {
+    return fail(`${error instanceof Error ? error.message : String(error)}\n\n${USAGE}`, 2)
+  }
+}
+
+const options = readOptions()
+
 if (options.help === true) {
-  stdout.write(USAGE)
-  exit(0)
+  writeAndExit(stdout, USAGE, 0)
 }
 
 const envPath = options.envPath ?? resolveEnvPath()

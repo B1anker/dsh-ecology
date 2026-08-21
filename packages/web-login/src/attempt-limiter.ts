@@ -121,7 +121,16 @@ export function createAttemptLimiter({
     retryAfterMs(key) {
       const global = globalRetryMs()
       const record = clients.get(key)
-      if (record === undefined) return global
+      if (record === undefined) {
+        // At capacity there is deliberately nowhere to store another key. Letting
+        // an unknown client through here and only refusing it after the KDF would
+        // make every retry pay the full scrypt cost again, because `fail()` could
+        // not leave a blocked record for the next preflight. Refuse before the
+        // body and KDF instead. A successful tracked client or the periodic sweep
+        // frees a slot and makes newcomers eligible again.
+        if (clients.size >= maxClients) return Math.max(global, blockMs)
+        return global
+      }
       const remaining = record.blockedUntil - now()
       return Math.max(global, remaining > 0 ? remaining : 0)
     },

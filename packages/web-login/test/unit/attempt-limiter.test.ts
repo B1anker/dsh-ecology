@@ -102,8 +102,10 @@ test('a client that cannot be tracked is denied rather than let through', () => 
   // The failure mode that matters. Not tracking an untracked client would mean
   // that filling the table buys unlimited guesses for every key not in it, so
   // reaching capacity would be the attack rather than the defence against it.
+  expect(limiter.retryAfterMs('c'), 'the next request is stopped before its KDF').toBe(5000)
   expect(limiter.fail('c')).toBe(5000)
   expect(limiter.fail('d')).toBe(5000)
+  expect(limiter.retryAfterMs('c'), 'retries stay stopped while the table is full').toBe(5000)
   expect(limiter.size, 'and it is still bounded').toBe(2)
 })
 
@@ -117,6 +119,8 @@ test('capacity denial lifts as soon as sweeping frees a slot', () => {
   // newcomers: it has to end the moment the table has room again, without an
   // operator noticing or a timer of its own.
   advance(10_001)
+  limiter.sweep()
+  expect(limiter.retryAfterMs('c')).toBe(0)
   expect(limiter.fail('c')).toBe(0)
 })
 

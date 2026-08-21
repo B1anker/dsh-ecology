@@ -85,8 +85,8 @@ export function parseVerifier(stored: unknown): Verifier | null {
 export function requireVerifier(stored: unknown, envName: string): Verifier {
   if (typeof stored !== 'string' || stored === '') {
     throw new Error(
-      `dsh-web-login: ${envName} is unset — run \`npx dsh-web-login-hash\` to ` +
-        'generate one, then restart dsh',
+      `dsh-web-login: ${envName} is unset — run ` +
+        '`dsh plugin --profile web exec dsh-web-login-hash` to generate one, then restart dsh',
     )
   }
   const parsed = parseVerifier(stored)
@@ -94,7 +94,7 @@ export function requireVerifier(stored: unknown, envName: string): Verifier {
     throw new Error(
       `dsh-web-login: ${envName} is not a valid scrypt verifier — expected ` +
         `scrypt$<${SCRYPT.saltBytes * 2} hex chars>$<${SCRYPT.keylen * 2} hex chars>; ` +
-        'regenerate it with `npx dsh-web-login-hash`',
+        'regenerate it with `dsh plugin --profile web exec dsh-web-login-hash`',
     )
   }
   return parsed
