@@ -1,10 +1,23 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": ".",
+    // No `rootDir`: this configuration emits nothing, so the option's only
+    // remaining effect would be to reject the sibling sources the `paths` below
+    // deliberately pull in. `tsconfig.build.json`, which does emit, sets its
+    // own.
     "lib": ["ES2023"],
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    // Resolve the testkit to its sources rather than to the `dist/` its
+    // package.json advertises. Without this, `typecheck` silently depends on
+    // something having built that package first — which is true on a machine
+    // that has been working here and false on a clean checkout, so the check
+    // passes locally and fails in CI. Mapping to source also means the tests are
+    // checked against the testkit as written, not against a stale build of it.
+    "paths": {
+      "@seaveyon/dsh-plugin-testkit": ["../plugin-testkit/src/index.ts"],
+      "@seaveyon/dsh-plugin-testkit/contract": ["../plugin-testkit/src/contract.ts"]
+    }
   },
   "include": ["src", "test", "rslib.config.ts", "rstest.config.ts"]
 }
