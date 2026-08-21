@@ -7,7 +7,7 @@ proxy's browser-native HTTP Basic prompt with a small self-contained sign-in
 page while protecting the Web UI, API routes, plugin assets, the SPA fallback,
 and WebSocket upgrades.
 
-> **Status:** public-source preparation, version `0.1.0`. The package is tested
+> **Status:** published on npm. The package is tested
 > against the route-registry contract of
 > `@deepseek-ai/dsh-host-webserver` `0.1.0-rc.7` and Cordis `^4.0.1`. It requires
 > Node.js **20.11.0 or later**. This project is independent software and is not
@@ -18,7 +18,8 @@ and WebSocket upgrades.
 - reads an scrypt password verifier from an environment variable, never from
   plugin configuration;
 - creates opaque, random in-memory sessions behind a host-only `HttpOnly`,
-  `SameSite=Strict` cookie;
+  `SameSite=Strict` cookie, named with the `__Host-` prefix wherever TLS makes
+  that possible;
 - redirects browser document navigations to `/login`, while API, plugin, and
   other resource routes get a machine-readable `401` instead of an HTML login
   page;
@@ -26,8 +27,11 @@ and WebSocket upgrades.
   cookie;
 - protects routes registered through the DSH `webServer` registry, including
   exact routes, prefix routes, SPA fallback, and WebSocket upgrades;
-- limits failed password attempts **before** scrypt runs, with bounded memory
-  for both limiter state and sessions; and
+- limits failed password attempts **before** scrypt runs — per network and
+  across all of them — with bounded memory for limiter state and sessions, and
+  refuses rather than admits when either bound is reached;
+- derives scrypt off the event loop under a bounded concurrency gate, so a flood
+  of sign-ins cannot stall the rest of the DSH process; and
 - sends `Cache-Control: no-store`, CSP, anti-framing, no-sniff, and no-referrer
   headers on all pre-authentication responses.
 
@@ -131,21 +135,69 @@ incognito window, confirm that direct API and WebSocket requests are denied.
 All configuration is validated. Unknown or misspelled keys stop startup instead
 of silently selecting an unsafe default.
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `passwordHashEnv` | `LOGIN_PASSWORD_HASH` | Name of the environment variable holding `scrypt$<salt hex>$<key hex>`. |
-| `title` | `DSH Web` | Login-page and browser-title text (1–120 characters). |
-| `secureCookie` | `true` | Adds the `Secure` cookie attribute. Keep it enabled outside localhost HTTP development. |
-| `sessionTtlMs` | 30 days | Session lifetime; restart always signs users out sooner. Range: 1 minute–365 days. |
-| `maxSessions` | `10000` | Maximum live sessions. At capacity, a new login receives `503`; live sessions are never evicted. |
-| `maxBodyBytes` | `4096` | Maximum accepted login form body. Range: 64 bytes–1 MiB. |
-| `attemptLimit` | `5` | Failed attempts in a window before blocking that client. |
-| `attemptWindowMs` | 15 minutes | Failure-counting window. |
-| `blockMs` | 15 minutes | Duration of a password-attempt block. |
-| `maxAttemptClients` | `10000` | Maximum limiter records, preventing unbounded memory use. |
-| `sweepIntervalMs` | 5 minutes | Interval for removing expired session and limiter records. |
-| `trustProxy` | `false` | Use a forwarded client-IP header for throttling only behind a trusted proxy. |
-| `clientIpHeader` | `x-forwarded-for` | Lower-cased header name used only when `trustProxy` is true. |
+| Key | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `passwordHashEnv` | `LOGIN_PASSWORD_HASH` | env-name syntax | Name of the environment variable holding `scrypt$<salt hex>$<key hex>`. |
+| `title` | `DSH Web` | 1–120 characters | Login-page and browser-title text. |
+| `secureCookie` | `true` | — | Adds the `Secure` attribute and the `__Host-` cookie name. Keep it enabled outside localhost HTTP development. |
+| `sessionTtlMs` | 30 days | 1 minute–365 days | Session lifetime; a restart always signs users out sooner. |
+| `maxSessions` | `10000` | 1–1000000 | Maximum live sessions. At capacity a new login receives `503`; live sessions are never evicted. |
+| `maxBodyBytes` | `4096` | 64 B–1 MiB | Maximum accepted login form body. |
+| `sweepIntervalMs` | 5 minutes | 1 second–1 hour | Interval for removing expired session and limiter records. |
+
+#### Password-attempt limiting
+
+| Key | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `attemptLimit` | `5` | 1–1000 | Failed attempts in a window before blocking that client. |
+| `attemptWindowMs` | 15 minutes | 1 second–24 hours | Failure-counting window. |
+| `blockMs` | 15 minutes | 1 second–24 hours | Duration of a per-client block. |
+| `maxAttemptClients` | `10000` | 1–1000000 | Maximum limiter records. At capacity, a client with no record is refused rather than admitted untracked. |
+| `globalAttemptLimit` | `100` | 1–1000000 | Failures across *all* clients in one window before every sign-in is blocked. |
+| `globalBlockMs` | 1 minute | 1 second–24 hours | Duration of a global block. Much shorter than `blockMs`, because this one can also catch the operator. |
+| `ipv4PrefixBits` | `32` | 8–32 | Network width an IPv4 client is counted under. |
+| `ipv6PrefixBits` | `64` | 32–128 | Network width an IPv6 client is counted under. |
+
+#### Password hashing
+
+| Key | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `kdfConcurrency` | `2` | 1–32 | scrypt derivations allowed to run at once. |
+| `kdfQueueDepth` | `8` | 0–1024 | Sign-ins allowed to wait for a slot. Beyond it, a sign-in is refused with `503` and `Retry-After` rather than queued. |
+
+### Password hashing and the event loop
+
+scrypt costs roughly 80 ms and 16 MiB per derivation, and an unauthenticated
+caller chooses when it happens. The plugin runs it on libuv's threadpool rather
+than synchronously — a synchronous derivation holds the event loop, so it would
+stall every other request, WebSocket frame, and timer in the DSH process, not
+just the sign-in that caused it.
+
+That moves the problem rather than solving it: the threadpool has four slots by
+default, and filling all of them starves the file and DNS work the rest of DSH
+does. `kdfConcurrency` bounds how many the gate will occupy, and `kdfQueueDepth`
+bounds how many callers may wait. Past both, a sign-in is refused immediately
+with a `503` and a `Retry-After`, which is a worse experience for one visitor and
+the only outcome that keeps the process responsive under a flood.
+
+### Rate limiting
+
+Failures are counted per client and, independently, across all clients. The
+per-client counter is the one that stops a guessing attack from one address; the
+global budget is the backstop for the same attacker spread over many, which
+per-client counting cannot see by construction.
+
+A client is a *network*, not an address. Counting single addresses is not
+throttling anyone who holds an IPv6 /64 — that is eighteen quintillion
+independent allowances — so addresses are masked to `ipv4PrefixBits` and
+`ipv6PrefixBits` before they become limiter keys. Anything that is not an address
+at all collapses to one shared bucket, so an attacker-chosen header cannot mint
+new identities.
+
+When the limiter table is full at `maxAttemptClients`, a client with no existing
+record is refused rather than admitted untracked. The alternative fails open: the
+table fills, and every new client is then unlimited, which is exactly the state
+an attacker would engineer.
 
 ### Trusted proxies and the limiter
 
@@ -163,8 +215,34 @@ plugins:
       clientIpHeader: x-forwarded-for
 ```
 
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `trustProxy` | `false` | Use a forwarded client-IP header for throttling. |
+| `clientIpHeader` | `x-forwarded-for` | Header name, lower-cased, read only when `trustProxy` is true. |
+
 A proxy that merely passes through an incoming `X-Forwarded-For` header lets
 clients create arbitrary limiter identities and defeats per-client throttling.
+
+### The session cookie
+
+Under `secureCookie: true` the cookie is named `__Host-dsh_session`. The prefix
+is not decoration: a browser refuses to accept a `__Host-` cookie unless it is
+`Secure`, has `Path=/`, and carries no `Domain`, and those three conditions
+cannot be met by a sibling subdomain setting a cookie for the parent domain. It
+is what makes "this cookie came from this host" something the browser enforces
+rather than something this code merely refrains from widening.
+
+The prefix requires `Secure`, so it is unavailable under `secureCookie: false`.
+That configuration exists for plain-HTTP loopback development and gets the
+unprefixed name.
+
+Where a name does arrive twice with different values, the request is treated as
+unauthenticated rather than resolved in either direction. The Cookie header
+carries only names and values, so a cookie planted from a wider scope is
+indistinguishable here from the real one — and browsers order cookies by
+descending path length, which means "take the first" selects exactly the value it
+was meant to exclude. Logging out clears both cookie names, so a deployment that
+has upgraded into the prefix does not leave an inert `dsh_session` behind.
 
 ## Local development
 
@@ -191,12 +269,20 @@ Run the package checks. Install first — the type checker, test runner, and
 bundler are development dependencies:
 
 ```sh
-bun install          # from the workspace root
-bun run typecheck    # tsc over src and test
-bun run test         # rstest
-bun run build        # rslib, bundleless, with declarations
-bun run pack:check   # build, then npm pack --dry-run
+bun install            # from the workspace root
+bun run typecheck      # tsc over src and test
+bun run test           # rslib build, then rstest
+bun run test:coverage  # rstest with coverage and its thresholds
+bun run build          # rslib, bundleless, with declarations
+bun run pack:check     # build, then npm pack --dry-run
 ```
+
+The suite includes property tests (`test/unit/parsing.property.test.ts`) over
+the parsers that read attacker-chosen strings: the Cookie header, the forwarded
+address header, the stored verifier, and the `.env` rewriter. They assert
+invariants rather than outputs — that each is total, that values survive a round
+trip, that widening a network never splits a bucket — because those are the
+properties the calling code relies on.
 
 Lint and formatting are configured once for the whole workspace, so run those
 from the root: `bun run lint` and `bun run format:check`. `bun run check` at the
@@ -235,8 +321,11 @@ surface reachable according to its listener and network configuration.
 
 ## Package contents and publication
 
-The npm allowlist ships only source, the hash CLI, example manifest fragment,
-README, security policy, and MIT license. Tests, local `.env` files, session
-state, and deployment configuration are excluded. This repository prepares
-package metadata for a later public release; it does not publish a package as
-part of installation, testing, CI, or its release-preparation workflow.
+The npm allowlist ships only the built output, the hash CLI, the example manifest
+fragment, both READMEs, the security policy, and the MIT license. Tests, local
+`.env` files, session state, and deployment configuration are excluded.
+
+Releases are automated from `main` and authenticated with npm
+[trusted publishing](https://docs.npmjs.com/trusted-publishers/), so each version
+carries provenance linking it to the workflow run that built it. Nothing is
+published as part of installing, testing, or checking this repository locally.

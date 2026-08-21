@@ -9,6 +9,7 @@ endorsed by DeepSeek AI.
 | Package | Version | Description |
 | --- | --- | --- |
 | [`@seaveyon/dsh-web-login`](packages/web-login) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-web-login.svg)](https://www.npmjs.com/package/@seaveyon/dsh-web-login) | Cookie-session login gate for the DSH Web surface, replacing a reverse proxy's HTTP Basic prompt with a styled sign-in page. |
+| [`@seaveyon/dsh-plugin-testkit`](packages/plugin-testkit) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-plugin-testkit.svg)](https://www.npmjs.com/package/@seaveyon/dsh-plugin-testkit) | Test doubles for the `webServer` registry and the Cordis context, plus the conformance suite that keeps them honest. |
 
 Each package is independently versioned and published; the workspace exists to
 share one toolchain, not to release them together.
@@ -66,17 +67,44 @@ discover the same files and fail on them in confusing ways.
 | --- | --- |
 | `bun run build` | rslib build in every package |
 | `bun run test` | build, then rstest, in every package |
+| `bun run test:coverage` | the same, with coverage collected and its thresholds enforced |
 | `bun run typecheck` | `tsc --noEmit` over each package's sources and tests |
 | `bun run lint` | oxlint across the workspace |
 | `bun run lint:fix` | oxlint with `--fix` |
 | `bun run format` | Biome, writing fixes |
 | `bun run format:check` | Biome, reporting only |
-| `bun run check` | typecheck, then lint, then format check |
+| `bun run contract` | check the installed DSH host packages against the types the plugins assume |
+| `bun run check` | typecheck, lint, format check, then the host contract |
 | `bun run precommit` | `check`, then the full test suite |
 | `bun run pack:check` | build and `npm pack --dry-run` in every package |
 
 CI runs the same scripts in the same order on every push and pull request; see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+### Coverage
+
+Coverage is off by default and on in CI, because collecting it costs about a
+third of the run and the answer only has to be right before a merge. Each
+package sets its own thresholds in its `rstest.config.ts`, and they are set just
+under where the suite already sits. That is deliberate: a threshold above the
+current number is a wish, and one below it is a ratchet — it fails the build when
+a change removes coverage rather than when someone forgets to add it.
+`packages/web-login` holds `src/cookies.ts` and `src/sessions.ts` to 100% on
+their own, because a missed branch in either is a way in rather than a line of
+code.
+
+### Contract checks
+
+A plugin here binds to two host surfaces it cannot install: the `webServer` route
+registry and the Cordis plugin context. Their types are hand-written, so nothing
+in a normal build notices when the host moves.
+
+Two checks cover that. `bun run contract` inspects the DSH host packages if they
+are installed in this checkout, and says so plainly when they are not.
+Independently, `@seaveyon/dsh-plugin-testkit` states the registry's behaviour
+once as a runnable suite, so the same assertions can be pointed at the doubles
+here and at a real host adapter when one can be installed — which is what keeps
+a mock from drifting into describing something that no longer exists.
 
 ## Releases
 
@@ -85,7 +113,24 @@ which re-runs the full gate and then hands the commits to
 [semantic-release](https://semantic-release.gitbook.io/). Conventional commit
 messages decide the version: a `fix:` is a patch, a `feat:` a minor, a `!` or a
 `BREAKING CHANGE:` footer a major, and a commit that implies none of those
-releases nothing. Configuration is in [`.releaserc.json`](.releaserc.json).
+releases nothing.
+
+Each package has its own configuration under [`release/`](release), and each is
+released independently. Three things make that independence real rather than
+nominal:
+
+- **Scoped tags.** `web-login-v1.2.3`, not `v1.2.3`. semantic-release finds the
+  last release by matching the tag pattern, so a tag naming another package is
+  invisible — which is the behaviour wanted, and also the reason a bare `v1.2.3`
+  would be a claim about every package at once.
+- **Scoped commits.** [`scripts/release/scoped-commits.mjs`](scripts/release/scoped-commits.mjs)
+  filters the branch down to the commits that touched the package's own
+  directory before the analyzer ever sees it. Without it, a commit touching one
+  package would bump the other and appear in its release notes.
+- **One job, in sequence.** Releasing a package creates a commit and a tag and
+  pushes them. A matrix would have each package start from the same checkout and
+  the second push would be rejected, so the workflow loops inside one checkout
+  and each release builds on the commit the last one made.
 
 Authentication is npm [trusted publishing](https://docs.npmjs.com/trusted-publishers/):
 the job exchanges a short-lived GitHub OIDC token for publish rights, so there is
@@ -100,12 +145,6 @@ leaves nothing tagged and the next run retries, while a publish that succeeded
 before a later step failed is skipped on the re-run by an `npm view` check,
 rather than leaving a tag that claims a version the registry never received.
 
-Tags are `web-login-v<version>`, scoped to the package rather than the
-repository, because the packages here are versioned independently. That the
-analyzer still reads *every* commit on `main` is a limitation worth knowing
-about before a second package ships: at that point each package needs its own
-semantic-release configuration and commit filter.
-
 ### Bootstrapping a new package on npm
 
 A trusted publisher is configured on a package that already exists, so the very
@@ -113,13 +152,14 @@ first version of any package cannot come from CI. Publish it once by hand:
 
 ```sh
 bun install && bun run test           # the tarball has to be built first
-cd packages/web-login && npm publish --access public
+cd packages/<name> && npm publish --access public
 ```
 
-Then tag that release and push the tag — `git tag web-login-v0.1.0` — so the
-first automated release counts commits from there. Without it semantic-release
-reads the repository's whole history, finds the breaking changes in it, and
-concludes that the next version is `1.0.0`.
+Then tag that release and push the tag — `git tag <name>-v0.1.0`, matching the
+`tagFormat` in the package's `release/<name>.config.mjs` — so the first automated
+release counts commits from there. Without it semantic-release reads the
+repository's whole history, finds the breaking changes in it, and concludes that
+the next version is `1.0.0`.
 
 Finally, on npmjs.com, open the package's **Settings → Trusted Publisher**,
 choose GitHub Actions, and fill in the owner, the repository, and the workflow
@@ -130,14 +170,24 @@ publishing until this setting is changed to match.
 ## Adding a package
 
 1. Create `packages/<name>/` with a `package.json` whose `name` is scoped and
-   whose `scripts` include `build`, `test`, `typecheck`, and `pack:check` — the
-   root scripts fan out by name, so a package missing one is silently skipped by
-   that check.
+   whose `scripts` include `build`, `test`, `test:unit`, `test:coverage`,
+   `typecheck`, and `pack:check` — the root scripts fan out by name, so a package
+   missing one is silently skipped by that check rather than failing it.
 2. Extend the shared TypeScript configuration:
    `{ "extends": "../../tsconfig.base.json" }`.
 3. Add `rslib.config.ts` and `rstest.config.ts`. Copying
-   `packages/web-login`'s is the intended starting point.
-4. Run `bun install` at the root to link the new workspace member.
+   `packages/web-login`'s is the intended starting point; set the coverage
+   thresholds to whatever the new suite actually reaches.
+4. Add `release/<name>.config.mjs` and a `release_package` line in
+   [`.github/workflows/publish.yml`](.github/workflows/publish.yml). A package
+   with no release configuration is built and tested by CI and never published,
+   which is a quiet enough failure to be worth stating.
+5. Add the package to the `engines-floor` matrix in
+   [`.github/workflows/ci.yml`](.github/workflows/ci.yml), and teach
+   [`scripts/smoke-tarball.mjs`](scripts/smoke-tarball.mjs) what to assert about
+   its tarball. That job is the only one that tests what `engines.node`
+   promises.
+6. Run `bun install` at the root to link the new workspace member.
 
 Lint and formatting need no per-package setup; they apply from the root.
 
