@@ -58,13 +58,25 @@ jobs:
   # exercises whichever Node the bun runtime happens to embed. This runs the
   # built output on each supported major, because the promise is about the
   # published artifact rather than about the toolchain that produced it.
+  #
+  # The matrix floor is 20.19, not the 20.11 that `engines` promises, because the
+  # whole Rsfamily — rslib, rstest, and the rsbuild under both — declares
+  # `^20.19.0 || >=22.12.0` and gates on `util.styleText` at startup. On 20.11
+  # neither the build nor the runner will start, so there is no way to exercise
+  # that version from here.
+  #
+  # This is a constraint of the toolchain, not of what ships: `dist/` targets
+  # es2022 and imports only crypto, fs/promises, os, path, and process, all long
+  # stable. The 20.11 floor in `engines` stays as the runtime promise; verifying
+  # it needs a consumer-side smoke test that installs the tarball without the dev
+  # toolchain, which is worth adding before the first publish.
   node-matrix:
     needs: check
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node: ['20.11', '22', '24']
+        node: ['20.19', '22.12', '24']
     steps:
       - uses: actions/checkout@v4
 
@@ -72,13 +84,17 @@ jobs:
         with:
           bun-version: 1.3.14
 
+      - run: bun install --frozen-lockfile
+
+      # Built before setup-node switches the interpreter, so this runs on
+      # whichever current Node the runner ships — comfortably above Rspack's
+      # floor and irrelevant to the output, which targets es2022.
+      - name: Build on the runner's Node
+        run: bun run build
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-
-      - run: bun install --frozen-lockfile
-
-      - run: bun run build
 
       # setup-node runs after setup-bun, so its Node is first on PATH and is the
       # one rstest launches workers with. Asserting the major here rather than
@@ -92,7 +108,7 @@ jobs:
             *) echo "::error::expected Node ${{ matrix.node }}, got $(node --version)"; exit 1 ;;
           esac
 
-      # test:unit rather than test: the build already ran above, and re-running
-      # it here would rebuild with the matrix Node for no added coverage.
+      # test:unit, not test: `test` would rebuild, which is the step that cannot
+      # run on 20.11. The suite here consumes the dist/ built above.
       - name: Test on Node ${{ matrix.node }}
         run: bun run --filter '*' test:unit

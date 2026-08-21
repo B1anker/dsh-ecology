@@ -45,6 +45,11 @@ bun run check   # typecheck, lint, format
 bun run test    # builds each package, then runs its suite
 ```
 
+Development needs Node `^20.19.0 || >=22.12.0`: rslib, rstest, and the rsbuild
+beneath both refuse to start below that. Published packages set their own,
+lower `engines.node` — that field describes what the built output needs, which is
+much less than what building it does.
+
 `bun run test` delegates to each package's own `test` script rather than running
 `bun test` directly: the suites run under rstest, and bun's built-in runner would
 discover the same files and fail on them in confusing ways.
