@@ -16,4 +16,49 @@ export default defineConfig({
   // `process.env` and decorates a shared registry object, so leaking state
   // between files would make failures depend on execution order.
   isolate: true,
+  coverage: {
+    // Off by default and on in CI, because collecting it costs about a third of
+    // the run and the answer only has to be right before a merge.
+    enabled: false,
+    provider: 'v8',
+    include: ['src/**/*.ts'],
+    exclude: [
+      // A top-level script: importing it runs it, prompts for a password, and
+      // writes a file. It is covered by spawning the built binary in
+      // `test/unit/hash-password-cli.test.ts`, which the provider cannot see
+      // into, so counting it here would report a hole the suite does fill.
+      'src/hash-password.ts',
+      // Declarations only. It emits no JavaScript, so it is permanently 0% and
+      // would drag every total down by a constant that means nothing.
+      'src/types.ts',
+    ],
+    reporters: ['text', 'html'],
+    thresholds: {
+      // Set just under where the suite already sits. A threshold above the
+      // current number is a wish; one below it is a ratchet, which is the only
+      // thing it can usefully be — it fails the build when a change removes
+      // coverage rather than when someone forgets to add it.
+      statements: 95,
+      functions: 95,
+      branches: 90,
+      lines: 95,
+      // The two modules that decide whether a request carries a live session.
+      // A branch here is not a line of code, it is a way in.
+      'src/{cookies,sessions}.ts': {
+        statements: 100,
+        branches: 100,
+        perFile: true,
+      },
+      // The third such module, held one point lower for one reason: the
+      // callback `crypto.scrypt` invokes on failure. At fixed cost parameters
+      // and a length-checked password there is no input that reaches it, so the
+      // alternative to this number is a test that fakes the failure and proves
+      // only that the fake works.
+      'src/verifier.ts': {
+        statements: 97,
+        branches: 95,
+        perFile: true,
+      },
+    },
+  },
 })
