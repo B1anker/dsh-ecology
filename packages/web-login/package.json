@@ -23,6 +23,7 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "bin": {
@@ -30,12 +31,17 @@
   },
   "files": [
     "dist/",
-    "examples/",
+    "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",
     "SECURITY.md",
     "LICENSE"
   ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/B1anker/dsh-ecology.git",

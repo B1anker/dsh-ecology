@@ -68,8 +68,8 @@ control or TLS.
   absent, because the header carries no evidence of which one came from where.
 - The login gate wraps HTTP routes registered after the
   `dshWebLoginReady` service is available. Every DSH Web route-owning loader row
-  must inject that service; see
-  [`examples/dsh-web/cordis.patch.yml`](examples/dsh-web/cordis.patch.yml).
+  must inject that service; the package's installable bundle layer is
+  [`cordis.patch.yml`](cordis.patch.yml).
   A route registered before decoration is outside the gate.
 
 This repository is independent software and is not affiliated with or endorsed

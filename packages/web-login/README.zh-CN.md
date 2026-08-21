@@ -26,17 +26,23 @@
 1. 生产环境必须使用 HTTPS。`secureCookie` 默认是 `true`；即使 TLS 在反向代理处终止，也应保持开启。
 2. 反向代理到 DSH 的链路必须处于私有网络或受到等效保护。本包不能替代防火墙、私有监听、TLS 或代理层的访问控制。
 3. DSH 环境文件中的 scrypt 校验值仍属于凭据材料。不要提交到仓库、粘贴到日志或放进 profile manifest。
-4. 所有 Web 路由拥有者都必须注入就绪服务；否则 DSH loader 并发启动时，某个路由可能早于登录保护层装饰注册表。
+4. 必须把本包作为 DSH bundle 安装，而不是普通依赖。bundle 层会给所有官方 Web 路由拥有者注入就绪服务；缺少这些注入时，某个路由可能早于登录保护层装饰注册表。
 
 完整安全模型和漏洞报告方式见 [SECURITY.md](SECURITY.md)。
 
 ## 安装
 
-在 DSH Web 插件 loader 能解析依赖包的位置安装：
+把 bundle 添加到 DSH Web profile：
 
 ```sh
-npm install @seaveyon/dsh-web-login
+dsh plugin --profile web add @seaveyon/dsh-web-login
 ```
+
+本包声明了 `dsh.bundle.patch`，因此 `dsh plugin` 会同时安装 npm 依赖，并把
+[`cordis.patch.yml`](cordis.patch.yml) 层追加到 profile。该层会插入登录插件，并让
+`web-runtime`、`connection`、`modules` 和 `client-hmr` 等待
+`dshWebLoginReady`。其中 `inject` 数组重述了 `webStartup` 和 `webRuntime`，因为
+DSH patch 会替换整个字段，而不是向现有数组追加元素。
 
 DSH Web 的正常安装一般已经提供下列可选 peer 依赖；建议使用已测试版本：
 
@@ -48,44 +54,34 @@ DSH Web 的正常安装一般已经提供下列可选 peer 依赖；建议使用
 在交互式终端生成密码校验值（密码不会回显）：
 
 ```sh
-npx dsh-web-login-hash
+dsh plugin --profile web exec dsh-web-login-hash
 ```
 
 该命令会向 `${DSH_HOME}/.env` 写入 `LOGIN_PASSWORD_HASH=scrypt$…`；如果未设置 `DSH_HOME`，则写入 `~/.dsh/.env`。它会保留其他环境变量、以原子替换方式写入并将文件权限设为 `0600`，且不会打印密码或校验值。DSH 主目录必须先存在。
+如果 bundle 安装在其他名称的 profile 中，请替换命令里的 `web`。
 
 如果 DSH 由服务管理器启动，请确认该进程实际加载这个环境文件。若校验值缺失或格式错误，插件会在启动时失败关闭，而不是暴露未保护的 Web 端口。
 
-### 添加 Web Profile Overlay
+启动 profile 前先检查合成结果：
 
-在**现有 DSH Web Cordis manifest** 中添加登录插件和就绪依赖。支持的 `0.1.0-rc.7` 组合中，`web-runtime`、`connection`、`modules` 和 `client-hmr` 都会拥有路由；保留其原有依赖，并给每一个追加 `dshWebLoginReady`。
-
-可从带注释的示例开始：[`examples/dsh-web/cordis.patch.yml`](examples/dsh-web/cordis.patch.yml)
-
-```yaml
-plugins:
-  dsh-web-login:
-    package: '@seaveyon/dsh-web-login'
-    config:
-      secureCookie: true
-      title: DSH Web
-
-  web-runtime:
-    inject: [dshWebLoginReady] # 追加，不要覆盖已有 inject
-  connection:
-    inject: [dshWebLoginReady]
-  modules:
-    inject: [dshWebLoginReady]
-  client-hmr:
-    inject: [dshWebLoginReady]
+```sh
+dsh --profile web --dump-config
 ```
 
-外层 YAML 的具体写法取决于已安装的 DSH profile loader；应将片段合并到现有插件条目，而不是直接覆盖整个 manifest。关键约束是：
+输出必须包含 `dsh-web-login` 行和上述四个就绪注入。若出现目标行未匹配的警告，说明已安装的 DSH Web 组合发生了变化；应将其视为不兼容，而不是忽略。
 
-1. `dsh-web-login` 必须在 `webServer` 服务就绪后启动；
-2. 每个路由拥有者必须注入 `dshWebLoginReady`；
-3. 这些条目只能在依赖可用后注册 HTTP、fallback、HMR 或 WebSocket 路由。
+修改 bundle 或环境后重启 DSH。浏览器访问 `/` 应跳转到 `/login`；登录后确认 Web UI、API、插件资源和 WebSocket 功能正常。使用无痕窗口或独立客户端确认未登录的 API 和 WebSocket 请求被拒绝。
 
-修改环境或插件 manifest 后重启 DSH。浏览器访问 `/` 应跳转到 `/login`；登录后确认 Web UI、API、插件资源和 WebSocket 功能正常。使用无痕窗口或独立客户端确认未登录的 API 和 WebSocket 请求被拒绝。
+profile 的后置层可以按 id 覆盖 bundle 行。例如，本机纯 HTTP 开发必须使用较弱的非 Secure Cookie：
+
+```yaml
+- id: dsh-web-login
+  config:
+    secureCookie: false
+    title: DSH Web
+```
+
+DSH 会用这个 mapping 替换该行的整个 `config`；未写出的插件设置仍由本包填入经过校验的默认值。
 
 ## 配置
 
@@ -140,11 +136,10 @@ plugins:
 默认 `trustProxy: false`，限流使用直接 socket 地址，客户端无法伪造。只有当 DSH 只能通过**可信代理**访问，且代理会在每一个请求上覆盖转发 IP 头时，才能启用 `trustProxy`。插件采用逗号分隔链中的最后一跳，因为它是代理在看到客户端后追加的值。
 
 ```yaml
-plugins:
-  dsh-web-login:
-    config:
-      trustProxy: true
-      clientIpHeader: x-forwarded-for
+- id: dsh-web-login
+  config:
+    trustProxy: true
+    clientIpHeader: x-forwarded-for
 ```
 
 | 键 | 默认值 | 说明 |
@@ -168,7 +163,8 @@ plugins:
 
 ```sh
 mkdir -p "$PWD/.dsh-dev"
-DSH_HOME="$PWD/.dsh-dev" npx dsh-web-login-hash --env-path "$PWD/.dsh-dev/.env"
+DSH_HOME="$PWD/.dsh-dev" dsh plugin --profile web add @seaveyon/dsh-web-login
+DSH_HOME="$PWD/.dsh-dev" dsh plugin --profile web exec dsh-web-login-hash --env-path "$PWD/.dsh-dev/.env"
 ```
 
 CLI 支持 `--env-path PATH` 和 `--var NAME` 来指定开发路径和环境变量名。它拒绝少于 8 个字符的密码，以及超过运行时最大字节长度的密码。
@@ -192,31 +188,36 @@ Lint 与格式化在整个 workspace 只配置一份，请在根目录执行：`
 `bun run format:check`。根目录的 `bun run check` 会对所有包一并执行类型检查、lint
 和格式检查。
 
-CLI 测试会启动 `dist/hash-password.js`，因此需要先构建。`bun run pack:check` 会
-先构建；在干净的工作树上直接执行 `bun run test` 则不会。
+CLI 测试会启动 `dist/hash-password.js`，因此需要先构建。`bun run test` 和
+`bun run pack:check` 都会先构建；只有直接执行 `bun run test:unit` 时需要确保已有
+`dist/`。
 
 ## 升级与移除
 
 ### 升级
 
 1. 阅读发行说明并确认目标 DSH host/Cordis 版本兼容。
-2. 备份 Web profile manifest，并继续妥善保护现有环境文件。
-3. 升级包、执行上面的检查并重启 DSH。
-4. 在视为升级完成前，测试匿名导航、API/WebSocket 拒绝、登录和退出。
+2. 备份现有 profile，并继续妥善保护 profile 和环境文件。
+3. 从 bundle 化之前的版本迁移时，删除 profile patch 中手工插入的登录行和就绪依赖；
+   只保留类似上文示例的按 id 配置覆盖。现在由 bundle 负责这些行。
+4. 从 bundle 化之前的版本迁移时，执行
+   `dsh plugin --profile web add @seaveyon/dsh-web-login`；已经由 bundle 管理时，执行
+   `dsh plugin --profile web update @seaveyon/dsh-web-login`。然后检查
+   `dsh --profile web --dump-config` 并重启 DSH。
+5. 在视为升级完成前，测试匿名导航、API/WebSocket 拒绝、登录和退出。
 
 校验值格式为 `scrypt$<salt hex>$<key hex>`。仅在轮换访问密码时重新生成，不需要在常规包升级时重置密码。
 
 ### 移除
 
-1. 从 Web manifest 移除 `dsh-web-login`。
-2. 从安装时修改过的路由拥有者 `inject` 数组中移除 `dshWebLoginReady`。
-3. 重启 DSH，并在暴露服务之前确认替代访问控制已生效。
-4. 仅在登录保护层不再配置读取它之后，才从 DSH 环境文件中移除 `LOGIN_PASSWORD_HASH`。
+1. 执行 `dsh plugin --profile web remove @seaveyon/dsh-web-login`；该命令会同时移除依赖和 bundle 层。
+2. 重启 DSH，并在暴露服务之前确认替代访问控制已生效。
+3. 仅在登录保护层不再配置读取它之后，才从 DSH 环境文件中移除 `LOGIN_PASSWORD_HASH`。
 
 如果没有其他访问控制，移除插件会使 DSH Web 表面根据其监听地址和网络配置可访问。
 
 ## 包内容与发布
 
-npm allowlist 只包含构建产物、密码校验值 CLI、示例 manifest、双语 README、安全策略和 MIT 许可证。测试、`.env`、会话状态和部署配置均不会进入 tarball。
+npm allowlist 只包含构建产物、密码校验值 CLI、可安装的 bundle patch、双语 README、安全策略和 MIT 许可证。测试、`.env`、会话状态和 profile 专属配置均不会进入 tarball。
 
 发布由 `main` 分支自动触发，并使用 npm [trusted publishing](https://docs.npmjs.com/trusted-publishers/) 认证，因此每个版本都带有指向其构建 workflow 运行记录的 provenance。在本地安装、测试或执行检查都不会触发 `npm publish`。

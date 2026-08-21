@@ -28,11 +28,12 @@
  * same tick as this plugin could register *before* the decoration is installed
  * and never be guarded. The plugin therefore publishes a `dshWebLoginReady`
  * service only after all three registries are decorated, and route owners are
- * expected to inject it. See `examples/dsh-web/cordis.patch.yml`.
+ * expected to inject it. The package's `cordis.patch.yml` bundle layer applies
+ * those dependencies to the shipped Web profile.
  *
  * The password is never stored here or in config. It is read from an
  * environment variable as an scrypt verifier produced by
- * `npx dsh-web-login-hash`, and compared in constant time.
+ * the installed `dsh-web-login-hash` bin, and compared in constant time.
  *
  * @module @seaveyon/dsh-web-login
  */

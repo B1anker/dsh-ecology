@@ -49,19 +49,28 @@ not a shared-session solution for multiple DSH instances.
 3. Keep the DSH environment file private. It holds a password *verifier*, which
    is still credential material. Do not commit it, paste it into logs, or put it
    in a profile manifest.
-4. Apply the readiness injection for every Web route owner. Without it, a DSH
-   loader row can register routes before the gate decorates the registry.
+4. Install this package as a DSH bundle, not as an ordinary dependency. Its
+   bundle layer adds the readiness injection every shipped Web route owner needs;
+   without those injections, a row can register routes before the gate decorates
+   the registry.
 
 For the full security model and reporting path, see
 [`SECURITY.md`](SECURITY.md).
 
 ## Install
 
-Install the package where the DSH Web plugin loader resolves packages:
+Add the bundle to the DSH Web profile:
 
 ```sh
-npm install @seaveyon/dsh-web-login
+dsh plugin --profile web add @seaveyon/dsh-web-login
 ```
+
+The package declares `dsh.bundle.patch`, so `dsh plugin` both installs the npm
+dependency and appends its [`cordis.patch.yml`](cordis.patch.yml) layer to the
+profile. That layer inserts the login plugin and makes `web-runtime`,
+`connection`, `modules`, and `client-hmr` wait for `dshWebLoginReady`; its
+`inject` arrays restate `webStartup` and `webRuntime` because DSH patch fields
+replace complete values rather than appending to them.
 
 The package declares the DSH host and Cordis packages as optional peers because
 a normal DSH Web installation already provides them. Use it with the tested
@@ -75,60 +84,47 @@ versions:
 Generate a verifier from an interactive terminal (the password is not echoed):
 
 ```sh
-npx dsh-web-login-hash
+dsh plugin --profile web exec dsh-web-login-hash
 ```
 
 The command writes `LOGIN_PASSWORD_HASH=scrypt$…` into `${DSH_HOME}/.env` when
 `DSH_HOME` is set, otherwise `~/.dsh/.env`. It preserves unrelated assignments,
 uses an atomic replacement, and sets the result to mode `0600`. It deliberately
 prints neither the password nor the verifier. The DSH home directory must exist
-before running the command.
+before running the command. Replace `web` when the bundle is installed in a
+differently named profile.
 
 If DSH is launched by a service manager, make sure that process actually loads
 that environment file. The plugin fails closed at startup if the configured
 verifier is absent or malformed.
 
-### Add the Web-profile overlay
+Before starting the profile, inspect the composed tree:
 
-Add the login plugin and the readiness dependency to the **existing DSH Web
-Cordis manifest**. The supported `0.1.0-rc.7` composition has the route-owning
-rows `web-runtime`, `connection`, `modules`, and `client-hmr`; retain all of
-their existing dependencies and add `dshWebLoginReady` to each.
-
-Start from the annotated fragment in
-[`examples/dsh-web/cordis.patch.yml`](examples/dsh-web/cordis.patch.yml):
-
-```yaml
-plugins:
-  dsh-web-login:
-    package: '@seaveyon/dsh-web-login'
-    config:
-      secureCookie: true
-      title: DSH Web
-
-  web-runtime:
-    inject: [dshWebLoginReady] # append; do not replace existing injections
-  connection:
-    inject: [dshWebLoginReady]
-  modules:
-    inject: [dshWebLoginReady]
-  client-hmr:
-    inject: [dshWebLoginReady]
+```sh
+dsh --profile web --dump-config
 ```
 
-The exact outer syntax belongs to the installed DSH profile loader; merge this
-fragment into its current plugin entries rather than replacing the entire
-manifest. The important contract is:
+The dump must contain the `dsh-web-login` row and all four readiness injections
+described above. An unmatched-row warning means the installed DSH Web
+composition has moved and must be treated as incompatible, not ignored.
 
-1. `dsh-web-login` starts after the `webServer` service exists;
-2. each route-owning entry injects `dshWebLoginReady`; and
-3. each of those entries registers its routes only after that dependency is
-   available.
-
-Restart DSH after changing its plugin manifest or environment. A document
+Restart DSH after changing the bundle or environment. A document
 navigation to `/` should redirect to `/login`; sign in, then confirm the Web
 UI, API, plugin assets, and WebSocket-backed features work. In a private or
 incognito window, confirm that direct API and WebSocket requests are denied.
+
+Later profile settings override the bundle row by id. For example, plain-HTTP
+loopback development needs the weaker non-Secure cookie:
+
+```yaml
+- id: dsh-web-login
+  config:
+    secureCookie: false
+    title: DSH Web
+```
+
+DSH replaces the row's complete `config` with this mapping; omitted plugin
+settings still receive this package's validated defaults.
 
 ## Configuration
 
@@ -208,11 +204,10 @@ request. The plugin uses the final comma-separated hop, because that is the one
 the proxy appended after seeing its peer.
 
 ```yaml
-plugins:
-  dsh-web-login:
-    config:
-      trustProxy: true
-      clientIpHeader: x-forwarded-for
+- id: dsh-web-login
+  config:
+    trustProxy: true
+    clientIpHeader: x-forwarded-for
 ```
 
 | Key | Default | Meaning |
@@ -252,7 +247,8 @@ instance. Use a separate development password and environment directory:
 
 ```sh
 mkdir -p "$PWD/.dsh-dev"
-DSH_HOME="$PWD/.dsh-dev" npx dsh-web-login-hash --env-path "$PWD/.dsh-dev/.env"
+DSH_HOME="$PWD/.dsh-dev" dsh plugin --profile web add @seaveyon/dsh-web-login
+DSH_HOME="$PWD/.dsh-dev" dsh plugin --profile web exec dsh-web-login-hash --env-path "$PWD/.dsh-dev/.env"
 ```
 
 The CLI supports `--env-path PATH` and `--var NAME` for explicit development
@@ -289,18 +285,23 @@ from the root: `bun run lint` and `bun run format:check`. `bun run check` at the
 root does typecheck, lint, and format together across every package.
 
 The CLI test spawns `dist/hash-password.js`, so it needs a build to have run.
-`bun run pack:check` builds first; a bare `bun run test` against a clean tree
-does not.
+`bun run test` and `bun run pack:check` both build first; only a direct
+`bun run test:unit` expects `dist/` to exist already.
 
 ## Upgrade and removal
 
 ### Upgrade
 
 1. Read the release notes and verify the target DSH host/Cordis compatibility.
-2. Back up the Web-profile manifest and keep the existing environment file
-   private.
-3. Upgrade the package, run the checks above, and restart DSH.
-4. Test anonymous navigation, API/WebSocket denial, sign-in, and logout before
+2. Back up the existing profile and keep it and the environment file private.
+3. When migrating from a pre-bundle release, remove the old manually inserted
+   login row and readiness edits from the profile patch; retain only a
+   config-by-id override like the example above. The bundle now owns those rows.
+4. For a pre-bundle migration, run
+   `dsh plugin --profile web add @seaveyon/dsh-web-login`; for a bundle-managed
+   installation, run `dsh plugin --profile web update @seaveyon/dsh-web-login`.
+   Then inspect `dsh --profile web --dump-config` and restart DSH.
+5. Test anonymous navigation, API/WebSocket denial, sign-in, and logout before
    treating the upgrade as complete.
 
 The verifier format is `scrypt$<salt hex>$<key hex>`; regenerate it only when
@@ -308,12 +309,11 @@ rotating the access password, not as a routine package-upgrade step.
 
 ### Remove
 
-1. Remove `dsh-web-login` from the Web manifest.
-2. Remove `dshWebLoginReady` from the route-owner injection arrays that were
-   added during installation.
-3. Restart DSH and verify the intended replacement access control is active
+1. Run `dsh plugin --profile web remove @seaveyon/dsh-web-login`; this removes
+   both the dependency and its bundle layer.
+2. Restart DSH and verify the intended replacement access control is active
    before exposing the service.
-4. Remove `LOGIN_PASSWORD_HASH` from the DSH environment file only after the
+3. Remove `LOGIN_PASSWORD_HASH` from the DSH environment file only after the
    gate is no longer configured to read it.
 
 Removing the plugin without another access-control layer makes the DSH Web
@@ -321,9 +321,10 @@ surface reachable according to its listener and network configuration.
 
 ## Package contents and publication
 
-The npm allowlist ships only the built output, the hash CLI, the example manifest
-fragment, both READMEs, the security policy, and the MIT license. Tests, local
-`.env` files, session state, and deployment configuration are excluded.
+The npm allowlist ships only the built output, the hash CLI, the installable
+bundle patch, both READMEs, the security policy, and the MIT license. Tests,
+local `.env` files, session state, and profile-specific configuration are
+excluded.
 
 Releases are automated from `main` and authenticated with npm
 [trusted publishing](https://docs.npmjs.com/trusted-publishers/), so each version

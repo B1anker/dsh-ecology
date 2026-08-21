@@ -1,0 +1,30 @@
+# dsh-web-login bundle layer for the shipped DSH Web profile.
+#
+# Loader rows activate concurrently. The login gate publishes
+# dshWebLoginReady only after it has wrapped all three webServer registries, so
+# every row that owns a route must inject that service before registering one.
+#
+# An `inject` patch replaces the complete row-level array; it does not append.
+# Keep the official dependencies below when adding the readiness dependency.
+
+- insert:
+    - id: dsh-web-login
+      name: '@seaveyon/dsh-web-login'
+      inject: [webServer]
+      config:
+        # Keep true behind HTTPS, including when TLS terminates at a reverse
+        # proxy. Set false only in a later profile patch for loopback HTTP.
+        secureCookie: true
+        title: DSH Web
+
+- id: web-runtime
+  inject: [webStartup, dshWebLoginReady]
+
+- id: connection
+  inject: [webRuntime, dshWebLoginReady]
+
+- id: modules
+  inject: [dshWebLoginReady]
+
+- id: client-hmr
+  inject: [dshWebLoginReady]

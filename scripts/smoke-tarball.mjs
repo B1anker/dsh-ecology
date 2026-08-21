@@ -18,12 +18,13 @@
  */
 
 import { execFile } from 'node:child_process'
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { argv, execPath, exit, version } from 'node:process'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
+import { load } from 'js-yaml'
 
 const run = promisify(execFile)
 
@@ -41,10 +42,12 @@ const PACKAGES = {
     /**
      * @param dist - file URL of the extracted `dist/` directory.
      * @param root - filesystem path of the extracted package.
+     * @param entry - package namespace resolved through the public exports map.
+     * @param manifest - extracted package.json.
      * @returns a description of what was exercised.
      */
-    async check(dist, root) {
-      const { apply, inject, name, READY_SERVICE } = await import(new URL('index.js', dist).href)
+    async check(dist, root, entry, manifest) {
+      const { apply, inject, name, READY_SERVICE } = entry
       if (typeof apply !== 'function') throw new Error('apply is not a function')
       if (name !== 'dsh-web-login') throw new Error(`name is ${name}`)
       if (!Array.isArray(inject)) throw new Error('inject is not an array')
@@ -82,11 +85,41 @@ const PACKAGES = {
       // would weaken the session silently rather than break anything.
       if (!cookie.startsWith('__Host-')) throw new Error('secure cookie lost its __Host- prefix')
 
-      const cli = join(root, 'dist', 'hash-password.js')
+      const cliTarget = manifest.bin?.['dsh-web-login-hash']
+      if (cliTarget !== './dist/hash-password.js')
+        throw new Error(`unexpected bin target ${cliTarget}`)
+      const cli = join(root, cliTarget)
       const { stdout } = await run(execPath, [cli, '--help'])
       if (!stdout.startsWith('Usage: dsh-web-login-hash')) throw new Error('CLI --help')
 
-      return 'scrypt round trip, render, cookie, CLI'
+      const declaredPatch = manifest.dsh?.bundle?.patch
+      if (declaredPatch !== './cordis.patch.yml') {
+        throw new Error(`unexpected dsh.bundle.patch ${declaredPatch}`)
+      }
+      const patch = load(await readFile(join(root, declaredPatch), 'utf8'))
+      if (!Array.isArray(patch)) throw new Error('bundle patch is not a top-level array')
+
+      const inserted = patch.flatMap((item) => (Array.isArray(item?.insert) ? item.insert : []))
+      const login = inserted.find((row) => row?.id === 'dsh-web-login')
+      if (login?.name !== '@seaveyon/dsh-web-login') throw new Error('bundle plugin row')
+      if (JSON.stringify(login.inject) !== JSON.stringify(['webServer'])) {
+        throw new Error('bundle plugin row does not wait for webServer')
+      }
+
+      const expectedInject = {
+        'web-runtime': ['webStartup', 'dshWebLoginReady'],
+        connection: ['webRuntime', 'dshWebLoginReady'],
+        modules: ['dshWebLoginReady'],
+        'client-hmr': ['dshWebLoginReady'],
+      }
+      for (const [id, expected] of Object.entries(expectedInject)) {
+        const actual = patch.find((item) => item?.id === id)?.inject
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+          throw new Error(`${id} inject is ${JSON.stringify(actual)}`)
+        }
+      }
+
+      return 'public export, bundle patch, scrypt round trip, render, cookie, bin CLI'
     },
   },
 
@@ -97,12 +130,12 @@ const PACKAGES = {
     skip: ['contract.js'],
     /**
      * @param dist - file URL of the extracted `dist/` directory.
+     * @param _root - filesystem path of the extracted package.
+     * @param entry - package namespace resolved through the public exports map.
      * @returns a description of what was exercised.
      */
-    async check(dist) {
-      const { createMockContext, createMockWebServer, fakeRequest, fakeResponse } = await import(
-        new URL('index.js', dist).href
-      )
+    async check(_dist, _root, entry) {
+      const { createMockContext, createMockWebServer, fakeRequest, fakeResponse } = entry
 
       const web = createMockWebServer()
       const ctx = createMockContext({ webServer: web.service })
@@ -129,7 +162,7 @@ const PACKAGES = {
       res.end()
       if (res.status !== 204) throw new Error('fakeResponse lost its status')
 
-      return 'mock registry over a real socket, context, request and response doubles'
+      return 'public export, mock registry over a real socket, context, request and response doubles'
     },
   },
 }
@@ -152,6 +185,20 @@ try {
 
   const dist = pathToFileURL(join(root, 'dist') + '/')
 
+  // Resolve the package by its published name from a clean consumer location.
+  // Absolute dist imports below are still useful for cold-importing every
+  // module, but only this path exercises the root exports map a user receives.
+  const packageLink = join(work, 'node_modules', ...manifest.name.split('/'))
+  await mkdir(dirname(packageLink), { recursive: true })
+  await symlink(root, packageLink, process.platform === 'win32' ? 'junction' : 'dir')
+  const consumer = join(work, 'consumer.mjs')
+  await writeFile(
+    consumer,
+    `import * as entry from ${JSON.stringify(manifest.name)}\nexport { entry }\n`,
+    'utf8',
+  )
+  const { entry: publicEntry } = await import(pathToFileURL(consumer).href)
+
   // Import order is alphabetical rather than dependency-led: any module that
   // only loads because something else loaded first is a module with an
   // undeclared dependency, and importing each one cold is how that shows up.
@@ -160,7 +207,7 @@ try {
   )
   for (const file of modules.toSorted()) await import(new URL(file, dist).href)
 
-  const exercised = await entry.check(dist, root)
+  const exercised = await entry.check(dist, root, publicEntry, manifest)
   console.log(`ok on ${version}: ${manifest.name}, ${modules.length} modules, ${exercised}`)
 } finally {
   await rm(work, { recursive: true, force: true })

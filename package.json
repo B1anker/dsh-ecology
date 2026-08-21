@@ -17,9 +17,10 @@
     "lint:fix": "oxlint . --fix",
     "typecheck": "bun run --filter '*' typecheck",
     "contract": "node scripts/check-host-contract.mjs",
+    "bundle:check": "node scripts/check-bundles.mjs",
     "format": "biome check --write .",
     "format:check": "biome check .",
-    "check": "bun run typecheck && bun run lint && bun run format:check && bun run contract",
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run contract && bun run bundle:check",
     "precommit": "bun run check && bun run test",
     "pack:check": "bun run --filter '*' pack:check"
   },
@@ -31,6 +32,7 @@
     "@semantic-release/git": "^11.0.1",
     "@semantic-release/github": "^12.0.9",
     "@semantic-release/release-notes-generator": "^14.1.1",
+    "js-yaml": "4.3.1",
     "oxlint": "^1.79.0",
     "semantic-release": "^25.0.9",
     "typescript": "^5.9.3"
