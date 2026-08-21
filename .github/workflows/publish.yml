@@ -33,7 +33,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # semantic-release reads the whole history to find the last tag and
           # the commits since it, and pushes the release commit back.
@@ -44,12 +44,17 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # registry-url is what makes npm perform the OIDC exchange rather than
           # look for credentials on disk.
           node-version: '24'
           registry-url: https://registry.npmjs.org
+          # A no-op today: setup-node's auto-caching only triggers on an npm
+          # `packageManager`, and this workspace declares bun. Stated anyway,
+          # because a release build should not restore a cache whatever the
+          # workspace comes to declare later.
+          package-manager-cache: false
 
       # Trusted publishing needs npm >= 11.5.1. The Node above already ships a
       # newer one, but the floor is stated rather than assumed; the major is
