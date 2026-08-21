@@ -1,4 +1,4 @@
-# Publish @seaveyon/dsh-web-login to npm.
+# Publish this workspace's packages to npm.
 #
 # Authentication is npm trusted publishing: the job proves its identity to the
 # registry with a short-lived OIDC token, so there is no npm token in this
@@ -9,6 +9,13 @@
 # Registering the trusted publisher is a one-time manual step on npmjs.com and
 # it names this file. Renaming or moving it breaks publishing until the setting
 # is updated to match; see the release section of README.md.
+#
+# One job that loops rather than a matrix, deliberately. Each package's release
+# creates a commit and a tag and pushes them, so a second matrix job — which
+# would have checked out the same starting commit — would try to push a release
+# commit onto a base that has since moved and be rejected. Releasing in sequence
+# inside one checkout means each package builds on the commit the previous one
+# just made.
 name: Publish npm
 
 on:
@@ -70,64 +77,68 @@ jobs:
       - run: bun run check
       - run: bun run test
 
-      - name: Compute the next version
-        id: next
-        run: |
-          # The failure is kept distinct from the no-release case on purpose.
-          # semantic-release exits 0 when the commits imply no version, so a
-          # non-zero exit means the run itself broke — and swallowing that would
-          # turn a bad token or a bad configuration into a green job that
-          # quietly shipped nothing.
-          if ! output=$(bunx semantic-release --dry-run --no-ci 2>&1); then
-            echo "$output"
-            echo "::error::the semantic-release dry run failed; nothing was published"
-            exit 1
-          fi
-          echo "$output"
-          version=$(printf '%s\n' "$output" \
-            | grep -oE 'next release version is [0-9]+\.[0-9]+\.[0-9]+' \
-            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-          if [ -n "$version" ]; then
-            echo "release=true" >> "$GITHUB_OUTPUT"
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-          else
-            echo "these commits imply no release"
-            echo "release=false" >> "$GITHUB_OUTPUT"
-          fi
+      # Each package is released on its own commit history — see
+      # scripts/release/scoped-commits.mjs — so a change touching only one of
+      # them cannot bump the version of the other.
+      - name: Release each package in turn
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Published before the tag exists, deliberately. If the registry rejects
-      # this, nothing was tagged and the next run retries cleanly; if it
-      # succeeds and a later step fails, the `npm view` guard skips the version
-      # already on the registry instead of forking the tag from what shipped.
-      #
-      # The tarball is packed first and then published by path, so no lifecycle
-      # script runs between the artifact the checks accepted and the one that
-      # goes to the registry.
-      - name: Publish the tarball, before tagging
-        if: steps.next.outputs.release == 'true'
-        working-directory: packages/web-login
-        run: |
-          version='${{ steps.next.outputs.version }}'
-          node ../../scripts/bump-version.mjs "$version"
-          if npm view "@seaveyon/dsh-web-login@$version" version >/dev/null 2>&1; then
-            echo "$version is already on the registry; skipping publish"
-          else
-            npm pack --ignore-scripts
-            npm publish ./*.tgz
-          fi
-        env:
-          # Provenance lives here rather than in the package's publishConfig,
+          # Provenance lives here rather than in a package's publishConfig,
           # because npm refuses to publish at all when it is asked for outside a
           # supported CI — which is where the one-time first publish happens.
           NPM_CONFIG_PROVENANCE: true
+        run: |
+          set -euo pipefail
 
-      # Runs semantic-release for real: the changelog, the version commit, the
-      # tag, and the GitHub release. It bumps the manifest again, to the same
-      # version the step above published.
-      - name: Tag, changelog, and GitHub release
-        if: steps.next.outputs.release == 'true'
-        run: bunx semantic-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          release_package() {
+            directory=$1
+            config=$2
+            name=$(node -p "require('./$directory/package.json').name")
+            echo "::group::$name"
+
+            # The failure is kept distinct from the no-release case on purpose.
+            # semantic-release exits 0 when the commits imply no version, so a
+            # non-zero exit means the run itself broke — and swallowing that
+            # would turn a bad token or a bad configuration into a green job
+            # that quietly shipped nothing.
+            if ! output=$(bunx semantic-release --extends "$config" --dry-run --no-ci 2>&1); then
+              echo "$output"
+              echo "::error::the semantic-release dry run for $name failed; nothing was published"
+              exit 1
+            fi
+            echo "$output"
+
+            version=$(printf '%s\n' "$output" \
+              | grep -oE 'next release version is [0-9]+\.[0-9]+\.[0-9]+' \
+              | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            if [ -z "$version" ]; then
+              echo "these commits imply no release for $name"
+              echo "::endgroup::"
+              return 0
+            fi
+
+            # Published before the tag exists, deliberately. If the registry
+            # rejects this, nothing was tagged and the next run retries cleanly;
+            # if it succeeds and a later step fails, the `npm view` guard skips
+            # the version already on the registry instead of forking the tag
+            # from what shipped.
+            #
+            # The tarball is packed first and then published by path, so no
+            # lifecycle script runs between the artifact the checks accepted and
+            # the one that goes to the registry.
+            node scripts/bump-version.mjs "$directory" "$version"
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$version is already on the registry; skipping publish"
+            else
+              (cd "$directory" && npm pack --ignore-scripts && npm publish ./*.tgz)
+            fi
+
+            # Runs semantic-release for real: the changelog, the version commit,
+            # the tag, and the GitHub release. It bumps the manifest again, to
+            # the same version just published.
+            bunx semantic-release --extends "$config"
+            echo "::endgroup::"
+          }
+
+          release_package packages/plugin-testkit ./release/plugin-testkit.config.mjs
+          release_package packages/web-login ./release/web-login.config.mjs

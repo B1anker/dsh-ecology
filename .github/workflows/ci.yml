@@ -44,10 +44,22 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      # `test` builds first: the CLI suite spawns dist/hash-password.js to check
-      # the shebang and executable bit, which only exist after a build.
+      # A no-op unless the dsh host packages are installed, and it says so when
+      # it is. It exists for the checkout where they are: the plugin's host types
+      # are hand-written, so nothing else notices when the host moves.
+      - name: Host contract
+        run: bun run contract
+
+      # `test:coverage` builds first: the CLI suite spawns dist/hash-password.js
+      # to check the shebang and executable bit, which only exist after a build.
+      #
+      # Coverage runs here and nowhere else in this file. It costs about a third
+      # of the suite's runtime, and the thresholds it enforces are a property of
+      # the source, not of the Node version — so the matrix jobs below run the
+      # same tests without it rather than re-answering a settled question three
+      # more times.
       - name: Test
-        run: bun run test
+        run: bun run test:coverage
 
       # Proves the published tarball contains what package.json's `files` says,
       # and that the build is reproducible from a clean checkout.
@@ -121,6 +133,12 @@ jobs:
   engines-floor:
     needs: check
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each published package makes its own `engines.node` promise, and a
+        # promise is worth what the job that tests it is worth.
+        package: [web-login, plugin-testkit]
     steps:
       - uses: actions/checkout@v7
 
@@ -135,8 +153,8 @@ jobs:
       - name: Pack
         id: pack
         run: |
-          cd packages/web-login
-          echo "tarball=packages/web-login/$(npm pack --silent)" >> "$GITHUB_OUTPUT"
+          cd packages/${{ matrix.package }}
+          echo "tarball=packages/${{ matrix.package }}/$(npm pack --silent)" >> "$GITHUB_OUTPUT"
 
       # Read the floor from package.json rather than repeating it here, so the
       # promise and the test of the promise cannot drift apart. This assumes
@@ -145,7 +163,7 @@ jobs:
       - name: Read the declared floor
         id: floor
         run: |
-          declared=$(node -p "require('./packages/web-login/package.json').engines.node")
+          declared=$(node -p "require('./packages/${{ matrix.package }}/package.json').engines.node")
           floor=""
           case "$declared" in
             '>='*)
