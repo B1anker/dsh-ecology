@@ -32,69 +32,90 @@ export interface MockWebServer {
  * @returns the `webServer` stand-in, plus `listen`/`close`.
  */
 export function createMockWebServer(): MockWebServer {
-  const routes: Route[] = []
-  const upgrades: UpgradeRoute[] = []
+  const exact = new Map<string, Route>()
+  const prefixes = new Map<string, Route>()
+  const upgrades = new Map<string, UpgradeRoute>()
   let fallback: RouteHandler | undefined
 
   const service: WebServerService = {
     register(route) {
-      const clash = routes.find((r) => r.kind === route.kind && r.path === route.path)
-      if (clash !== undefined) {
+      const table = route.kind === 'exact' ? exact : prefixes
+      if (table.has(route.path)) {
         throw new Error(`mock: duplicate ${route.kind} route ${route.path}`)
       }
-      routes.push(route)
-      return () => {
-        const index = routes.indexOf(route)
-        if (index !== -1) routes.splice(index, 1)
-      }
+      table.set(route.path, route)
+      return () => table.delete(route.path)
     },
     registerUpgrade(route) {
-      upgrades.push(route)
-      return () => {
-        const index = upgrades.indexOf(route)
-        if (index !== -1) upgrades.splice(index, 1)
-      }
+      if (upgrades.has(route.path)) throw new Error(`mock: duplicate upgrade route ${route.path}`)
+      upgrades.set(route.path, route)
+      return () => upgrades.delete(route.path)
     },
     registerFallback(handler) {
       if (fallback !== undefined) throw new Error('mock: fallback already claimed')
       fallback = handler
       return () => {
-        // Only release the slot while this handler still holds it. Cordis may
-        // unwind a context twice, and a plugin reloaded in between has already
-        // claimed the slot again — an unconditional clear would drop the live
-        // fallback on behalf of a handler that is long gone. `register` and
-        // `registerUpgrade` are identity-checked for the same reason.
-        if (fallback === handler) fallback = undefined
+        fallback = undefined
       }
     },
   }
 
-  const server = createServer(async (req, res) => {
+  /** Match exactly as the host does: exact first, then longest segment prefix. */
+  const match = (path: string): Route | undefined => {
+    const direct = exact.get(path)
+    if (direct !== undefined) return direct
+    let best: Route | undefined
+    for (const [prefix, route] of prefixes) {
+      if (path !== prefix && !path.startsWith(`${prefix}/`)) continue
+      if (best === undefined || prefix.length > best.path.length) best = route
+    }
+    return best
+  }
+
+  const handle = async (
+    req: Parameters<RouteHandler>[0],
+    res: Parameters<RouteHandler>[1],
+  ): Promise<void> => {
     const path = new URL(req.url ?? '/', 'http://localhost').pathname
-    const exact = routes.find((r) => r.kind === 'exact' && r.path === path)
-    const prefix = routes.find((r) => r.kind === 'prefix' && path.startsWith(r.path))
-    const handler = exact?.handler ?? prefix?.handler ?? fallback
+    const handler = match(path)?.handler ?? fallback
     if (handler === undefined) {
       res.writeHead(404)
       res.end()
       return
     }
-    try {
-      await handler(req, res)
-    } catch (error) {
-      if (!res.headersSent) res.writeHead(500)
-      res.end(error instanceof Error ? error.message : 'error')
-    }
+    await handler(req, res)
+  }
+
+  const server = createServer((req, res) => {
+    void handle(req, res).catch(() => {
+      if (res.headersSent) {
+        res.destroy()
+        return
+      }
+      res.writeHead(400)
+      res.end()
+    })
   })
 
   server.on('upgrade', (req, socket, head) => {
-    const path = new URL(req.url ?? '/', 'http://localhost').pathname
-    const route = upgrades.find((r) => path.startsWith(r.path))
+    socket.on('error', () => socket.destroy())
+    let route: UpgradeRoute | undefined
+    try {
+      const path = new URL(req.url ?? '/', 'http://localhost').pathname
+      route = upgrades.get(path)
+    } catch {
+      socket.destroy()
+      return
+    }
     if (route === undefined) {
       socket.destroy()
       return
     }
-    route.handler(req, socket, head)
+    try {
+      void Promise.resolve(route.handler(req, socket, head)).catch(() => socket.destroy())
+    } catch {
+      socket.destroy()
+    }
   })
 
   return {

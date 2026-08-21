@@ -41,7 +41,7 @@ await web.close()
 
 | Export | What it stands in for |
 | --- | --- |
-| `createMockWebServer()` | The DSH `webServer` registry, backed by a real `node:http` server. Exact routes beat prefixes, one fallback seat, upgrades matched by prefix. A handler that throws becomes a `500`, so a plugin bug fails an assertion instead of timing out and being blamed on the suite. Every disposer is idempotent and identity-checked, because Cordis may unwind a context twice and the plugin may have re-registered in between. |
+| `createMockWebServer()` | The DSH `webServer` registry, backed by a real `node:http` server. Exact routes beat the longest segment-boundary prefix, there is one fallback seat, and upgrades match an exact pathname. A handler rejection becomes an empty `400`, matching the host rather than leaking its message. |
 | `createMockContext(services)` | The Cordis context. Collects teardowns in `ctx.teardowns`, records log lines in `ctx.logs` rather than printing them, and runs teardowns in reverse on `ctx.dispose()`. |
 | `fakeRequest(options)` | An `IncomingMessage` over a fixed body, for the cases a socket makes awkward: a lying `Content-Length`, no `sec-fetch-*` headers, a request whose peer has gone. |
 | `fakeStreamingRequest(options)` | A request whose body arrives under the test's control, for what is only observable mid-flight: whether a reader destroyed the request, whether it removed its listeners. |
@@ -68,8 +68,10 @@ runWebServerContract('mock webServer', () => createMockWebServer())
 It asserts that the three registry members are writable properties and that a
 later caller reaches a replacement; that `register`, `registerFallback`, and
 `registerUpgrade` each return a working disposer; that an exact route beats a
-matching prefix; that the fallback fires only when nothing else matched; and that
-an async handler is awaited.
+matching prefix; that prefixes respect segment boundaries and longest-prefix
+precedence; that the fallback fires only when nothing else matched; that HTTP
+handler failures are contained; and that upgrades are exact-path, unique,
+disposable, and rejection-safe.
 
 The first of those is the load-bearing one for any plugin that guards routes.
 Such a plugin works by replacing the registry members with wrappers, so "these

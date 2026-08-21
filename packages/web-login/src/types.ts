@@ -45,7 +45,7 @@ export interface Route {
   handler: RouteHandler
 }
 
-/** An upgrade registration; upgrades are always matched by prefix. */
+/** An exact-path HTTP upgrade registration. */
 export interface UpgradeRoute {
   path: string
   handler: UpgradeHandler

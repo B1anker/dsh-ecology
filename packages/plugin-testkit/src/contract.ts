@@ -177,6 +177,16 @@ export function runWebServerContract(label: string, create: () => WebServerHarne
       // decides which answer an unauthenticated caller receives.
       expect((await get(port, '/api/exact')).body).toBe('exact')
       expect((await get(port, '/api/other')).body).toBe('prefix')
+      expect((await get(port, '/api-v2')).status).toBe(404)
+    })
+  })
+
+  test(`${label}: the longest segment-boundary prefix wins`, async () => {
+    await withHarness(create, async ({ service }, port) => {
+      service.register({ kind: 'prefix', path: '/api', handler: respond('shallow') })
+      service.register({ kind: 'prefix', path: '/api/deep', handler: respond('deep') })
+      expect((await get(port, '/api/deep/item')).body).toBe('deep')
+      expect((await get(port, '/apix')).status).toBe(404)
     })
   })
 
@@ -209,7 +219,20 @@ export function runWebServerContract(label: string, create: () => WebServerHarne
     })
   })
 
-  test(`${label}: upgrades are matched by prefix and can be disposed`, async () => {
+  test(`${label}: a rejected HTTP handler is contained as an empty 400`, async () => {
+    await withHarness(create, async ({ service }, port) => {
+      service.register({
+        kind: 'exact',
+        path: '/rejects',
+        handler: () => Promise.reject(new Error('not response content')),
+      })
+      service.register({ kind: 'exact', path: '/healthy', handler: respond('healthy') })
+      expect(await get(port, '/rejects')).toEqual({ status: 400, body: '' })
+      expect((await get(port, '/healthy')).body).toBe('healthy')
+    })
+  })
+
+  test(`${label}: upgrades are exact-path, unique, and disposable`, async () => {
     await withHarness(create, async ({ service }, port) => {
       const dispose = service.registerUpgrade({
         path: '/ws',
@@ -219,11 +242,33 @@ export function runWebServerContract(label: string, create: () => WebServerHarne
         },
       })
       expect(typeof dispose).toBe('function')
-      expect(await upgrade(port, '/ws/room')).toMatch(/^HTTP\/1\.1 101 /)
+      expect(() => service.registerUpgrade({ path: '/ws', handler: () => undefined })).toThrow(
+        /duplicate/,
+      )
+      expect(await upgrade(port, '/ws')).toMatch(/^HTTP\/1\.1 101 /)
+      expect(await upgrade(port, '/ws?room=1')).toMatch(/^HTTP\/1\.1 101 /)
+      expect(await upgrade(port, '/ws/room')).toBe('')
       dispose()
       // A rejected upgrade has no ServerResponse, so "nothing registered" shows
       // up as a closed socket rather than a status.
-      expect(await upgrade(port, '/ws/room')).toBe('')
+      expect(await upgrade(port, '/ws')).toBe('')
+    })
+  })
+
+  test(`${label}: sync and async upgrade failures close their sockets`, async () => {
+    await withHarness(create, async ({ service }, port) => {
+      service.registerUpgrade({
+        path: '/throws',
+        handler: () => {
+          throw new Error('upgrade threw')
+        },
+      })
+      service.registerUpgrade({
+        path: '/rejects',
+        handler: () => Promise.reject(new Error('upgrade failed')),
+      })
+      expect(await upgrade(port, '/throws')).toBe('')
+      expect(await upgrade(port, '/rejects')).toBe('')
     })
   })
 }

@@ -40,13 +40,17 @@ test('services are readable and writable through the context', () => {
   expect(ctx.get('published')).toBe(true)
 })
 
-test('the registry refuses a duplicate route and a second fallback', () => {
+test('the registry refuses duplicate routes, upgrades, and a second fallback', () => {
   const { service } = createMockWebServer()
   const route = { kind: 'exact', path: '/x', handler: () => undefined } as const
   service.register(route)
   // dsh rejects both, and a mock that accepted them would let a plugin pass a
   // test it would fail against the host.
   expect(() => service.register({ ...route })).toThrow(/duplicate/)
+  service.registerUpgrade({ path: '/ws', handler: () => undefined })
+  expect(() => service.registerUpgrade({ path: '/ws', handler: () => undefined })).toThrow(
+    /duplicate/,
+  )
   service.registerFallback(() => undefined)
   expect(() => service.registerFallback(() => undefined)).toThrow(/fallback already claimed/)
 })
@@ -59,10 +63,7 @@ test('the same path under a different kind is not a duplicate', () => {
   ).not.toThrow()
 })
 
-test('every disposer can be called twice without undoing someone else’s work', () => {
-  // Cordis may unwind a context more than once, and a plugin that re-registers
-  // after disposal is a normal reload. A disposer that spliced blindly would
-  // remove whatever had taken the freed slot.
+test('stale registry disposers clear whatever now occupies the host key', () => {
   const { service } = createMockWebServer()
   const first = service.register({ kind: 'exact', path: '/x', handler: () => undefined })
   const upgrade = service.registerUpgrade({ path: '/ws', handler: () => undefined })
@@ -72,22 +73,25 @@ test('every disposer can be called twice without undoing someone else’s work',
   upgrade()
   fallback()
 
-  const replacement = { kind: 'exact', path: '/x', handler: () => undefined } as const
-  service.register(replacement)
+  service.register({ kind: 'exact', path: '/x', handler: () => undefined })
   service.registerUpgrade({ path: '/ws', handler: () => undefined })
   service.registerFallback(() => undefined)
 
+  // The host uses keyed Map.delete operations and an unconditional fallback
+  // clear, not identity checks. A stale disposer therefore clears a replacement
+  // that reused its key; the test double must expose that surprising behaviour.
   first()
   upgrade()
   fallback()
 
-  expect(() => service.register({ ...replacement })).toThrow(/duplicate/)
-  expect(() => service.registerFallback(() => undefined)).toThrow(/fallback already claimed/)
+  expect(() =>
+    service.register({ kind: 'exact', path: '/x', handler: () => undefined }),
+  ).not.toThrow()
+  expect(() => service.registerUpgrade({ path: '/ws', handler: () => undefined })).not.toThrow()
+  expect(() => service.registerFallback(() => undefined)).not.toThrow()
 })
 
-test('a handler that throws becomes a 500 rather than a hung request', async () => {
-  // The mock has to answer, because a plugin under test that throws on one
-  // route should fail that assertion — not time out and be blamed on the suite.
+test('a handler that throws becomes an empty 400 and the server stays healthy', async () => {
   const web = createMockWebServer()
   web.service.register({
     kind: 'exact',
@@ -103,29 +107,40 @@ test('a handler that throws becomes a 500 rather than a hung request', async () 
   })
   web.service.register({
     kind: 'exact',
+    path: '/healthy',
+    handler: (_req, res) => {
+      res.end('ok')
+    },
+  })
+  web.service.register({
+    kind: 'exact',
     path: '/after-headers',
     handler: (_req, res) => {
-      res.writeHead(200)
-      throw new Error('too late')
+      res.writeHead(200, { 'content-length': '5' })
+      res.flushHeaders()
+      throw new Error('too late to replace the status')
     },
   })
   const port = await web.listen()
   try {
     const failed = await fetch(`http://127.0.0.1:${port}/boom`)
-    expect(failed.status).toBe(500)
-    expect(await failed.text()).toBe('handler exploded')
+    expect(failed.status).toBe(400)
+    expect(await failed.text()).toBe('')
 
     // `throw` and a rejected promise are the same event here, and neither is
     // obliged to carry an Error.
     const rejected = await fetch(`http://127.0.0.1:${port}/rejects`)
-    expect(rejected.status).toBe(500)
-    expect(await rejected.text()).toBe('error')
+    expect(rejected.status).toBe(400)
+    expect(await rejected.text()).toBe('')
 
-    // Once the status is on the wire it cannot be retracted, so the throw can
-    // only end the body it already committed to.
+    const healthy = await fetch(`http://127.0.0.1:${port}/healthy`)
+    expect(await healthy.text()).toBe('ok')
+
+    // Once headers are on the wire, the host cannot replace them with a 400;
+    // it terminates the incomplete body instead of leaking an error message.
     const late = await fetch(`http://127.0.0.1:${port}/after-headers`)
     expect(late.status).toBe(200)
-    expect(await late.text()).toBe('too late')
+    await expect(late.text()).rejects.toThrow()
   } finally {
     await web.close()
   }
