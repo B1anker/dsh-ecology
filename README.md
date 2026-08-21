@@ -46,9 +46,15 @@ bun run test    # builds each package, then runs its suite
 ```
 
 Development needs Node `^20.19.0 || >=22.12.0`: rslib, rstest, and the rsbuild
-beneath both refuse to start below that. Published packages set their own,
-lower `engines.node` — that field describes what the built output needs, which is
-much less than what building it does.
+beneath both refuse to start below that. Published packages set their own, lower
+`engines.node` — that field describes what the built output needs, which is much
+less than what building it does.
+
+That gap means the test suite cannot verify the published floor: it runs under a
+toolchain that will not start there. [`scripts/smoke-tarball.mjs`](scripts/smoke-tarball.mjs)
+covers it instead by extracting a packed tarball somewhere with no `node_modules`
+and importing it, so it can run on any Node a consumer might have. CI runs it on
+whatever `engines.node` declares.
 
 `bun run test` delegates to each package's own `test` script rather than running
 `bun test` directly: the suites run under rstest, and bun's built-in runner would

@@ -67,9 +67,7 @@ jobs:
   #
   # This is a constraint of the toolchain, not of what ships: `dist/` targets
   # es2022 and imports only crypto, fs/promises, os, path, and process, all long
-  # stable. The 20.11 floor in `engines` stays as the runtime promise; verifying
-  # it needs a consumer-side smoke test that installs the tarball without the dev
-  # toolchain, which is worth adding before the first publish.
+  # stable. The `engines-floor` job below covers the 20.11 promise itself.
   node-matrix:
     needs: check
     runs-on: ubuntu-latest
@@ -112,3 +110,63 @@ jobs:
       # run on 20.11. The suite here consumes the dist/ built above.
       - name: Test on Node ${{ matrix.node }}
         run: bun run --filter '*' test:unit
+
+  # The one job that tests what `engines.node: >=20.11.0` actually promises.
+  #
+  # No job that installs the dev toolchain can do this: rslib and rstest both
+  # require Node ^20.19.0 || >=22.12.0, so they will not start on 20.11. This
+  # builds and packs on a current Node, then extracts the tarball somewhere with
+  # no node_modules and imports it on the floor version — which is exactly the
+  # position a consumer is in.
+  engines-floor:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run build
+
+      - name: Pack
+        id: pack
+        run: |
+          cd packages/web-login
+          echo "tarball=packages/web-login/$(npm pack --silent)" >> "$GITHUB_OUTPUT"
+
+      # Read the floor from package.json rather than repeating it here, so the
+      # promise and the test of the promise cannot drift apart. This assumes
+      # `engines.node` is a bare `>=x.y.z`, which it is; a compound range would
+      # need a real semver parse, so it fails loudly instead of guessing.
+      - name: Read the declared floor
+        id: floor
+        run: |
+          declared=$(node -p "require('./packages/web-login/package.json').engines.node")
+          floor=""
+          case "$declared" in
+            '>='*)
+              rest=${declared#>=}
+              case "$rest" in
+                *[!0-9.]*) ;;
+                *) floor=$rest ;;
+              esac ;;
+          esac
+          if [ -z "$floor" ]; then
+            echo "::error::engines.node is $declared, not a bare '>=x.y.z'; this job needs a semver parser"
+            exit 1
+          fi
+          echo "Declared engines.node floor: $floor"
+          echo "version=$floor" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.floor.outputs.version }}
+
+      - name: Import the tarball on Node ${{ steps.floor.outputs.version }}
+        run: |
+          echo "node: $(node --version)"
+          node scripts/smoke-tarball.mjs "${{ steps.pack.outputs.tarball }}"
