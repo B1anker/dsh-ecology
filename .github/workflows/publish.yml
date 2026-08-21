@@ -1,0 +1,128 @@
+# Publish @seaveyon/dsh-web-login to npm.
+#
+# Authentication is npm trusted publishing: the job proves its identity to the
+# registry with a short-lived OIDC token, so there is no npm token in this
+# repository's secrets to leak or rotate. That is also why no step here sets
+# NODE_AUTH_TOKEN — npm only falls back to OIDC when it finds no token, so
+# adding one would silently turn this back into token auth.
+#
+# Registering the trusted publisher is a one-time manual step on npmjs.com and
+# it names this file. Renaming or moving it breaks publishing until the setting
+# is updated to match; see the release section of README.md.
+name: Publish npm
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never cancelled: a half-run release is worse than a queued one. The version
+# semantic-release derives depends on which tags exist, so two of these running
+# at once would race over the same answer.
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # the release commit and the tag
+  id-token: write # the OIDC token npm exchanges for publish rights
+  issues: write # semantic-release comments on what a release closed
+  pull-requests: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # semantic-release reads the whole history to find the last tag and
+          # the commits since it, and pushes the release commit back.
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: actions/setup-node@v4
+        with:
+          # registry-url is what makes npm perform the OIDC exchange rather than
+          # look for credentials on disk.
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm >= 11.5.1. The Node above already ships a
+      # newer one, but the floor is stated rather than assumed; the major is
+      # pinned so a future npm 12 arrives as a reviewed change.
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@^11.5.1
+
+      - run: bun install --frozen-lockfile
+
+      # The same gate CI runs, on the same commit: a version reaching the
+      # registry is permanent, so this does not publish anything the checks
+      # have not already accepted. `test` builds first, so dist/ exists below.
+      - run: bun run check
+      - run: bun run test
+
+      - name: Compute the next version
+        id: next
+        run: |
+          # The failure is kept distinct from the no-release case on purpose.
+          # semantic-release exits 0 when the commits imply no version, so a
+          # non-zero exit means the run itself broke — and swallowing that would
+          # turn a bad token or a bad configuration into a green job that
+          # quietly shipped nothing.
+          if ! output=$(bunx semantic-release --dry-run --no-ci 2>&1); then
+            echo "$output"
+            echo "::error::the semantic-release dry run failed; nothing was published"
+            exit 1
+          fi
+          echo "$output"
+          version=$(printf '%s\n' "$output" \
+            | grep -oE 'next release version is [0-9]+\.[0-9]+\.[0-9]+' \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          if [ -n "$version" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+          else
+            echo "these commits imply no release"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Published before the tag exists, deliberately. If the registry rejects
+      # this, nothing was tagged and the next run retries cleanly; if it
+      # succeeds and a later step fails, the `npm view` guard skips the version
+      # already on the registry instead of forking the tag from what shipped.
+      #
+      # The tarball is packed first and then published by path, so no lifecycle
+      # script runs between the artifact the checks accepted and the one that
+      # goes to the registry.
+      - name: Publish the tarball, before tagging
+        if: steps.next.outputs.release == 'true'
+        working-directory: packages/web-login
+        run: |
+          version='${{ steps.next.outputs.version }}'
+          node ../../scripts/bump-version.mjs "$version"
+          if npm view "@seaveyon/dsh-web-login@$version" version >/dev/null 2>&1; then
+            echo "$version is already on the registry; skipping publish"
+          else
+            npm pack --ignore-scripts
+            npm publish ./*.tgz
+          fi
+        env:
+          # Provenance lives here rather than in the package's publishConfig,
+          # because npm refuses to publish at all when it is asked for outside a
+          # supported CI — which is where the one-time first publish happens.
+          NPM_CONFIG_PROVENANCE: true
+
+      # Runs semantic-release for real: the changelog, the version commit, the
+      # tag, and the GitHub release. It bumps the manifest again, to the same
+      # version the step above published.
+      - name: Tag, changelog, and GitHub release
+        if: steps.next.outputs.release == 'true'
+        run: bunx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

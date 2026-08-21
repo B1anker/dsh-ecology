@@ -8,7 +8,7 @@ endorsed by DeepSeek AI.
 
 | Package | Version | Description |
 | --- | --- | --- |
-| [`@seaveyon/dsh-web-login`](packages/web-login) | `0.1.0` | Cookie-session login gate for the DSH Web surface, replacing a reverse proxy's HTTP Basic prompt with a styled sign-in page. |
+| [`@seaveyon/dsh-web-login`](packages/web-login) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-web-login.svg)](https://www.npmjs.com/package/@seaveyon/dsh-web-login) | Cookie-session login gate for the DSH Web surface, replacing a reverse proxy's HTTP Basic prompt with a styled sign-in page. |
 
 Each package is independently versioned and published; the workspace exists to
 share one toolchain, not to release them together.
@@ -77,6 +77,55 @@ discover the same files and fail on them in confusing ways.
 
 CI runs the same scripts in the same order on every push and pull request; see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+## Releases
+
+Every push to `main` runs [`.github/workflows/publish.yml`](.github/workflows/publish.yml),
+which re-runs the full gate and then hands the commits to
+[semantic-release](https://semantic-release.gitbook.io/). Conventional commit
+messages decide the version: a `fix:` is a patch, a `feat:` a minor, a `!` or a
+`BREAKING CHANGE:` footer a major, and a commit that implies none of those
+releases nothing. Configuration is in [`.releaserc.json`](.releaserc.json).
+
+Authentication is npm [trusted publishing](https://docs.npmjs.com/trusted-publishers/):
+the job exchanges a short-lived GitHub OIDC token for publish rights, so there is
+no npm token in this repository's secrets, and each release carries provenance
+linking it back to the workflow run that built it. The corollary is that the
+workflow must never set `NODE_AUTH_TOKEN` — npm falls back to token auth the
+moment it finds one, and the OIDC exchange silently stops happening.
+
+The tarball reaches the registry *before* the tag and the GitHub release exist.
+The order matters because only one of the two is reversible: a failed publish
+leaves nothing tagged and the next run retries, while a publish that succeeded
+before a later step failed is skipped on the re-run by an `npm view` check,
+rather than leaving a tag that claims a version the registry never received.
+
+Tags are `web-login-v<version>`, scoped to the package rather than the
+repository, because the packages here are versioned independently. That the
+analyzer still reads *every* commit on `main` is a limitation worth knowing
+about before a second package ships: at that point each package needs its own
+semantic-release configuration and commit filter.
+
+### Bootstrapping a new package on npm
+
+A trusted publisher is configured on a package that already exists, so the very
+first version of any package cannot come from CI. Publish it once by hand:
+
+```sh
+bun install && bun run test           # the tarball has to be built first
+cd packages/web-login && npm publish --access public
+```
+
+Then tag that release and push the tag — `git tag web-login-v0.1.0` — so the
+first automated release counts commits from there. Without it semantic-release
+reads the repository's whole history, finds the breaking changes in it, and
+concludes that the next version is `1.0.0`.
+
+Finally, on npmjs.com, open the package's **Settings → Trusted Publisher**,
+choose GitHub Actions, and fill in the owner, the repository, and the workflow
+*filename* — `publish.yml`, not its path — then allow the `npm publish` action.
+The fields are case-sensitive. Renaming the workflow file later breaks
+publishing until this setting is changed to match.
 
 ## Adding a package
 
