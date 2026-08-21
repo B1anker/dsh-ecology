@@ -30,7 +30,40 @@ export const DEFAULTS = Object.freeze({
   sweepIntervalMs: 5 * 60 * 1000,
   trustProxy: false,
   clientIpHeader: 'x-forwarded-for',
+  // The backstop for a caller spread across many addresses, which per-client
+  // counting cannot see. Well above any plausible number of honest typos in a
+  // window, and the block it imposes is deliberately much shorter than the
+  // per-client one, because this one can also catch the operator.
+  globalAttemptLimit: 100,
+  globalBlockMs: 60 * 1000,
+  // One IPv4 address is one client. One IPv6 /64 is one customer allocation,
+  // and treating its addresses separately would hand a single attacker
+  // eighteen quintillion independent allowances.
+  ipv4PrefixBits: 32,
+  ipv6PrefixBits: 64,
+  // Two of libuv's four default threadpool slots, leaving the other two for the
+  // fs and DNS work the rest of dsh does. Past the queue a sign-in is refused
+  // rather than delayed; see the kdf-gate module.
+  kdfConcurrency: 2,
+  kdfQueueDepth: 8,
 })
+
+/**
+ * Broaden a literal type back to the primitive it is a member of.
+ *
+ * `Object.freeze` infers `2` rather than `number` for a numeric property, which
+ * is what makes {@link DEFAULTS} a useful set of constants — and what would
+ * otherwise make {@link LoginConfig} useless, since `{ maxSessions: 500 }` is
+ * not assignable to `{ maxSessions: 10000 }`. The default *values* stay exact;
+ * only the type derived for callers is widened.
+ */
+type Widen<T> = T extends boolean
+  ? boolean
+  : T extends number
+    ? number
+    : T extends string
+      ? string
+      : T
 
 /**
  * Fully resolved settings.
@@ -40,7 +73,7 @@ export const DEFAULTS = Object.freeze({
  * `undefined` discovered at runtime.
  */
 export type ResolvedConfig = Readonly<{
-  -readonly [K in keyof typeof DEFAULTS]: (typeof DEFAULTS)[K]
+  -readonly [K in keyof typeof DEFAULTS]: Widen<(typeof DEFAULTS)[K]>
 }>
 
 /** Configuration as a caller may supply it: every key optional. */
@@ -60,6 +93,12 @@ type NumericKey =
   | 'blockMs'
   | 'maxAttemptClients'
   | 'sweepIntervalMs'
+  | 'kdfConcurrency'
+  | 'kdfQueueDepth'
+  | 'globalAttemptLimit'
+  | 'globalBlockMs'
+  | 'ipv4PrefixBits'
+  | 'ipv6PrefixBits'
 
 /** Inclusive bounds for the numeric settings. */
 const RANGES: Readonly<Record<NumericKey, readonly [number, number]>> = Object.freeze({
@@ -71,6 +110,21 @@ const RANGES: Readonly<Record<NumericKey, readonly [number, number]>> = Object.f
   blockMs: [1000, 24 * 60 * 60 * 1000],
   maxAttemptClients: [1, 1000000],
   sweepIntervalMs: [1000, 60 * 60 * 1000],
+  // The ceiling is deliberately low. Each slot is 16 MiB of scrypt working
+  // memory held by an unauthenticated caller, and the point of the setting is
+  // to bound that, so a value large enough to defeat it is a configuration
+  // error rather than a choice.
+  kdfConcurrency: [1, 32],
+  // Zero is legal and means "no waiting at all": once every slot is busy, a
+  // further sign-in is refused immediately.
+  kdfQueueDepth: [0, 1024],
+  globalAttemptLimit: [1, 1000000],
+  globalBlockMs: [1000, 24 * 60 * 60 * 1000],
+  // The floors matter more than the ceilings. A /0 would put every client on
+  // Earth in one bucket, which throttles the operator on a stranger's behalf;
+  // these are the widest buckets that still separate unrelated networks.
+  ipv4PrefixBits: [8, 32],
+  ipv6PrefixBits: [32, 128],
 })
 
 const STRING_KEYS: readonly StringKey[] = ['passwordHashEnv', 'clientIpHeader', 'title']

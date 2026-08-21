@@ -1,10 +1,14 @@
 import { request as httpRequest } from 'node:http'
 import { connect } from 'node:net'
 import { expect, test } from '@rstest/core'
+import {
+  createMockContext,
+  createMockWebServer,
+  type MockContext,
+} from '@seaveyon/dsh-plugin-testkit'
 import type { LoginConfig } from '../../src/config.js'
 import { apply, READY_SERVICE } from '../../src/index.js'
 import { hashPassword } from '../../src/verifier.js'
-import { createMockContext, createMockWebServer, type MockContext } from '../helpers/mock-server.js'
 
 const ENV_NAME = 'DSH_WEB_LOGIN_TEST_HASH'
 const PASSWORD = 'correct horse battery staple'
@@ -204,13 +208,18 @@ interface SignIn extends Response {
  * @param password - the password to submit.
  * @returns the response, plus the `name=value` cookie pair to send back.
  */
-async function signIn(port: number, password: string = PASSWORD): Promise<SignIn> {
+async function signIn(
+  port: number,
+  password: string = PASSWORD,
+  headers: Record<string, string> = {},
+): Promise<SignIn> {
   const body = `password=${encodeURIComponent(password)}`
   const response = await request(port, '/login', {
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
       'content-length': String(Buffer.byteLength(body)),
+      ...headers,
     },
     body,
   })
@@ -389,6 +398,81 @@ test('the third wrong password blocks before a fourth body is processed', async 
   })
 })
 
+test('sign-ins beyond the KDF gate are refused instead of queued without limit', async () => {
+  await withFixture({ kdfConcurrency: 1, kdfQueueDepth: 0 }, async ({ port, ctx }) => {
+    // The password is correct in every one of these, so nothing here is a failed
+    // attempt and the per-client limiter never fires. What bounds the work is
+    // the process-wide gate, which is the whole point: a distributed caller has
+    // as many client identities as it has addresses, but only one of these
+    // process.
+    const responses = await Promise.all(Array.from({ length: 6 }, () => signIn(port)))
+    const refused = responses.filter((response) => response.status === 503)
+    const admitted = responses.filter((response) => response.status === 303)
+
+    expect(refused.length, 'a burst must be refused, not queued').toBeGreaterThan(0)
+    expect(admitted.length, 'the operator still gets in').toBeGreaterThan(0)
+    expect(refused.length + admitted.length).toBe(responses.length)
+
+    for (const response of refused) {
+      expect(response.headers['retry-after']).toBe('5')
+      expect(response.cookie, 'a refused sign-in mints no session').toBeUndefined()
+      expect(response.body).toMatch(/busy/i)
+    }
+
+    // A refusal is not a failed attempt: the password was never examined, so
+    // counting it would let a flood lock the operator out of their own server.
+    expect((await signIn(port, 'wrong')).status).toBe(401)
+    expect(ctx.logs.warn.filter((line) => line.includes('failed attempt'))).toHaveLength(1)
+  })
+})
+
+test('a caller spread across many addresses runs into the shared budget', async () => {
+  await withFixture(
+    {
+      trustProxy: true,
+      // High enough that no single address ever reaches it. This is the attack
+      // the per-client counter is blind to by construction.
+      attemptLimit: 100,
+      globalAttemptLimit: 3,
+      globalBlockMs: 60_000,
+    },
+    async ({ port }) => {
+      const from = (address: string): Promise<SignIn> =>
+        signIn(port, 'wrong', { 'x-forwarded-for': address })
+
+      expect((await from('198.51.100.1')).status).toBe(401)
+      expect((await from('198.51.100.2')).status).toBe(401)
+      const tripped = await from('198.51.100.3')
+      expect(tripped.status).toBe(429)
+      expect(tripped.headers['retry-after']).toBe('60')
+
+      // An address that has never been seen is refused too, which is the whole
+      // point: the budget is what a caller holding a /64 actually runs into.
+      expect((await from('203.0.113.99')).status).toBe(429)
+    },
+  )
+})
+
+test('addresses in one IPv6 allocation share a single allowance', async () => {
+  await withFixture(
+    { trustProxy: true, attemptLimit: 3, globalAttemptLimit: 1000 },
+    async ({ port }) => {
+      const from = (address: string): Promise<SignIn> =>
+        signIn(port, 'wrong', { 'x-forwarded-for': address })
+
+      // Three different addresses, one /64. A limiter keyed on the full address
+      // would give each of them a fresh allowance, and there are eighteen
+      // quintillion more where they came from.
+      expect((await from('2001:db8:1:2::1')).status).toBe(401)
+      expect((await from('2001:db8:1:2::2')).status).toBe(401)
+      expect((await from('2001:db8:1:2:aaaa:bbbb:cccc:dddd')).status).toBe(429)
+
+      // A genuinely different network still has its own.
+      expect((await from('2001:db8:1:3::1')).status).toBe(401)
+    },
+  )
+})
+
 test('a successful login clears prior failures for that client', async () => {
   await withFixture({}, async ({ port }) => {
     expect((await signIn(port, 'wrong')).status).toBe(401)
@@ -446,6 +530,63 @@ test('logout revokes the server session and clears the browser cookie', async ()
   })
 })
 
+test('a TLS deployment issues the session under the __Host- name', async () => {
+  await withFixture({ secureCookie: true }, async ({ port }) => {
+    const login = await signIn(port)
+    expect(login.status).toBe(303)
+    // The name is what stops a sibling subdomain from setting a cookie the
+    // browser would send here alongside the real one.
+    expect(setCookie(login)).toMatch(/^__Host-dsh_session=/)
+    expect(setCookie(login)).toMatch(/; Secure(;|$)/)
+    expect(setCookie(login)).toMatch(/; Path=\/(;|$)/)
+    expect(setCookie(login).includes('Domain='), 'Domain would void the prefix').toBe(false)
+
+    const granted = await request(port, '/exact', { headers: { cookie: login.cookie ?? '' } })
+    expect(granted.status).toBe(200)
+
+    // The unprefixed name is not a session any more, whatever it holds.
+    const legacy = await request(port, '/exact', {
+      headers: { cookie: `dsh_session=${(login.cookie ?? '').split('=')[1] ?? ''}` },
+    })
+    expect(legacy.status).toBe(401)
+  })
+})
+
+test('a duplicated session cookie is refused rather than guessed at', async () => {
+  await withFixture({}, async ({ port }) => {
+    const { cookie = '' } = await signIn(port)
+    const value = cookie.split('=')[1] ?? ''
+
+    // This is what cookie tossing looks like on the wire, and it is the reason
+    // the prefixed name exists. Where the prefix cannot be used, the fallback is
+    // to refuse: the header carries no evidence of which cookie came from where.
+    for (const tossed of [`dsh_session=planted; ${cookie}`, `${cookie}; dsh_session=planted`]) {
+      const response = await request(port, '/exact', { headers: { cookie: tossed } })
+      expect(response.status, tossed).toBe(401)
+    }
+
+    // The same cookie sent twice is not ambiguous and must still work.
+    const duplicated = await request(port, '/exact', {
+      headers: { cookie: `dsh_session=${value}; dsh_session=${value}` },
+    })
+    expect(duplicated.status).toBe(200)
+  })
+})
+
+test('logout expires both the current and the pre-prefix cookie name', async () => {
+  await withFixture({ secureCookie: true }, async ({ port }) => {
+    const { cookie = '' } = await signIn(port)
+    const logout = await request(port, '/logout', { method: 'POST', headers: { cookie } })
+    expect(logout.status).toBe(303)
+
+    const values = logout.headers['set-cookie']
+    const cleared = Array.isArray(values) ? values : [values ?? '']
+    expect(cleared).toHaveLength(2)
+    expect(cleared.some((value) => value.startsWith('__Host-dsh_session=;'))).toBe(true)
+    expect(cleared.some((value) => value.startsWith('dsh_session=;'))).toBe(true)
+  })
+})
+
 test('startup fails closed when the verifier is absent or malformed', () => {
   const prior = process.env[ENV_NAME]
   const web = createMockWebServer()
@@ -466,12 +607,44 @@ test('startup fails closed when the verifier is absent or malformed', () => {
   }
 })
 
+test('startup fails closed when a registry member silently refuses the wrapper', () => {
+  const prior = process.env[ENV_NAME]
+  process.env[ENV_NAME] = VERIFIER
+  const web = createMockWebServer()
+  const original = web.service.registerUpgrade
+  const untouchedRegister = web.service.register
+
+  // A setter that ignores the write is the dangerous shape: unlike a read-only
+  // property, it does not throw, so the gate would come up believing it had
+  // wrapped a registry it had not touched.
+  Object.defineProperty(web.service, 'registerUpgrade', {
+    get: () => original,
+    set: () => undefined,
+    configurable: true,
+  })
+
+  const ctx = createMockContext({ webServer: web.service })
+  try {
+    expect(() => apply(ctx, { passwordHashEnv: ENV_NAME })).toThrow(/could not be wrapped/)
+    // And nothing half-installed is left behind: a gate that guards HTTP routes
+    // but not upgrades is worse than one that refuses to start, because it
+    // looks like it is working.
+    expect(web.service.register, 'the earlier wrapper was rolled back').toBe(untouchedRegister)
+    expect(ctx.teardowns).toHaveLength(0)
+    expect(ctx.get(READY_SERVICE), 'readiness must not be published').toBeUndefined()
+  } finally {
+    if (prior === undefined) delete process.env[ENV_NAME]
+    else process.env[ENV_NAME] = prior
+  }
+})
+
 test('disposal does not clobber a decorator installed after the gate', () => {
   const prior = process.env[ENV_NAME]
   process.env[ENV_NAME] = VERIFIER
   const web = createMockWebServer()
   const ctx = createMockContext({ webServer: web.service })
   try {
+    const untouchedFallback = web.service.registerFallback
     apply(ctx, { passwordHashEnv: ENV_NAME, secureCookie: false })
     const gateDecorator = web.service.register
     const laterDecorator: typeof gateDecorator = (route) => gateDecorator(route)
@@ -480,6 +653,10 @@ test('disposal does not clobber a decorator installed after the gate', () => {
     // Blindly restoring the original here would silently remove a later plugin's
     // wrapper too — potentially another security boundary.
     expect(web.service.register).toBe(laterDecorator)
+
+    // Where the gate is still the outermost wrapper, disposal puts back exactly
+    // what it found, not a bound copy that merely behaves the same.
+    expect(web.service.registerFallback).toBe(untouchedFallback)
   } finally {
     if (prior === undefined) delete process.env[ENV_NAME]
     else process.env[ENV_NAME] = prior

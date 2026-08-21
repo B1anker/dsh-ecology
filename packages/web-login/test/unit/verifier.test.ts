@@ -9,11 +9,11 @@ import {
   verifyPassword,
 } from '../../src/verifier.js'
 
-test('hashPassword produces a verifier that round-trips', () => {
+test('hashPassword produces a verifier that round-trips', async () => {
   const stored = hashPassword('correct horse battery')
   const parsed = requireVerifier(stored, 'LOGIN_PASSWORD_HASH')
-  expect(verifyPassword('correct horse battery', parsed)).toBe(true)
-  expect(verifyPassword('wrong', parsed)).toBe(false)
+  expect(await verifyPassword('correct horse battery', parsed)).toBe(true)
+  expect(await verifyPassword('wrong', parsed)).toBe(false)
 })
 
 test('each verifier uses a fresh salt', () => {
@@ -66,22 +66,36 @@ test('requireVerifier names the variable but never echoes its value', () => {
   expect(message.includes(secret), 'the error must not contain the verifier').toBe(false)
 })
 
-test('verifyPassword refuses an oversized candidate before hashing', () => {
+test('verifyPassword refuses an oversized candidate before hashing', async () => {
   const parsed = requireVerifier(hashPassword('short'), 'LOGIN_PASSWORD_HASH')
   const huge = 'x'.repeat(MAX_PASSWORD_BYTES + 1)
-  expect(verifyPassword(huge, parsed)).toBe(false)
+  expect(await verifyPassword(huge, parsed)).toBe(false)
   // scrypt at these parameters costs 16 MiB per call; the cap is what stops an
-  // unauthenticated POST from choosing that cost.
+  // unauthenticated POST from choosing that cost. The refusal is synchronous so
+  // the caller never occupies a threadpool slot to learn it.
   expect(() => deriveKey(huge, parsed.salt)).toThrow(/maximum accepted length/)
 })
 
-test('verifyPassword rejects empty and non-string candidates', () => {
+test('verifyPassword rejects empty and non-string candidates', async () => {
   const parsed = requireVerifier(hashPassword('something'), 'LOGIN_PASSWORD_HASH')
   // The candidate arrives from a URL-encoded form body, so a missing field, a
   // repeated field, and a field sent as an object all reach here.
   for (const candidate of ['', undefined, null, 0, {}]) {
-    expect(verifyPassword(candidate, parsed), JSON.stringify(candidate)).toBe(false)
+    expect(await verifyPassword(candidate, parsed), JSON.stringify(candidate)).toBe(false)
   }
+})
+
+test('deriveKey runs off the event loop', async () => {
+  const parsed = requireVerifier(hashPassword('event loop'), 'LOGIN_PASSWORD_HASH')
+  let ticked = false
+  setImmediate(() => {
+    ticked = true
+  })
+  // The synchronous form would hold the loop for the whole derivation, so this
+  // callback could not have run before it resolved. That it did is the property
+  // the whole change exists for.
+  await deriveKey('event loop', parsed.salt)
+  expect(ticked, 'the loop kept turning while scrypt ran').toBe(true)
 })
 
 test('scrypt parameters are pinned', () => {

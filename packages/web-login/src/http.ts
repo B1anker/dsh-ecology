@@ -10,6 +10,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { type AddressBucketOptions, bucketAddress } from './client-address.js'
 
 /**
  * Headers attached to every unauthenticated response.
@@ -35,8 +36,14 @@ export const SECURITY_HEADERS = Object.freeze({
   ].join('; '),
 })
 
-/** Extra headers a caller may add, such as Set-Cookie or Retry-After. */
-export type ExtraHeaders = Record<string, string>
+/**
+ * Extra headers a caller may add, such as Set-Cookie or Retry-After.
+ *
+ * An array value emits the header once per element, which `Set-Cookie` needs:
+ * it is the one header that may legally repeat, and logout uses that to expire
+ * more than one cookie name in a single response.
+ */
+export type ExtraHeaders = Record<string, string | string[]>
 
 /**
  * Send an HTML response with the security headers applied.
@@ -123,7 +130,7 @@ export function isDocumentNavigation(req: IncomingMessage): boolean {
 }
 
 /** The client-identification settings {@link clientKey} reads. */
-export interface ClientKeyOptions {
+export interface ClientKeyOptions extends AddressBucketOptions {
   trustProxy: boolean
   clientIpHeader: string
 }
@@ -136,26 +143,28 @@ export interface ClientKeyOptions {
  * exactly when the proxy overwrites that header on every request and the app is
  * unreachable except through it.
  *
+ * Whichever it is, the address is masked to a network before it becomes a key —
+ * a limiter that counts single addresses is not a limiter to anyone holding a
+ * /64.
+ *
  * @param req - the incoming request.
- * @param options - `trustProxy` and the `clientIpHeader` to read.
- * @returns a stable client key.
+ * @param options - `trustProxy`, the `clientIpHeader` to read, and the bucket
+ *   widths for each address family.
+ * @returns a stable client bucket key.
  */
-export function clientKey(
-  req: IncomingMessage,
-  { trustProxy, clientIpHeader }: ClientKeyOptions,
-): string {
-  if (trustProxy) {
-    const raw = req.headers[clientIpHeader]
+export function clientKey(req: IncomingMessage, options: ClientKeyOptions): string {
+  if (options.trustProxy) {
+    const raw = req.headers[options.clientIpHeader]
     const value = Array.isArray(raw) ? raw[0] : raw
     if (typeof value === 'string' && value !== '') {
       // X-Forwarded-For accumulates a list; the proxy appends the peer it saw,
       // so the last entry is the only one it vouches for.
       const hops = value.split(',')
       const nearest = hops[hops.length - 1]?.trim()
-      if (nearest !== undefined && nearest !== '') return nearest
+      if (nearest !== undefined && nearest !== '') return bucketAddress(nearest, options)
     }
   }
-  return req.socket?.remoteAddress ?? 'unknown'
+  return bucketAddress(req.socket?.remoteAddress, options)
 }
 
 /**

@@ -13,7 +13,7 @@
  * @module @seaveyon/dsh-web-login/verifier
  */
 
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto'
 
 /**
  * scrypt cost parameters. Shared by the generator and the verifier — changing
@@ -100,23 +100,73 @@ export function requireVerifier(stored: unknown, envName: string): Verifier {
   return parsed
 }
 
+/** The scrypt options every derivation here uses. */
+const SCRYPT_OPTIONS = Object.freeze({
+  N: SCRYPT.cost,
+  r: SCRYPT.blockSize,
+  p: SCRYPT.parallelization,
+  maxmem: SCRYPT.maxmem,
+})
+
+/**
+ * Reject a candidate that is too long to hash.
+ *
+ * An unauthenticated caller must not get to choose how much CPU a single
+ * request costs, so the length check happens before the KDF rather than inside
+ * it.
+ *
+ * @param password - the candidate.
+ * @throws when the candidate exceeds {@link MAX_PASSWORD_BYTES}.
+ */
+function assertHashable(password: string): void {
+  if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
+    throw new Error('dsh-web-login: password exceeds the maximum accepted length')
+  }
+}
+
 /**
  * Derive the scrypt key for a candidate password.
- * @param password - the candidate, as supplied by a request or a TTY prompt.
+ *
+ * Asynchronous because this is the request path. `scryptSync` holds the thread
+ * it runs on for the whole derivation — around 80 milliseconds at these
+ * parameters — and in a Node process that thread is the event loop, so a
+ * synchronous verification stalls every other request, WebSocket frame, and
+ * timer in the dsh process, not just the login that caused it. The callback
+ * form runs the same work on libuv's threadpool instead. How many may run
+ * there at once is decided by {@link module:@seaveyon/dsh-web-login/kdf-gate},
+ * because saturating that pool would starve every other consumer of it.
+ *
+ * @param password - the candidate, as supplied by a request.
  * @param salt - the verifier's salt.
  * @returns the derived key.
  * @throws when the candidate exceeds {@link MAX_PASSWORD_BYTES}.
  */
-export function deriveKey(password: string, salt: Buffer): Buffer {
-  if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
-    throw new Error('dsh-web-login: password exceeds the maximum accepted length')
-  }
-  return scryptSync(password, salt, SCRYPT.keylen, {
-    N: SCRYPT.cost,
-    r: SCRYPT.blockSize,
-    p: SCRYPT.parallelization,
-    maxmem: SCRYPT.maxmem,
+export function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
+  assertHashable(password)
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, SCRYPT.keylen, SCRYPT_OPTIONS, (error, key) => {
+      if (error !== null) reject(error)
+      else resolve(key)
+    })
   })
+}
+
+/**
+ * Derive the scrypt key synchronously.
+ *
+ * Only for the `dsh-web-login-hash` command, which is a one-shot process with
+ * nothing else to serve: there is no event loop worth yielding to, and the
+ * synchronous form keeps the password in scope for a shorter time. Nothing on
+ * the request path may call this.
+ *
+ * @param password - the password to hash.
+ * @param salt - the salt to derive with.
+ * @returns the derived key.
+ * @throws when the password exceeds {@link MAX_PASSWORD_BYTES}.
+ */
+export function deriveKeySync(password: string, salt: Buffer): Buffer {
+  assertHashable(password)
+  return scryptSync(password, salt, SCRYPT.keylen, SCRYPT_OPTIONS)
 }
 
 /**
@@ -126,25 +176,25 @@ export function deriveKey(password: string, salt: Buffer): Buffer {
  */
 export function hashPassword(password: string): string {
   const salt = randomBytes(SCRYPT.saltBytes)
-  const key = deriveKey(password, salt)
+  const key = deriveKeySync(password, salt)
   return `${PREFIX}$${salt.toString('hex')}$${key.toString('hex')}`
 }
 
 /**
  * Compare a candidate password against a parsed verifier in constant time.
  *
- * Oversized candidates are rejected before the KDF runs: an unauthenticated
- * caller must not be able to choose how much CPU a single request costs. The
- * candidate is typed `unknown` because it arrives from a parsed form body,
- * where a repeated field or a missing one is a value this must simply refuse.
+ * Oversized and empty candidates are refused before the KDF runs, so a request
+ * that cannot possibly match never reaches the expensive part. The candidate is
+ * typed `unknown` because it arrives from a parsed form body, where a repeated
+ * field or a missing one is a value this must simply refuse.
  *
  * @param candidate - password supplied by the request.
  * @param verifier - the parsed verifier from {@link requireVerifier}.
  * @returns whether the candidate matches.
  */
-export function verifyPassword(candidate: unknown, verifier: Verifier): boolean {
+export async function verifyPassword(candidate: unknown, verifier: Verifier): Promise<boolean> {
   if (typeof candidate !== 'string' || candidate === '') return false
   if (Buffer.byteLength(candidate, 'utf8') > MAX_PASSWORD_BYTES) return false
-  const actual = deriveKey(candidate, verifier.salt)
+  const actual = await deriveKey(candidate, verifier.salt)
   return timingSafeEqual(actual, verifier.expected)
 }

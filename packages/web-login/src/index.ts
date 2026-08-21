@@ -41,10 +41,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createAttemptLimiter } from './attempt-limiter.js'
 import { resolveConfig } from './config.js'
 import {
-  COOKIE_NAME,
   readCookie,
-  serializeClearedCookie,
+  serializeClearedCookies,
   serializeSessionCookie,
+  sessionCookieName,
 } from './cookies.js'
 import {
   clientKey,
@@ -55,6 +55,7 @@ import {
   sendJsonError,
   sendRedirect,
 } from './http.js'
+import { createKdfGate } from './kdf-gate.js'
 import { renderLoginPage } from './page.js'
 import { createSessionStore } from './sessions.js'
 import type { PluginContext, RouteHandler, WebServerService } from './types.js'
@@ -109,7 +110,22 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     windowMs: options.attemptWindowMs,
     blockMs: options.blockMs,
     maxClients: options.maxAttemptClients,
+    globalLimit: options.globalAttemptLimit,
+    globalBlockMs: options.globalBlockMs,
   })
+  // The per-client limiter cannot bound total KDF work, because a distributed
+  // caller has as many client identities as it has addresses. This bounds it
+  // process-wide instead, and is the backstop that makes the limiter's own
+  // capacity behaviour survivable.
+  const kdf = createKdfGate({
+    concurrency: options.kdfConcurrency,
+    queueDepth: options.kdfQueueDepth,
+  })
+
+  // Resolved once: the name depends on whether the deployment sets `Secure`,
+  // and a gate that read one name while writing another would authenticate
+  // nobody in a way that looks like a session bug rather than a naming one.
+  const cookieName = sessionCookieName(options.secureCookie)
 
   /**
    * Whether a request carries a live session cookie.
@@ -117,7 +133,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
    * @returns true when the cookie names an unexpired session.
    */
   const isAuthenticated = (req: IncomingMessage): boolean =>
-    sessions.isLive(readCookie(req.headers.cookie, COOKIE_NAME))
+    sessions.isLive(readCookie(req.headers.cookie, cookieName))
 
   // ── the gate ───────────────────────────────────────────────────────────────
 
@@ -156,9 +172,18 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   // not depend on this plugin knowing the route table. `/api` in particular is
   // a prefix route owned by another plugin, and no second plugin may claim the
   // same (kind, path) pair or the fallback seat.
-  const originalRegister = server.register.bind(server)
-  const originalRegisterUpgrade = server.registerUpgrade.bind(server)
-  const originalRegisterFallback = server.registerFallback.bind(server)
+  // Two references to each member, for two different jobs. The bound copies are
+  // what the wrappers call through, so the host keeps its own `this`. The raw
+  // property values are what disposal puts back, so a registry restored by this
+  // plugin is identical to the one it found rather than a bound clone of it —
+  // which matters to whatever else may be comparing these by identity.
+  const priorRegister = server.register
+  const priorRegisterUpgrade = server.registerUpgrade
+  const priorRegisterFallback = server.registerFallback
+
+  const originalRegister = priorRegister.bind(server)
+  const originalRegisterUpgrade = priorRegisterUpgrade.bind(server)
+  const originalRegisterFallback = priorRegisterFallback.bind(server)
 
   const decoratedRegister: WebServerService['register'] = (route) => {
     // The gate's own routes must not be guarded, or signing in would require
@@ -202,21 +227,75 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   const decoratedRegisterFallback: WebServerService['registerFallback'] = (handler) =>
     originalRegisterFallback(guard(handler))
 
-  server.register = decoratedRegister
-  server.registerUpgrade = decoratedRegisterUpgrade
-  server.registerFallback = decoratedRegisterFallback
+  /**
+   * Best-effort restoration, for the failure path below.
+   *
+   * Errors are swallowed because this runs while a more informative one is
+   * already on its way to the caller: whatever refused the wrapper will refuse
+   * the original just as readily, and replacing a diagnosis with "cannot assign
+   * to read only property" would be a strictly worse outcome.
+   */
+  const undecorate = (): void => {
+    try {
+      server.register = priorRegister
+      server.registerUpgrade = priorRegisterUpgrade
+      server.registerFallback = priorRegisterFallback
+    } catch {
+      /* the throw below is the message worth keeping */
+    }
+  }
+
+  /**
+   * Install one wrapper, or refuse to start.
+   *
+   * Assignment is not proof of assignment, and it fails in two different ways.
+   * A host that exposes these as non-writable data properties makes the write
+   * throw, since this module is an ES module and therefore strict. A host that
+   * hands out a Proxy, or an accessor whose setter ignores the write, makes it
+   * succeed and do nothing. The second is the dangerous one: the gate would
+   * load, log that it is active, and guard nothing.
+   *
+   * This is the whole compatibility surface in one check. The plugin's contract
+   * with the host is that these three members are replaceable, and the failure
+   * it prevents is an open port that reports itself as closed.
+   *
+   * @param member - the registry member to wrap.
+   * @param wrapper - the guarded replacement.
+   * @throws when the replacement did not take effect.
+   */
+  const install = <K extends 'register' | 'registerUpgrade' | 'registerFallback'>(
+    member: K,
+    wrapper: WebServerService[K],
+  ): void => {
+    try {
+      server[member] = wrapper
+    } catch {
+      /* reported below, together with the silent case */
+    }
+    if (server[member] === wrapper) return
+    undecorate()
+    throw new Error(
+      `dsh-web-login: webServer.${member} could not be wrapped — the host does not ` +
+        'expose it as a replaceable property, so the gate cannot guard the routes ' +
+        'registered through it. Refusing to start rather than leave the surface open.',
+    )
+  }
+
+  install('register', decoratedRegister)
+  install('registerUpgrade', decoratedRegisterUpgrade)
+  install('registerFallback', decoratedRegisterFallback)
 
   ctx.effect(
     () => () => {
       // Restore only what is still ours. If another plugin decorated on top of
       // this one, blindly reassigning the originals would silently remove *its*
       // wrapper too — including, potentially, another security boundary.
-      if (server.register === decoratedRegister) server.register = originalRegister
+      if (server.register === decoratedRegister) server.register = priorRegister
       if (server.registerUpgrade === decoratedRegisterUpgrade) {
-        server.registerUpgrade = originalRegisterUpgrade
+        server.registerUpgrade = priorRegisterUpgrade
       }
       if (server.registerFallback === decoratedRegisterFallback) {
-        server.registerFallback = originalRegisterFallback
+        server.registerFallback = priorRegisterFallback
       }
     },
     'dsh-web-login: registry decoration',
@@ -286,7 +365,27 @@ export function apply(ctx: PluginContext, config?: unknown): void {
           }
 
           const password = new URLSearchParams(body).get('password') ?? ''
-          if (!verifyPassword(password, verifier)) {
+
+          // Admission is decided before the derivation starts, so a flood costs
+          // a queue check rather than 16 MiB and a threadpool slot each. A
+          // refusal here is not a failed attempt: the password was never
+          // examined, so counting it would let a flood lock out the operator.
+          const matched = await kdf.run(() => verifyPassword(password, verifier))
+          if (matched === null) {
+            ctx.logger.warn('dsh-web-login: sign-in queue full; refusing to start another hash')
+            sendHtml(
+              res,
+              503,
+              renderLoginPage({
+                title: options.title,
+                message: 'The server is busy verifying sign-ins. Try again in a moment.',
+              }),
+              { 'retry-after': '5' },
+            )
+            return
+          }
+
+          if (!matched) {
             const waitMs = limiter.fail(key)
             // The client identity is logged, never the password or the verifier:
             // startup and failure lines are the most-copied text in any bug report.
@@ -358,9 +457,9 @@ export function apply(ctx: PluginContext, config?: unknown): void {
             sendJsonError(res, 405, 'method_not_allowed', { allow: 'POST' })
             return
           }
-          sessions.revoke(readCookie(req.headers.cookie, COOKIE_NAME))
+          sessions.revoke(readCookie(req.headers.cookie, cookieName))
           sendRedirect(res, 303, LOGIN_PATH, {
-            'set-cookie': serializeClearedCookie({ secure: options.secureCookie }),
+            'set-cookie': serializeClearedCookies({ secure: options.secureCookie }),
           })
         },
       }),

@@ -12,6 +12,10 @@ function fixture(overrides: Partial<Parameters<typeof createAttemptLimiter>[0]> 
     windowMs: 10_000,
     blockMs: 5000,
     maxClients: 10,
+    // Far out of reach unless a test asks for it, so the per-client assertions
+    // below are not quietly measuring the shared budget instead.
+    globalLimit: 1_000_000,
+    globalBlockMs: 30_000,
     now: () => clock,
     ...overrides,
   })
@@ -85,9 +89,80 @@ test('an existing client is still counted once the map is full', () => {
   limiter.fail('b')
   limiter.fail('c')
   expect(limiter.size).toBe(2)
-  // The tracked clients keep working; only new keys are dropped.
+  // The tracked clients keep working; only new keys go untracked.
   expect(limiter.fail('a')).toBe(0)
   expect(limiter.fail('a')).toBe(5000)
+})
+
+test('a client that cannot be tracked is denied rather than let through', () => {
+  const { limiter } = fixture({ maxClients: 2, limit: 3, blockMs: 5000 })
+  limiter.fail('a')
+  limiter.fail('b')
+
+  // The failure mode that matters. Not tracking an untracked client would mean
+  // that filling the table buys unlimited guesses for every key not in it, so
+  // reaching capacity would be the attack rather than the defence against it.
+  expect(limiter.fail('c')).toBe(5000)
+  expect(limiter.fail('d')).toBe(5000)
+  expect(limiter.size, 'and it is still bounded').toBe(2)
+})
+
+test('capacity denial lifts as soon as sweeping frees a slot', () => {
+  const { limiter, advance } = fixture({ maxClients: 2, limit: 3, windowMs: 10_000 })
+  limiter.fail('a')
+  limiter.fail('b')
+  expect(limiter.fail('c')).toBe(5000)
+
+  // Self-healing matters because the denial is collateral damage on honest
+  // newcomers: it has to end the moment the table has room again, without an
+  // operator noticing or a timer of its own.
+  advance(10_001)
+  expect(limiter.fail('c')).toBe(0)
+})
+
+test('the shared budget blocks a caller spread across many clients', () => {
+  const { limiter } = fixture({ limit: 100, globalLimit: 10, globalBlockMs: 30_000 })
+
+  // Every one of these is a different client and none of them reaches the
+  // per-client limit, which is exactly the shape of a distributed attack: the
+  // per-client counter never sees it.
+  for (let index = 0; index < 9; index += 1) {
+    expect(limiter.fail(`client-${index}`), `failure ${index}`).toBe(0)
+  }
+  expect(limiter.fail('client-9')).toBe(30_000)
+  expect(limiter.globallyBlocked).toBe(true)
+  expect(limiter.retryAfterMs('a-client-that-never-tried')).toBe(30_000)
+})
+
+test('the shared budget only counts failures inside one window', () => {
+  const { limiter, advance } = fixture({ limit: 100, windowMs: 10_000, globalLimit: 5 })
+  for (let index = 0; index < 4; index += 1) limiter.fail(`client-${index}`)
+  advance(10_001)
+  // Occasional failures spread over days are not an attack, and adding them up
+  // forever would eventually block the whole server on the strength of them.
+  expect(limiter.fail('client-x')).toBe(0)
+  expect(limiter.globallyBlocked).toBe(false)
+})
+
+test('the shared block expires', () => {
+  const { limiter, advance } = fixture({ limit: 100, globalLimit: 2, globalBlockMs: 30_000 })
+  limiter.fail('a')
+  limiter.fail('b')
+  expect(limiter.globallyBlocked).toBe(true)
+  advance(30_000)
+  expect(limiter.globallyBlocked).toBe(false)
+  expect(limiter.retryAfterMs('a')).toBe(0)
+})
+
+test('a successful login clears the shared counter', () => {
+  const { limiter } = fixture({ limit: 100, globalLimit: 5 })
+  for (let index = 0; index < 4; index += 1) limiter.fail(`client-${index}`)
+  // Only someone holding the password reaches this, and their presence is the
+  // evidence the counter was looking for. Letting a slow background attack lock
+  // out an operator who can demonstrably sign in would be the wrong trade.
+  limiter.succeed('client-0')
+  expect(limiter.fail('client-9')).toBe(0)
+  expect(limiter.globallyBlocked).toBe(false)
 })
 
 test('sweep keeps blocked and in-window records, drops the rest', () => {
