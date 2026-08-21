@@ -1,14 +1,13 @@
 {
-  "name": "@seaveyon/dsh-web-login",
-  "version": "0.1.1",
-  "description": "Cookie-session login gate for the dsh Web surface, replacing reverse-proxy HTTP Basic auth with a styled login page",
+  "name": "@seaveyon/dsh-plugin-testkit",
+  "version": "0.1.0",
+  "description": "Test doubles and a registry conformance suite for dsh Cordis plugins",
   "keywords": [
     "dsh",
     "cordis",
-    "authentication",
-    "login",
-    "session",
-    "reverse-proxy"
+    "testing",
+    "mock",
+    "contract-testing"
   ],
   "license": "MIT",
   "author": "B1anker",
@@ -23,25 +22,23 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./contract": {
+      "types": "./dist/contract.d.ts",
+      "default": "./dist/contract.js"
+    },
     "./package.json": "./package.json"
-  },
-  "bin": {
-    "dsh-web-login-hash": "./dist/hash-password.js"
   },
   "files": [
     "dist/",
-    "examples/",
     "README.md",
-    "README.zh-CN.md",
-    "SECURITY.md",
     "LICENSE"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/B1anker/dsh-ecology.git",
-    "directory": "packages/web-login"
+    "directory": "packages/plugin-testkit"
   },
-  "homepage": "https://github.com/B1anker/dsh-ecology/tree/main/packages/web-login#readme",
+  "homepage": "https://github.com/B1anker/dsh-ecology/tree/main/packages/plugin-testkit#readme",
   "bugs": {
     "url": "https://github.com/B1anker/dsh-ecology/issues"
   },
@@ -49,14 +46,10 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.7"
+    "@rstest/core": ">=0.11.0"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-host-webserver": {
+    "@rstest/core": {
       "optional": true
     }
   },
@@ -66,7 +59,6 @@
     "test": "rslib build && rstest run",
     "test:unit": "rstest run",
     "test:coverage": "rstest run --coverage",
-    "test:watch": "rstest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pack:check": "bun run build && npm pack --dry-run"
   },
@@ -74,9 +66,7 @@
     "@rslib/core": "^0.23.2",
     "@rstest/core": "^0.11.9",
     "@rstest/coverage-v8": "^0.11.9",
-    "@seaveyon/dsh-plugin-testkit": "workspace:*",
     "@types/node": "^24.0.0",
-    "fast-check": "^4.9.0",
     "typescript": "^5.9.3"
   }
 }

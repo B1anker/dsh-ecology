@@ -11,21 +11,26 @@
   ],
   "scripts": {
     "build": "bun run --filter '*' build",
-    "test": "bun run --filter '*' test",
+    "test": "bun run build && bun run --filter '*' test:unit",
+    "test:coverage": "bun run build && bun run --filter '*' test:coverage",
     "lint": "oxlint .",
     "lint:fix": "oxlint . --fix",
     "typecheck": "bun run --filter '*' typecheck",
+    "contract": "node scripts/check-host-contract.mjs",
     "format": "biome check --write .",
     "format:check": "biome check .",
-    "check": "bun run typecheck && bun run lint && bun run format:check",
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run contract",
     "precommit": "bun run check && bun run test",
     "pack:check": "bun run --filter '*' pack:check"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.9",
     "@semantic-release/changelog": "^7.0.0",
+    "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^11.0.1",
+    "@semantic-release/github": "^12.0.9",
+    "@semantic-release/release-notes-generator": "^14.1.1",
     "oxlint": "^1.79.0",
     "semantic-release": "^25.0.9",
     "typescript": "^5.9.3"

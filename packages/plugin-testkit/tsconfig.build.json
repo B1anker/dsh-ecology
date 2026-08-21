@@ -1,0 +1,13 @@
+{
+  // Declaration emit only. `tsconfig.json` deliberately includes the tests and
+  // the two config files so `typecheck` covers them, but that widens the common
+  // root to the package directory: declarations land in `dist/src/` and the
+  // configs get `.d.ts` files of their own. Narrowing to `src` puts each
+  // declaration beside the `.js` it describes, which is where the `exports` map
+  // says it is.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src"
+  },
+  "include": ["src"]
+}
