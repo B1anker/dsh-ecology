@@ -174,20 +174,37 @@ instance. Use a separate development password and environment directory:
 
 ```sh
 mkdir -p "$PWD/.dsh-dev"
-DSH_HOME="$PWD/.dsh-dev" npx dsh-web-login-hash --env-file "$PWD/.dsh-dev/.env"
+DSH_HOME="$PWD/.dsh-dev" npx dsh-web-login-hash --env-path "$PWD/.dsh-dev/.env"
 ```
 
-The CLI supports `--env-file PATH` and `--var NAME` for explicit development
+The CLI supports `--env-path PATH` and `--var NAME` for explicit development
 paths and variable names. It rejects passwords shorter than eight characters
 and values larger than the runtime's maximum accepted password size.
 
-Run the package checks with no dependency installation required:
+The path flag is `--env-path` and not `--env-file` because Node reserves the
+latter: Node consumes `--env-file` wherever it appears on the command line,
+including after the script path, loads the named file as a dotenv file, and
+exits with status 9 if it is missing — which is every first run, since the file
+is the one this command creates.
+
+Run the package checks. Install first — the type checker, test runner, and
+bundler are development dependencies:
 
 ```sh
-npm run lint
-npm test
-npm run pack:check
+bun install          # from the workspace root
+bun run typecheck    # tsc over src and test
+bun run test         # rstest
+bun run build        # rslib, bundleless, with declarations
+bun run pack:check   # build, then npm pack --dry-run
 ```
+
+Lint and formatting are configured once for the whole workspace, so run those
+from the root: `bun run lint` and `bun run format:check`. `bun run check` at the
+root does typecheck, lint, and format together across every package.
+
+The CLI test spawns `dist/hash-password.js`, so it needs a build to have run.
+`bun run pack:check` builds first; a bare `bun run test` against a clean tree
+does not.
 
 ## Upgrade and removal
 

@@ -16,15 +16,19 @@
   "engines": {
     "node": ">=20.11.0"
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "bin": {
-    "dsh-web-login-hash": "./scripts/hash-password.mjs"
+    "dsh-web-login-hash": "./dist/hash-password.js"
   },
   "files": [
-    "src/",
-    "scripts/hash-password.mjs",
+    "dist/",
     "examples/",
     "README.md",
     "README.zh-CN.md",
@@ -33,11 +37,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/B1anker/dsh-web-login.git"
+    "url": "git+https://github.com/B1anker/dsh-ecology.git",
+    "directory": "packages/web-login"
   },
-  "homepage": "https://github.com/B1anker/dsh-web-login#readme",
+  "homepage": "https://github.com/B1anker/dsh-ecology/tree/main/packages/web-login#readme",
   "bugs": {
-    "url": "https://github.com/B1anker/dsh-web-login/issues"
+    "url": "https://github.com/B1anker/dsh-ecology/issues"
   },
   "publishConfig": {
     "access": "public"
@@ -55,11 +60,18 @@
     }
   },
   "scripts": {
-    "lint": "node scripts/check-syntax.mjs",
-    "test": "node --test test/unit/*.test.js test/integration/*.test.js",
-    "test:unit": "node --test test/unit/*.test.js",
-    "test:integration": "node --test test/integration/*.test.js",
-    "pack:check": "npm pack --dry-run",
-    "prepack": "npm run lint && npm test"
+    "build": "rslib build",
+    "dev": "rslib build --watch",
+    "test": "rslib build && rstest run",
+    "test:unit": "rstest run",
+    "test:watch": "rstest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pack:check": "bun run build && npm pack --dry-run"
+  },
+  "devDependencies": {
+    "@rslib/core": "^0.23.2",
+    "@rstest/core": "^0.11.9",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
   }
 }

@@ -1,0 +1,98 @@
+# Checks for every push and pull request.
+#
+# One job, not four. The checks are seconds each, and splitting them across jobs
+# would pay the install cost four times over to gain parallelism the runtime does
+# not need. They run in ascending order of how long they take to fix: formatting
+# and lint before the type checker, and the tests last.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch makes the previous run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned to the version in package.json's packageManager field, so CI
+          # and a developer's machine resolve the same lockfile the same way.
+          bun-version: 1.3.14
+
+      # --frozen-lockfile fails rather than silently updating bun.lock, so a
+      # dependency change has to arrive as a reviewed diff.
+      - run: bun install --frozen-lockfile
+
+      - name: Format
+        run: bun run format:check
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # `test` builds first: the CLI suite spawns dist/hash-password.js to check
+      # the shebang and executable bit, which only exist after a build.
+      - name: Test
+        run: bun run test
+
+      # Proves the published tarball contains what package.json's `files` says,
+      # and that the build is reproducible from a clean checkout.
+      - name: Pack
+        run: bun run pack:check
+
+  # The packages declare `engines.node: >=20.11.0`, and the job above only ever
+  # exercises whichever Node the bun runtime happens to embed. This runs the
+  # built output on each supported major, because the promise is about the
+  # published artifact rather than about the toolchain that produced it.
+  node-matrix:
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20.11', '22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run build
+
+      # setup-node runs after setup-bun, so its Node is first on PATH and is the
+      # one rstest launches workers with. Asserting the major here rather than
+      # printing it, because a silent fallback to bun's embedded Node would make
+      # this whole matrix test the same version three times.
+      - name: Confirm the matrix Node is active
+        run: |
+          echo "node: $(node --version)  ($(command -v node))"
+          case "$(node --version)" in
+            v${{ matrix.node }}*) ;;
+            *) echo "::error::expected Node ${{ matrix.node }}, got $(node --version)"; exit 1 ;;
+          esac
+
+      # test:unit rather than test: the build already ran above, and re-running
+      # it here would rebuild with the matrix Node for no added coverage.
+      - name: Test on Node ${{ matrix.node }}
+        run: bun run --filter '*' test:unit

@@ -1,0 +1,6 @@
+# Tests run under rstest, not bun:test. `bun test` at the root would discover the
+# *.test.ts files and run them on the wrong runner, failing in confusing ways
+# rather than saying the runner is wrong — so use `bun run test`, which delegates
+# to each package's own `test` script.
+[install]
+exact = false

@@ -1,0 +1,48 @@
+# Release preparation, run by hand.
+#
+# Produces a tarball for review and does not publish. Publication stays a
+# separate, explicitly approved decision — an automatic `npm publish` on tag is
+# how a broken `exports` map, or worse, reaches the registry permanently.
+name: Release preparation
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to verify and pack
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      # The full gate, not a subset: a tarball worth reviewing is one that
+      # already passed everything CI would have run on the same commit.
+      - run: bun run check
+      - run: bun run test
+
+      # --ignore-scripts because packing must not run lifecycle hooks; the build
+      # already happened above, as part of `test`.
+      - name: Pack
+        run: cd packages/web-login && npm pack --ignore-scripts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-web-login-package
+          path: packages/web-login/*.tgz
+          if-no-files-found: error

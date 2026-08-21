@@ -126,18 +126,29 @@ plugins:
 
 ```sh
 mkdir -p "$PWD/.dsh-dev"
-DSH_HOME="$PWD/.dsh-dev" npx dsh-web-login-hash --env-file "$PWD/.dsh-dev/.env"
+DSH_HOME="$PWD/.dsh-dev" npx dsh-web-login-hash --env-path "$PWD/.dsh-dev/.env"
 ```
 
-CLI 支持 `--env-file PATH` 和 `--var NAME` 来指定开发路径和环境变量名。它拒绝少于 8 个字符的密码，以及超过运行时最大字节长度的密码。
+CLI 支持 `--env-path PATH` 和 `--var NAME` 来指定开发路径和环境变量名。它拒绝少于 8 个字符的密码，以及超过运行时最大字节长度的密码。
 
-无需安装依赖即可执行包内检查：
+路径参数叫 `--env-path` 而不是 `--env-file`，因为后者被 Node 占用：无论 `--env-file` 出现在命令行的哪个位置（包括脚本路径之后），Node 都会消费它，把指定文件当作 dotenv 文件加载，文件不存在时以状态码 9 退出——而首次运行时它必然不存在，因为这个文件正是本命令要创建的。
+
+执行包内检查。请先安装依赖——类型检查器、测试运行器和打包器都是开发依赖：
 
 ```sh
-npm run lint
-npm test
-npm run pack:check
+bun install          # 在 workspace 根目录执行
+bun run typecheck    # 对 src 与 test 执行 tsc
+bun run test         # rstest
+bun run build        # rslib，bundleless，并生成类型声明
+bun run pack:check   # 先构建，再执行 npm pack --dry-run
 ```
+
+Lint 与格式化在整个 workspace 只配置一份，请在根目录执行：`bun run lint` 和
+`bun run format:check`。根目录的 `bun run check` 会对所有包一并执行类型检查、lint
+和格式检查。
+
+CLI 测试会启动 `dist/hash-password.js`，因此需要先构建。`bun run pack:check` 会
+先构建；在干净的工作树上直接执行 `bun run test` 则不会。
 
 ## 升级与移除
 

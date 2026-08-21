@@ -1,0 +1,33 @@
+{
+  "name": "dsh-ecology",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Packages that extend the dsh surface: authentication, and whatever the ecology grows next",
+  "license": "MIT",
+  "author": "B1anker",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun run --filter '*' build",
+    "test": "bun run --filter '*' test",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "typecheck": "bun run --filter '*' typecheck",
+    "format": "biome check --write .",
+    "format:check": "biome check .",
+    "check": "bun run typecheck && bun run lint && bun run format:check",
+    "precommit": "bun run check && bun run test",
+    "pack:check": "bun run --filter '*' pack:check"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.9",
+    "oxlint": "^1.79.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "packageManager": "bun@1.3.14"
+}
