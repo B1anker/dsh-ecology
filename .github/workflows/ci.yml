@@ -50,6 +50,9 @@ jobs:
       - name: Host contract
         run: bun run contract
 
+      - name: Bundle contract
+        run: bun run bundle:check
+
       # `test:coverage` builds first: the CLI suite spawns dist/hash-password.js
       # to check the shebang and executable bit, which only exist after a build.
       #
@@ -61,8 +64,9 @@ jobs:
       - name: Test
         run: bun run test:coverage
 
-      # Proves the published tarball contains what package.json's `files` says,
-      # and that the build is reproducible from a clean checkout.
+      # Builds each publishable package and asks npm to enumerate its allowlist.
+      # Bundle manifest/file consistency is checked by the contract step above;
+      # the engines-floor job below smoke-tests each real tarball.
       - name: Pack
         run: bun run pack:check
 

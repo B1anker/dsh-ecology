@@ -63,19 +63,21 @@ jobs:
           # workspace comes to declare later.
           package-manager-cache: false
 
-      # Trusted publishing needs npm >= 11.5.1. The Node above already ships a
-      # newer one, but the floor is stated rather than assumed; the major is
-      # pinned so a future npm 12 arrives as a reviewed change.
+      # Trusted publishing needs npm >= 11.5.1. Pin the exact packer because the
+      # recovery path below compares tarball bytes with the registry; a packer
+      # upgrade must be reviewed rather than making an otherwise identical
+      # retry look like different source.
       - name: Ensure npm supports trusted publishing
-        run: npm install -g npm@^11.5.1
+        run: npm install -g npm@11.16.0
 
       - run: bun install --frozen-lockfile
 
       # The same gate CI runs, on the same commit: a version reaching the
       # registry is permanent, so this does not publish anything the checks
-      # have not already accepted. `test` builds first, so dist/ exists below.
+      # have not already accepted. `test:coverage` builds first, so dist/ exists
+      # below.
       - run: bun run check
-      - run: bun run test
+      - run: bun run test:coverage
 
       # Each package is released on its own commit history — see
       # scripts/release/scoped-commits.mjs — so a change touching only one of
@@ -110,7 +112,7 @@ jobs:
 
             version=$(printf '%s\n' "$output" \
               | grep -oE 'next release version is [0-9]+\.[0-9]+\.[0-9]+' \
-              | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+              | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
             if [ -z "$version" ]; then
               echo "these commits imply no release for $name"
               echo "::endgroup::"
@@ -119,18 +121,27 @@ jobs:
 
             # Published before the tag exists, deliberately. If the registry
             # rejects this, nothing was tagged and the next run retries cleanly;
-            # if it succeeds and a later step fails, the `npm view` guard skips
-            # the version already on the registry instead of forking the tag
-            # from what shipped.
+            # if it succeeds and a later step fails, the integrity guard resumes
+            # tag creation only when a retry reproduces the exact registry
+            # tarball. New source can never inherit the already-published tag.
             #
-            # The tarball is packed first and then published by path, so no
-            # lifecycle script runs between the artifact the checks accepted and
-            # the one that goes to the registry.
+            # The tarball is packed once, smoked as a clean consumer, and then
+            # published by that exact path. No lifecycle script can change the
+            # artifact between the check and the registry upload.
             node scripts/bump-version.mjs "$directory" "$version"
-            if npm view "$name@$version" version >/dev/null 2>&1; then
-              echo "$version is already on the registry; skipping publish"
+            tarball=$(cd "$directory" && npm pack --ignore-scripts --silent)
+            tarball_path="$directory/$tarball"
+            node scripts/smoke-tarball.mjs "$tarball_path"
+            local_integrity=$(node -e 'const fs = require("node:fs"); const crypto = require("node:crypto"); process.stdout.write(`sha512-${crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64")}`)' "$tarball_path")
+            published_integrity=$(npm view "$name@$version" dist.integrity 2>/dev/null || true)
+            if [ -n "$published_integrity" ]; then
+              if [ "$published_integrity" != "$local_integrity" ]; then
+                echo "::error::$name@$version already exists, but its tarball differs from this checkout; refusing to create a misleading tag"
+                exit 1
+              fi
+              echo "$version's exact tarball is already on the registry; resuming tag and release creation"
             else
-              (cd "$directory" && npm pack --ignore-scripts && npm publish ./*.tgz)
+              npm publish "$tarball_path"
             fi
 
             # Runs semantic-release for real: the changelog, the version commit,

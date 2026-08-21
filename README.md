@@ -42,7 +42,7 @@ chasing a security question about cookie handling should land in
 
 ```sh
 bun install
-bun run check   # typecheck, lint, format
+bun run check   # typecheck, lint, format, host and bundle contracts
 bun run test    # builds each package, then runs its suite
 ```
 
@@ -53,9 +53,10 @@ less than what building it does.
 
 That gap means the test suite cannot verify the published floor: it runs under a
 toolchain that will not start there. [`scripts/smoke-tarball.mjs`](scripts/smoke-tarball.mjs)
-covers it instead by extracting a packed tarball somewhere with no `node_modules`
-and importing it, so it can run on any Node a consumer might have. CI runs it on
-whatever `engines.node` declares.
+covers it instead by extracting a packed tarball into a clean temporary consumer
+with no dependency install and importing it through the public package name, so
+it can run on any Node a consumer might have. CI runs it on whatever
+`engines.node` declares.
 
 `bun run test` delegates to each package's own `test` script rather than running
 `bun test` directly: the suites run under rstest, and bun's built-in runner would
@@ -74,7 +75,8 @@ discover the same files and fail on them in confusing ways.
 | `bun run format` | Biome, writing fixes |
 | `bun run format:check` | Biome, reporting only |
 | `bun run contract` | check the installed DSH host packages against the types the plugins assume |
-| `bun run check` | typecheck, lint, format check, then the host contract |
+| `bun run bundle:check` | validate the installable bundle manifest, patch shape, and preserved row dependencies |
+| `bun run check` | typecheck, lint, format check, then host and bundle contracts |
 | `bun run precommit` | `check`, then the full test suite |
 | `bun run pack:check` | build and `npm pack --dry-run` in every package |
 
@@ -142,8 +144,10 @@ moment it finds one, and the OIDC exchange silently stops happening.
 The tarball reaches the registry *before* the tag and the GitHub release exist.
 The order matters because only one of the two is reversible: a failed publish
 leaves nothing tagged and the next run retries, while a publish that succeeded
-before a later step failed is skipped on the re-run by an `npm view` check,
-rather than leaving a tag that claims a version the registry never received.
+before a later step failed is resumed only when the rebuilt tarball's SHA-512
+integrity exactly matches the registry. If newer source would produce different
+bytes under that already-published version, the release fails instead of
+creating a misleading tag.
 
 ### Bootstrapping a new package on npm
 
