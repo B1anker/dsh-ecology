@@ -11,6 +11,10 @@
  * the plugin — but the two must agree, and structural typing makes agreement
  * something a test can assert rather than something a reviewer has to check.
  *
+ * Event and tools members below are likewise structural. They describe the
+ * cookbook shapes a hook plugin binds to (`tools/pre-execute` decisions, Cordis
+ * waterfall listeners), not a complete `@deepseek-ai/dsh-tools` surface.
+ *
  * @module @seaveyon/dsh-plugin-testkit/types
  */
 
@@ -66,10 +70,19 @@ export interface Logger {
 }
 
 /**
+ * A Cordis event listener.
+ *
+ * For waterfall events the final argument is `next`. Ordinary `emit` listeners
+ * receive only the payload.
+ */
+export type ContextListener = (...args: never[]) => unknown
+
+/**
  * The Cordis plugin context.
  *
- * `provide` and `set` are optional because a plugin is expected to call them
- * defensively; `effect` is not, because without it there is no disposal path.
+ * `provide`, `set`, and the event members are optional because a plugin is
+ * expected to call them defensively; `effect` is not, because without it there
+ * is no disposal path. The mock always implements the optionals.
  */
 export interface PluginContext {
   get: <T = unknown>(name: string) => T | undefined
@@ -77,4 +90,49 @@ export interface PluginContext {
   logger: Logger
   provide?: (name: string, value: unknown, available?: () => boolean) => void
   set?: (name: string, value: unknown) => void
+  on?: (event: string, listener: ContextListener) => Disposer
+  emit?: (event: string, ...args: unknown[]) => void
+  waterfall?: (event: string, ...args: unknown[]) => unknown
+}
+
+/** Opaque execution identity carried through the tools pipeline. */
+export interface ToolExecution {
+  callId: string
+  name: string
+  arguments: unknown
+  signal: AbortSignal
+  token: string
+}
+
+/** Decision returned from a `tools/pre-execute` waterfall listener. */
+export type PreToolDecision =
+  | { kind: 'allow' }
+  | { kind: 'deny'; reason: string }
+  | { kind: 'ask'; reason?: string }
+
+/** Normalized outcome after the tools pipeline settles. */
+export interface ToolResult {
+  content: unknown
+  isError: boolean
+}
+
+/** Minimal tools registry surface a hook plugin `get`s. */
+export interface ToolsService {
+  register: (name: string, execute: ToolBody) => Disposer
+}
+
+/** The body a registered tool runs when pre-execute allows it. */
+export type ToolBody = (exec: ToolExecution) => unknown | Promise<unknown>
+
+/**
+ * Prove two structural types remain mutually substitutable.
+ *
+ * Compiles only while each side is assignable to the other. The runtime body is
+ * a no-op; `typecheck` is what enforces the claim.
+ *
+ * @param _ab - witness that `A` is assignable to `B`.
+ * @param _ba - witness that `B` is assignable to `A`.
+ */
+export function assertMutualAssignability<A, B>(_ab: (a: A) => B, _ba: (b: B) => A): void {
+  /* type-level only */
 }

@@ -1,6 +1,7 @@
 import { expect, test } from '@rstest/core'
 import { createMockContext } from '../src/context.js'
 import { fakeRequest, fakeResponse, fakeStreamingRequest } from '../src/http.js'
+import { createMockToolsPipeline } from '../src/tools.js'
 import { createMockWebServer } from '../src/web-server.js'
 
 test('the context collects teardowns and runs them in reverse', () => {
@@ -36,8 +37,122 @@ test('services are readable and writable through the context', () => {
   const ctx = createMockContext(services)
   expect(ctx.get('webServer')).toBe('a service')
   expect(ctx.get('absent')).toBeUndefined()
-  ctx.set?.('published', true)
+  ctx.set('published', true)
   expect(ctx.get('published')).toBe(true)
+})
+
+test('provide publishes a readiness value and honours available()', () => {
+  const ctx = createMockContext({})
+  let open = false
+  ctx.provide('dshWebLoginReady', true, () => open)
+  expect(ctx.get('dshWebLoginReady')).toBeUndefined()
+  open = true
+  expect(ctx.get('dshWebLoginReady')).toBe(true)
+})
+
+test('waterfall short-circuits when a listener skips next()', () => {
+  const ctx = createMockContext({})
+  const seen: string[] = []
+  ctx.on('tools/pre-execute', (() => {
+    seen.push('gate')
+    return { kind: 'deny', reason: 'no' }
+  }) as (...args: never[]) => unknown)
+  ctx.on('tools/pre-execute', (() => {
+    seen.push('later')
+    return { kind: 'allow' }
+  }) as (...args: never[]) => unknown)
+  expect(ctx.waterfall('tools/pre-execute', { name: 'x' })).toEqual({
+    kind: 'deny',
+    reason: 'no',
+  })
+  expect(seen).toEqual(['gate'])
+})
+
+test('a tools pipeline deny skips the body and still runs post-execute', async () => {
+  const ctx = createMockContext({})
+  const tools = createMockToolsPipeline(ctx)
+  let ran = false
+  tools.service.register('echo', () => {
+    ran = true
+    return 'body'
+  })
+  ctx.on('tools/pre-execute', (() => ({ kind: 'deny', reason: 'blocked' })) as (
+    ...args: never[]
+  ) => unknown)
+  ctx.on('tools/post-execute', ((
+    _exec: unknown,
+    result: { content: unknown },
+    next: () => unknown,
+  ) => {
+    expect(result.content).toBe('blocked')
+    return next()
+  }) as (...args: never[]) => unknown)
+
+  const result = await tools.run({ name: 'echo', arguments: { q: 1 } })
+  expect(ran).toBe(false)
+  expect(result).toEqual({ content: 'blocked', isError: true })
+  expect(ctx.get('tools')).toBe(tools.service)
+})
+
+test('an unknown tool and a bare throw both become isError results', async () => {
+  const ctx = createMockContext({})
+  const tools = createMockToolsPipeline(ctx)
+  expect(await tools.run({ name: 'missing' })).toEqual({
+    content: 'unknown tool: missing',
+    isError: true,
+  })
+
+  tools.service.register('boom', () => {
+    throw 'bare'
+  })
+  expect(await tools.run({ name: 'boom' })).toEqual({ content: 'bare', isError: true })
+})
+
+test('an ask without a reason is denied with the default message', async () => {
+  const ctx = createMockContext({})
+  const tools = createMockToolsPipeline(ctx)
+  tools.service.register('echo', () => 'body')
+  ctx.on('tools/pre-execute', (() => ({ kind: 'ask' })) as (...args: never[]) => unknown)
+  expect(await tools.run({ name: 'echo' })).toEqual({
+    content: 'approval unavailable',
+    isError: true,
+  })
+})
+
+test('a custom answerAsk can allow an ask decision', async () => {
+  const ctx = createMockContext({})
+  const tools = createMockToolsPipeline(ctx, {
+    answerAsk: () => ({ kind: 'allow' }),
+  })
+  tools.service.register('echo', () => 'allowed')
+  ctx.on('tools/pre-execute', (() => ({ kind: 'ask', reason: 'maybe' })) as (
+    ...args: never[]
+  ) => unknown)
+  expect(await tools.run({ name: 'echo', callId: 'c1' })).toEqual({
+    content: 'allowed',
+    isError: false,
+  })
+})
+
+test('listener disposers are idempotent and emit ignores missing events', () => {
+  const ctx = createMockContext({})
+  const seen: number[] = []
+  const first = ctx.on('n', (() => {
+    seen.push(1)
+  }) as (...args: never[]) => unknown)
+  const second = ctx.on('n', (() => {
+    seen.push(2)
+  }) as (...args: never[]) => unknown)
+  first()
+  first() // list still holds `second`; this hits the missing-listener branch
+  second()
+  second()
+  ctx.listeners.delete('n')
+  second()
+  ctx.emit('n')
+  ctx.emit('absent')
+  expect(seen).toEqual([])
+  expect(ctx.waterfall('absent')).toBeUndefined()
 })
 
 test('the registry refuses duplicate routes, upgrades, and a second fallback', () => {

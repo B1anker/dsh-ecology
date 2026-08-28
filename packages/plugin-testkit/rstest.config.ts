@@ -18,12 +18,18 @@ export default defineConfig({
     include: ['src/**/*.ts'],
     exclude: [
       // Declarations only; it emits no JavaScript and would sit at 0% forever.
+      // `assertMutualAssignability` lives here too — a type-level no-op covered
+      // by the entry export check rather than a runtime branch.
       'src/types.ts',
-      // A re-export barrel. The bundler resolves its bindings at build time, so
-      // nothing of it survives into a module the provider can attribute
-      // execution to, and it reports a permanent 0%. It is checked instead by
-      // `test/entry.test.ts`, which asserts the export list directly.
+      // Re-export barrels. Checked by `test/entry.test.ts` instead.
       'src/index.ts',
+      'src/contract.ts',
+      // Conformance suites declare tests; they are runners, not doubles. Covering
+      // every arrow inside an assertion that intentionally skips a tool body is
+      // not the signal these thresholds exist for.
+      'src/contract-web-server.ts',
+      'src/contract-context.ts',
+      'src/contract-tools.ts',
     ],
     reporters: ['text', 'html'],
     thresholds: {

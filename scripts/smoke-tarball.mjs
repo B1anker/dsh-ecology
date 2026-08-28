@@ -124,10 +124,10 @@ const PACKAGES = {
   },
 
   '@seaveyon/dsh-plugin-testkit': {
-    // The contract suite declares tests, so it imports @rstest/core — an
+    // The contract suites declare tests, so they import @rstest/core — an
     // optional peer that is deliberately absent here. Everything a consumer can
     // use without a runner is in the main entry, which is what this imports.
-    skip: ['contract.js'],
+    skip: ['contract.js', 'contract-web-server.js', 'contract-context.js', 'contract-tools.js'],
     /**
      * @param dist - file URL of the extracted `dist/` directory.
      * @param _root - filesystem path of the extracted package.
@@ -135,7 +135,13 @@ const PACKAGES = {
      * @returns a description of what was exercised.
      */
     async check(_dist, _root, entry) {
-      const { createMockContext, createMockWebServer, fakeRequest, fakeResponse } = entry
+      const {
+        createMockContext,
+        createMockToolsPipeline,
+        createMockWebServer,
+        fakeRequest,
+        fakeResponse,
+      } = entry
 
       const web = createMockWebServer()
       const ctx = createMockContext({ webServer: web.service })
@@ -162,7 +168,21 @@ const PACKAGES = {
       res.end()
       if (res.status !== 204) throw new Error('fakeResponse lost its status')
 
-      return 'public export, mock registry over a real socket, context, request and response doubles'
+      ctx.on('smoke', (value, next) => {
+        const inner = next()
+        return inner === undefined ? value : inner
+      })
+      if (ctx.waterfall('smoke', 7) !== 7) throw new Error('waterfall lost its payload')
+
+      const tools = createMockToolsPipeline(ctx)
+      tools.service.register('echo', (exec) => exec.arguments)
+      ctx.on('tools/pre-execute', () => ({ kind: 'deny', reason: 'smoke' }))
+      const denied = await tools.run({ name: 'echo', arguments: { ok: true } })
+      if (!denied.isError || denied.content !== 'smoke') {
+        throw new Error('tools pipeline deny failed')
+      }
+
+      return 'public export, mock registry over a real socket, context events, tools deny, request and response doubles'
     },
   },
 }

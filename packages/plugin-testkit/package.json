@@ -1,13 +1,15 @@
 {
   "name": "@seaveyon/dsh-plugin-testkit",
   "version": "0.1.0",
-  "description": "Test doubles and a registry conformance suite for dsh Cordis plugins",
+  "description": "Test doubles and conformance suites for dsh Cordis plugins (webServer, context events, tools pipeline)",
   "keywords": [
     "dsh",
     "cordis",
     "testing",
     "mock",
-    "contract-testing"
+    "contract-testing",
+    "waterfall",
+    "tools"
   ],
   "license": "MIT",
   "author": "B1anker",

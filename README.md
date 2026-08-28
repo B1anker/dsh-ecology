@@ -9,7 +9,7 @@ endorsed by DeepSeek AI.
 | Package | Version | Description |
 | --- | --- | --- |
 | [`@seaveyon/dsh-web-login`](packages/web-login) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-web-login.svg)](https://www.npmjs.com/package/@seaveyon/dsh-web-login) | Cookie-session login gate for the DSH Web surface, replacing a reverse proxy's HTTP Basic prompt with a styled sign-in page. |
-| [`@seaveyon/dsh-plugin-testkit`](packages/plugin-testkit) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-plugin-testkit.svg)](https://www.npmjs.com/package/@seaveyon/dsh-plugin-testkit) | Test doubles for the `webServer` registry and the Cordis context, plus the conformance suite that keeps them honest. |
+| [`@seaveyon/dsh-plugin-testkit`](packages/plugin-testkit) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-plugin-testkit.svg)](https://www.npmjs.com/package/@seaveyon/dsh-plugin-testkit) | Test doubles for the `webServer` registry, Cordis context events, and a minimal tools pipeline, plus the conformance suites that keep them honest. |
 
 Each package is independently versioned and published; the workspace exists to
 share one toolchain, not to release them together.
