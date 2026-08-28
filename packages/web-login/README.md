@@ -7,11 +7,9 @@ proxy's browser-native HTTP Basic prompt with a small self-contained sign-in
 page while protecting the Web UI, API routes, plugin assets, the SPA fallback,
 and WebSocket upgrades.
 
-> **Status:** published on npm. The package is tested
-> against the route-registry contract of
-> `@deepseek-ai/dsh-host-webserver` `0.1.0-rc.7` and Cordis `^4.0.1`. It requires
-> Node.js **20.11.0 or later**. This project is independent software and is not
-> affiliated with or endorsed by DeepSeek AI.
+> **Status:** published on npm. Requires Node.js **20.11.0 or later**. This
+> project is independent software and is not affiliated with or endorsed by
+> DeepSeek AI.
 
 ## What it does
 
@@ -73,13 +71,7 @@ profile. That layer inserts the login plugin and makes `web-runtime`,
 replace complete values rather than appending to them.
 
 The package declares the DSH host and Cordis packages as optional peers because
-a normal DSH Web installation already provides them. Use it with the tested
-versions:
-
-```text
-@deepseek-ai/dsh-host-webserver  0.1.0-rc.7
-@deepseek-ai/cordis              ^4.0.1
-```
+a normal DSH Web installation already provides them.
 
 Generate a verifier from an interactive terminal (the password is not echoed):
 
@@ -292,7 +284,7 @@ The CLI test spawns `dist/hash-password.js`, so it needs a build to have run.
 
 ### Upgrade
 
-1. Read the release notes and verify the target DSH host/Cordis compatibility.
+1. Read the release notes.
 2. Back up the existing profile and keep it and the environment file private.
 3. When migrating from a pre-bundle release, remove the old manually inserted
    login row and readiness edits from the profile patch; retain only a

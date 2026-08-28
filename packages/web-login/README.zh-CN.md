@@ -4,9 +4,7 @@
 
 为 DSH Web 提供基于 Cookie 会话的登录保护层。它将反向代理的浏览器原生 HTTP Basic 认证弹窗替换为独立的登录页面，并保护 Web UI、API 路由、插件资源、SPA fallback 和 WebSocket 升级请求。
 
-> **状态：** 已发布到 npm。本包针对
-> `@deepseek-ai/dsh-host-webserver` `0.1.0-rc.7` 的路由注册表契约，以及
-> Cordis `^4.0.1` 进行测试。需要 Node.js **20.11.0 或更高版本**。本项目为独立软件，与 DeepSeek AI 没有隶属或背书关系。
+> **状态：** 已发布到 npm。需要 Node.js **20.11.0 或更高版本**。本项目为独立软件，与 DeepSeek AI 没有隶属或背书关系。
 
 ## 功能
 
@@ -44,12 +42,7 @@ dsh plugin --profile web add @seaveyon/dsh-web-login
 `dshWebLoginReady`。其中 `inject` 数组重述了 `webStartup` 和 `webRuntime`，因为
 DSH patch 会替换整个字段，而不是向现有数组追加元素。
 
-DSH Web 的正常安装一般已经提供下列可选 peer 依赖；建议使用已测试版本：
-
-```text
-@deepseek-ai/dsh-host-webserver  0.1.0-rc.7
-@deepseek-ai/cordis              ^4.0.1
-```
+本包将 DSH host 与 Cordis 声明为可选 peer，因为正常的 DSH Web 安装一般已经提供它们。
 
 在交互式终端生成密码校验值（密码不会回显）：
 
@@ -196,7 +189,7 @@ CLI 测试会启动 `dist/hash-password.js`，因此需要先构建。`bun run t
 
 ### 升级
 
-1. 阅读发行说明并确认目标 DSH host/Cordis 版本兼容。
+1. 阅读发行说明。
 2. 备份现有 profile，并继续妥善保护 profile 和环境文件。
 3. 从 bundle 化之前的版本迁移时，删除 profile patch 中手工插入的登录行和就绪依赖；
    只保留类似上文示例的按 id 配置覆盖。现在由 bundle 负责这些行。
