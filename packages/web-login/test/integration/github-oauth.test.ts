@@ -17,6 +17,7 @@ import {
   createMockWebServer,
   type MockContext,
 } from '@seaveyon/dsh-plugin-testkit'
+import { mintRecoveryToken, saveRecoveryRecord } from '../../src/authorization.js'
 import type { LoginConfig } from '../../src/config.js'
 import {
   exchangeCode,
@@ -272,5 +273,244 @@ test('callback with a bad state fails closed and creates no authz file', async (
     await expect(readFile(app.authFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   } finally {
     await app.close()
+  }
+})
+
+/**
+ * Install a global fetch mock that answers GitHub token/user/revoke calls.
+ * @param user - identity returned by GET /user.
+ * @returns a restore function.
+ */
+function mockGitHubUser(user: { id: number; login: string }): () => void {
+  const prior = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.includes('/login/oauth/access_token')) {
+      return new Response(JSON.stringify({ access_token: 'test-access-token' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (url.includes('api.github.com/user')) {
+      return new Response(JSON.stringify(user), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (url.includes('/applications/') && url.endsWith('/token') && init?.method === 'DELETE') {
+      return new Response(null, { status: 204 })
+    }
+    throw new Error(`unexpected fetch in test: ${url}`)
+  }) as typeof fetch
+  return () => {
+    globalThis.fetch = prior
+  }
+}
+
+async function completeOwnerEnroll(
+  app: Fixture,
+  user: { id: number; login: string } = { id: 4242, login: 'owner' },
+): Promise<string> {
+  const restoreFetch = mockGitHubUser(user)
+  try {
+    const cookie = await passwordBootstrap(app.port)
+    const enroll = await request(app.port, '/auth/github/enroll', {
+      method: 'POST',
+      headers: { cookie },
+    })
+    const location = String(enroll.headers.location)
+    const state = new URL(location).searchParams.get('state')
+    expect(state).toBeTruthy()
+
+    const callback = await request(
+      app.port,
+      `/auth/github/callback?code=test-code&state=${encodeURIComponent(state!)}`,
+    )
+    expect(callback.status).toBe(303)
+    expect(callback.headers.location).toBe('/')
+    const sessionCookie = setCookie(callback).split(';')[0]
+    expect(sessionCookie).toMatch(/^dsh_session=/)
+
+    const stored = JSON.parse(await readFile(app.authFile, 'utf8')) as {
+      users: Array<{ githubUserId: number; login: string; role: string }>
+    }
+    expect(stored.users).toEqual([
+      expect.objectContaining({ githubUserId: user.id, login: user.login, role: 'owner' }),
+    ])
+    return sessionCookie ?? ''
+  } finally {
+    restoreFetch()
+  }
+}
+
+test('bootstrap binding and a later GitHub login both admit the same owner', async () => {
+  const app = await fixture()
+  try {
+    const enrolledCookie = await completeOwnerEnroll(app, { id: 7, login: 'octo' })
+    const afterEnroll = await request(app.port, '/exact', { headers: { cookie: enrolledCookie } })
+    expect(afterEnroll.status).toBe(200)
+    expect(afterEnroll.body).toBe('exact')
+
+    // Password login is closed once active.
+    const passwordAgain = await request(app.port, '/login', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'content-length': String(Buffer.byteLength(`password=${encodeURIComponent(PASSWORD)}`)),
+      },
+      body: `password=${encodeURIComponent(PASSWORD)}`,
+    })
+    expect(passwordAgain.status).toBe(403)
+    expect(passwordAgain.body).toMatch(/GitHub/)
+
+    const loginPage = await request(app.port, '/login')
+    expect(loginPage.body).toMatch(/Continue with GitHub/)
+
+    const restoreFetch = mockGitHubUser({ id: 7, login: 'octo-renamed' })
+    try {
+      const start = await request(app.port, '/auth/github/login')
+      expect(start.status).toBe(302)
+      const state = new URL(String(start.headers.location)).searchParams.get('state')
+      const callback = await request(
+        app.port,
+        `/auth/github/callback?code=second&state=${encodeURIComponent(state!)}`,
+      )
+      expect(callback.status).toBe(303)
+      const cookie = setCookie(callback).split(';')[0] ?? ''
+      const exact = await request(app.port, '/exact', { headers: { cookie } })
+      expect(exact.status).toBe(200)
+
+      const stored = JSON.parse(await readFile(app.authFile, 'utf8')) as {
+        users: Array<{ githubUserId: number; login: string }>
+      }
+      expect(stored.users[0]?.githubUserId).toBe(7)
+      expect(stored.users[0]?.login).toBe('octo-renamed')
+    } finally {
+      restoreFetch()
+    }
+  } finally {
+    await app.close()
+  }
+})
+
+test('an unregistered GitHub account is rejected and recovery can rebind the owner', async () => {
+  const app = await fixture()
+  try {
+    await completeOwnerEnroll(app, { id: 11, login: 'owner' })
+
+    const restoreStranger = mockGitHubUser({ id: 99, login: 'stranger' })
+    try {
+      const start = await request(app.port, '/auth/github/login')
+      const state = new URL(String(start.headers.location)).searchParams.get('state')
+      const denied = await request(
+        app.port,
+        `/auth/github/callback?code=nope&state=${encodeURIComponent(state!)}`,
+      )
+      expect(denied.status).toBe(403)
+      expect(denied.body).toMatch(/not allowed/i)
+      expect(setCookie(denied)).toBe('')
+    } finally {
+      restoreStranger()
+    }
+
+    const { token, digest } = mintRecoveryToken()
+    await saveRecoveryRecord(app.recoveryFile, {
+      tokenDigest: digest,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    })
+
+    const recovery = await request(app.port, `/auth/recovery?token=${encodeURIComponent(token)}`)
+    expect(recovery.status).toBe(303)
+    expect(recovery.headers.location).toBe('/login')
+    const recoveryCookie = setCookie(recovery).split(';')[0] ?? ''
+
+    // Old owner sessions must be gone after recovery clears authorization.
+    const oldOwnerPage = await request(app.port, '/login')
+    expect(oldOwnerPage.body).toMatch(/access password|Bind/i)
+
+    const restoreOwner = mockGitHubUser({ id: 77, login: 'new-owner' })
+    try {
+      const enroll = await request(app.port, '/auth/github/enroll', {
+        method: 'POST',
+        headers: { cookie: recoveryCookie },
+      })
+      expect(enroll.status).toBe(302)
+      const state = new URL(String(enroll.headers.location)).searchParams.get('state')
+      const callback = await request(
+        app.port,
+        `/auth/github/callback?code=rebind&state=${encodeURIComponent(state!)}`,
+      )
+      expect(callback.status).toBe(303)
+      const cookie = setCookie(callback).split(';')[0] ?? ''
+      const exact = await request(app.port, '/exact', { headers: { cookie } })
+      expect(exact.status).toBe(200)
+
+      const stored = JSON.parse(await readFile(app.authFile, 'utf8')) as {
+        users: Array<{ githubUserId: number }>
+      }
+      expect(stored.users).toEqual([expect.objectContaining({ githubUserId: 77 })])
+    } finally {
+      restoreOwner()
+    }
+  } finally {
+    await app.close()
+  }
+})
+
+test('githubEnabled false keeps the classic password gate', async () => {
+  const web = createMockWebServer()
+  const ctx = createMockContext({ webServer: web.service })
+  const prior = process.env[ENV_NAME]
+  process.env[ENV_NAME] = VERIFIER
+  try {
+    apply(ctx, {
+      passwordHashEnv: ENV_NAME,
+      githubEnabled: false,
+      secureCookie: false,
+      sessionTtlMs: 60_000,
+      maxSessions: 10,
+      sweepIntervalMs: 1000,
+    })
+    web.service.register({
+      kind: 'exact',
+      path: '/exact',
+      handler: (_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/plain' })
+        res.end('exact')
+      },
+    })
+    const port = await web.listen()
+    try {
+      const page = await request(port, '/login')
+      expect(page.body).toMatch(/<form method="post" action="\/login">/)
+      expect(page.body.includes('/auth/github/login')).toBe(false)
+
+      const body = `password=${encodeURIComponent(PASSWORD)}`
+      const login = await request(port, '/login', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'content-length': String(Buffer.byteLength(body)),
+        },
+        body,
+      })
+      expect(login.status).toBe(303)
+      expect(login.headers.location).toBe('/')
+      const cookie = setCookie(login).split(';')[0] ?? ''
+      const exact = await request(port, '/exact', { headers: { cookie } })
+      expect(exact.status).toBe(200)
+
+      const missing = await request(port, '/auth/github/login')
+      // GitHub routes are not registered when the feature is off.
+      expect(missing.status).toBe(404)
+      expect(String(missing.headers.location ?? '')).not.toMatch(/github\.com/)
+    } finally {
+      await ctx.dispose()
+      await web.close()
+    }
+  } finally {
+    if (prior === undefined) delete process.env[ENV_NAME]
+    else process.env[ENV_NAME] = prior
   }
 })
