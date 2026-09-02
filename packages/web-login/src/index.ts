@@ -228,6 +228,24 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   const decoratedRegisterFallback: WebServerService['registerFallback'] = (handler) =>
     originalRegisterFallback(guard(handler))
 
+  // Cordis exposes service members through a function proxy. Reading a member
+  // after assigning it therefore returns a proxy around our wrapper, not the
+  // wrapper by reference. A marker survives that proxy boundary, while strict
+  // identity does not; it lets us still fail closed when a host ignores an
+  // assignment and avoid removing a decorator installed after ours on dispose.
+  const decorationMarker = Symbol('dsh-web-login registry decoration')
+  const mark = <T extends Function>(wrapper: T): T => {
+    Object.defineProperty(wrapper, decorationMarker, { value: wrapper })
+    return wrapper
+  }
+  const isCurrentWrapper = (candidate: unknown, wrapper: Function): boolean =>
+    typeof candidate === 'function' &&
+    (candidate as unknown as Record<symbol, unknown>)[decorationMarker] === wrapper
+
+  mark(decoratedRegister)
+  mark(decoratedRegisterUpgrade)
+  mark(decoratedRegisterFallback)
+
   /**
    * Best-effort restoration, for the failure path below.
    *
@@ -273,7 +291,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     } catch {
       /* reported below, together with the silent case */
     }
-    if (server[member] === wrapper) return
+    if (isCurrentWrapper(server[member], wrapper)) return
     undecorate()
     throw new Error(
       `dsh-web-login: webServer.${member} could not be wrapped — the host does not ` +
@@ -291,11 +309,11 @@ export function apply(ctx: PluginContext, config?: unknown): void {
       // Restore only what is still ours. If another plugin decorated on top of
       // this one, blindly reassigning the originals would silently remove *its*
       // wrapper too — including, potentially, another security boundary.
-      if (server.register === decoratedRegister) server.register = priorRegister
-      if (server.registerUpgrade === decoratedRegisterUpgrade) {
+      if (isCurrentWrapper(server.register, decoratedRegister)) server.register = priorRegister
+      if (isCurrentWrapper(server.registerUpgrade, decoratedRegisterUpgrade)) {
         server.registerUpgrade = priorRegisterUpgrade
       }
-      if (server.registerFallback === decoratedRegisterFallback) {
+      if (isCurrentWrapper(server.registerFallback, decoratedRegisterFallback)) {
         server.registerFallback = priorRegisterFallback
       }
     },

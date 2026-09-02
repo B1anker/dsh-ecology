@@ -71,6 +71,7 @@
     "dev": "rslib build --watch",
     "test": "rslib build && rstest run",
     "test:unit": "rstest run",
+    "test:real-host": "rstest run test/integration/real-host-login-gate.test.ts",
     "test:coverage": "rstest run --coverage",
     "test:watch": "rstest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
