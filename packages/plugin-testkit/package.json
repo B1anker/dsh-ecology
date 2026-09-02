@@ -28,6 +28,14 @@
       "types": "./dist/contract.d.ts",
       "default": "./dist/contract.js"
     },
+    "./contract/core": {
+      "types": "./dist/contract/core.d.ts",
+      "default": "./dist/contract/core.js"
+    },
+    "./real": {
+      "types": "./dist/real.d.ts",
+      "default": "./dist/real.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

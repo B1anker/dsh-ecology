@@ -101,6 +101,40 @@ runToolsPipelineContract('mock tools', () => {
 | `runContextContract` | `provide` visibility and `available()`; `on` disposer; emit order; waterfall requires `next()`; short-circuit; reverse teardown. |
 | `runToolsPipelineContract` | Pre-deny skips body; post runs after deny; execute wrapper around body; thrown body → `isError`; allow via `next()`; unanswered ask denies; register disposer / duplicates. |
 
+## Portable contract cases
+
+`/contract` remains the Rstest convenience entry. Consumers using another
+runner can import runner-independent cases from `/contract/core` and supply a
+fresh driver for every case. The helper always disposes the driver and returns
+a report whose stable case ids are suitable for a CI compatibility artifact.
+
+```ts
+import {
+  verifyContract,
+  webServerContractCases,
+} from '@seaveyon/dsh-plugin-testkit/contract/core'
+import { createMockWebServerDriver } from '@seaveyon/dsh-plugin-testkit'
+
+const report = await verifyContract(webServerContractCases, createMockWebServerDriver)
+if (!report.passed) throw new Error(JSON.stringify(report))
+```
+
+The mock drivers are fast unit-test fixtures. The opt-in `/real` entry builds a
+real Cordis context or `dsh-host-webserver` from packages installed beside the
+test; the normal package entry never imports DSH. That makes the same route and
+context cases usable in a pinned host-version matrix without making DSH a
+runtime dependency of every testkit user.
+
+## Current tool hooks
+
+`createMockToolsPipeline()` is retained for the original cookbook-shaped,
+legacy pipeline. New hook plugins should use `createMockToolHooks()`: it models
+structured outcomes, symbol execution tokens, pre/execute/post phases,
+`accept`/`block` post decisions, cancellation before dispatch, and the final
+`tools/result` observation. It is still deliberately not a replacement for
+`@deepseek-ai/dsh-tools`: schemas, guards, scopes, PTC, presentation, and
+parallel scheduling belong to the real host.
+
 ## Sharing types with the package under test
 
 A plugin should keep its own declaration of the host surfaces: that declaration

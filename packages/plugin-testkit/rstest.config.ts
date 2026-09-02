@@ -30,6 +30,12 @@ export default defineConfig({
       'src/contract-web-server.ts',
       'src/contract-context.ts',
       'src/contract-tools.ts',
+      // Scenario definitions are executed through the public core contract;
+      // their individual branches are assertion prose, not production paths.
+      'src/contract/**/*.ts',
+      // Real-host adapters need optional DSH packages and run in the dedicated
+      // compatibility lane rather than the dependency-free unit suite.
+      'src/real.ts',
     ],
     reporters: ['text', 'html'],
     thresholds: {

@@ -82,7 +82,10 @@ export function createMockToolsPipeline(
     },
   }
 
-  ctx.set('tools', service)
+  // Cordis only lets a fiber replace a service it owns. The mock follows that
+  // rule, so the fixture registry is provided rather than assigned into an
+  // arbitrary service table.
+  ctx.provide('tools', service)
 
   return {
     service,
