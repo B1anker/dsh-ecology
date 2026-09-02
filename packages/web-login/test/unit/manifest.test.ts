@@ -49,3 +49,11 @@ test('the password CLI bin target exists in the built artifact', async () => {
     /^#!\/usr\/bin\/env node/,
   )
 })
+
+test('the recovery CLI bin target exists in the built artifact', async () => {
+  const target = manifest.bin['dsh-web-login-recovery']
+  expect(target).toBe('./dist/create-recovery.js')
+  await expect(readFile(new URL(`../../${target}`, import.meta.url), 'utf8')).resolves.toMatch(
+    /^#!\/usr\/bin\/env node/,
+  )
+})

@@ -15,6 +15,9 @@
  * @module @seaveyon/dsh-web-login/config
  */
 
+import { defaultAuthorizationPath, defaultRecoveryPath } from './authorization.js'
+import type { EnvLike } from './env-file.js'
+
 /** Defaults chosen for the deployment this package exists for: one operator, TLS at a proxy. */
 export const DEFAULTS = Object.freeze({
   passwordHashEnv: 'LOGIN_PASSWORD_HASH',
@@ -46,6 +49,18 @@ export const DEFAULTS = Object.freeze({
   // rather than delayed; see the kdf-gate module.
   kdfConcurrency: 2,
   kdfQueueDepth: 8,
+  // GitHub OAuth is opt-in so 0.2.x deployments keep password-only behaviour.
+  githubEnabled: false,
+  publicUrl: '',
+  githubClientIdEnv: 'GITHUB_OAUTH_CLIENT_ID',
+  githubClientSecretEnv: 'GITHUB_OAUTH_CLIENT_SECRET',
+  githubStateTtlMs: 10 * 60 * 1000,
+  githubMaxPendingStates: 1000,
+  githubRequestTimeoutMs: 10_000,
+  githubMaxConcurrentCallbacks: 4,
+  authorizationFile: '',
+  recoveryFile: '',
+  recoveryTtlMs: 10 * 60 * 1000,
 })
 
 /**
@@ -80,9 +95,17 @@ export type ResolvedConfig = Readonly<{
 export type LoginConfig = Partial<ResolvedConfig>
 
 /** Keys holding a string value. */
-type StringKey = 'passwordHashEnv' | 'clientIpHeader' | 'title'
+type StringKey =
+  | 'passwordHashEnv'
+  | 'clientIpHeader'
+  | 'title'
+  | 'publicUrl'
+  | 'githubClientIdEnv'
+  | 'githubClientSecretEnv'
+  | 'authorizationFile'
+  | 'recoveryFile'
 /** Keys holding a boolean value. */
-type BooleanKey = 'secureCookie' | 'trustProxy'
+type BooleanKey = 'secureCookie' | 'trustProxy' | 'githubEnabled'
 /** Keys holding an integer, each with an inclusive range. */
 type NumericKey =
   | 'sessionTtlMs'
@@ -99,6 +122,11 @@ type NumericKey =
   | 'globalBlockMs'
   | 'ipv4PrefixBits'
   | 'ipv6PrefixBits'
+  | 'githubStateTtlMs'
+  | 'githubMaxPendingStates'
+  | 'githubRequestTimeoutMs'
+  | 'githubMaxConcurrentCallbacks'
+  | 'recoveryTtlMs'
 
 /** Inclusive bounds for the numeric settings. */
 const RANGES: Readonly<Record<NumericKey, readonly [number, number]>> = Object.freeze({
@@ -125,12 +153,68 @@ const RANGES: Readonly<Record<NumericKey, readonly [number, number]>> = Object.f
   // these are the widest buckets that still separate unrelated networks.
   ipv4PrefixBits: [8, 32],
   ipv6PrefixBits: [32, 128],
+  githubStateTtlMs: [60 * 1000, 60 * 60 * 1000],
+  githubMaxPendingStates: [1, 100000],
+  githubRequestTimeoutMs: [1000, 60 * 1000],
+  githubMaxConcurrentCallbacks: [1, 64],
+  recoveryTtlMs: [60 * 1000, 60 * 60 * 1000],
 })
 
-const STRING_KEYS: readonly StringKey[] = ['passwordHashEnv', 'clientIpHeader', 'title']
-const BOOLEAN_KEYS: readonly BooleanKey[] = ['secureCookie', 'trustProxy']
+const STRING_KEYS: readonly StringKey[] = [
+  'passwordHashEnv',
+  'clientIpHeader',
+  'title',
+  'publicUrl',
+  'githubClientIdEnv',
+  'githubClientSecretEnv',
+  'authorizationFile',
+  'recoveryFile',
+]
+const BOOLEAN_KEYS: readonly BooleanKey[] = ['secureCookie', 'trustProxy', 'githubEnabled']
+const ENV_NAME_KEYS = ['passwordHashEnv', 'githubClientIdEnv', 'githubClientSecretEnv'] as const
 
 const MAX_TITLE_LENGTH = 120
+
+/**
+ * Whether a host is a loopback name or address.
+ * @param hostname - URL hostname.
+ * @returns true for localhost and loopback IPs.
+ */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1'
+}
+
+/**
+ * Validate the public canonical origin used for OAuth callbacks.
+ *
+ * @param value - configured publicUrl.
+ * @returns the normalized origin string (no trailing slash).
+ */
+export function resolvePublicUrl(value: string): string {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new TypeError('dsh-web-login: publicUrl must be an absolute URL')
+  }
+  if (url.username !== '' || url.password !== '') {
+    throw new Error('dsh-web-login: publicUrl must not contain credentials')
+  }
+  if (url.search !== '' || url.hash !== '') {
+    throw new Error('dsh-web-login: publicUrl must not contain a query or fragment')
+  }
+  if (url.pathname !== '/' && url.pathname !== '') {
+    throw new Error('dsh-web-login: publicUrl must be an origin (no path)')
+  }
+  if (url.protocol === 'https:') {
+    return url.origin
+  }
+  if (url.protocol === 'http:' && isLoopbackHost(url.hostname)) {
+    return url.origin
+  }
+  throw new Error('dsh-web-login: publicUrl must use https, or http on loopback for local tests')
+}
 
 /**
  * Validate and normalize plugin configuration.
@@ -145,10 +229,11 @@ const MAX_TITLE_LENGTH = 120
  * validation below exists precisely for the case where it is not.
  *
  * @param config - raw configuration from the dsh profile, possibly undefined.
+ * @param env - environment used to resolve default authorization paths.
  * @returns the normalized settings.
  * @throws when a value is of the wrong type, out of range, or unrecognized.
  */
-export function resolveConfig(config: unknown = {}): ResolvedConfig {
+export function resolveConfig(config: unknown = {}, env: EnvLike = process.env): ResolvedConfig {
   if (config === null || typeof config !== 'object') {
     throw new TypeError('dsh-web-login: config must be an object')
   }
@@ -159,21 +244,28 @@ export function resolveConfig(config: unknown = {}): ResolvedConfig {
     throw new Error(`dsh-web-login: unknown config key(s): ${unknown.join(', ')}`)
   }
 
-  // Built as a mutable record because validation rewrites one field
-  // (`clientIpHeader`) in place; it is frozen and narrowed on return.
+  // Built as a mutable record because validation rewrites fields in place; it
+  // is frozen and narrowed on return.
   const out: Record<string, unknown> = { ...DEFAULTS, ...supplied }
 
   for (const key of STRING_KEYS) {
     const value = out[key]
-    if (typeof value !== 'string' || value === '') {
+    if (typeof value !== 'string') {
+      throw new TypeError(`dsh-web-login: ${key} must be a string`)
+    }
+  }
+  for (const key of ['passwordHashEnv', 'clientIpHeader', 'title'] as const) {
+    if ((out[key] as string) === '') {
       throw new TypeError(`dsh-web-login: ${key} must be a non-empty string`)
     }
   }
   // Names are passed to process.env and may later be written by the hash CLI;
   // permit only portable environment identifiers so they cannot smuggle a new
   // assignment into an env file.
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(out.passwordHashEnv as string)) {
-    throw new TypeError('dsh-web-login: passwordHashEnv must be a valid environment variable name')
+  for (const key of ENV_NAME_KEYS) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(out[key] as string)) {
+      throw new TypeError(`dsh-web-login: ${key} must be a valid environment variable name`)
+    }
   }
   // Header names are matched against Node's lowercased header map, so an
   // uppercase configured name would never match anything.
@@ -199,6 +291,28 @@ export function resolveConfig(config: unknown = {}): ResolvedConfig {
     if (value < min || value > max) {
       throw new RangeError(`dsh-web-login: ${key} must be between ${min} and ${max}`)
     }
+  }
+
+  if (out.githubEnabled === true) {
+    const publicUrl = out.publicUrl as string
+    if (publicUrl === '') {
+      throw new Error('dsh-web-login: publicUrl is required when githubEnabled is true')
+    }
+    out.publicUrl = resolvePublicUrl(publicUrl)
+    if ((out.githubClientIdEnv as string) === '' || (out.githubClientSecretEnv as string) === '') {
+      throw new TypeError('dsh-web-login: GitHub client id/secret env names must be non-empty')
+    }
+  } else if ((out.publicUrl as string) !== '') {
+    // Validate even when unused so a typo surfaces before the operator flips
+    // the flag, but allow the empty default.
+    out.publicUrl = resolvePublicUrl(out.publicUrl as string)
+  }
+
+  if ((out.authorizationFile as string) === '') {
+    out.authorizationFile = defaultAuthorizationPath(env)
+  }
+  if ((out.recoveryFile as string) === '') {
+    out.recoveryFile = defaultRecoveryPath(env)
   }
 
   return Object.freeze(out) as ResolvedConfig

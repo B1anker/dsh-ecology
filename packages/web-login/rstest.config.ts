@@ -28,6 +28,7 @@ export default defineConfig({
       // `test/unit/hash-password-cli.test.ts`, which the provider cannot see
       // into, so counting it here would report a hole the suite does fill.
       'src/hash-password.ts',
+      'src/create-recovery.ts',
       // Declarations only. It emits no JavaScript, so it is permanently 0% and
       // would drag every total down by a constant that means nothing.
       'src/types.ts',

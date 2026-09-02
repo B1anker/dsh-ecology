@@ -14,5 +14,5 @@
   // only governs the entry's own pass, so without this the library entry's tsc
   // run would emit `hash-password.d.ts` anyway — declarations for an executable
   // nothing imports.
-  "exclude": ["src/hash-password.ts"]
+  "exclude": ["src/hash-password.ts", "src/create-recovery.ts"]
 }

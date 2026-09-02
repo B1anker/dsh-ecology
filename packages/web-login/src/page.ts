@@ -41,30 +41,25 @@ export function escapeHtml(value: unknown): string {
     .replaceAll("'", '&#39;')
 }
 
+/** Which sign-in affordance the page should present. */
+export type LoginPageMode = 'password' | 'github' | 'enroll' | 'maintenance'
+
 /** What the page needs in order to render. */
 export interface LoginPageOptions {
   /** Shown in the document title and as the heading. */
   title: string
   /** Optional alert above the form; empty means no banner is rendered. */
   message?: string
+  /** Which primary action to show. Defaults to the password form. */
+  mode?: LoginPageMode
 }
+
 /**
- * Render the sign-in page.
- * @param options - the page title, and an optional message shown above the form.
- * @returns a complete HTML document.
+ * Shared stylesheet for every login-page mode.
+ * @returns the CSS embedded in the document head.
  */
-export function renderLoginPage({ title, message = '' }: LoginPageOptions): string {
-  const safeTitle = escapeHtml(title)
-  const banner =
-    message === '' ? '' : `    <p class="error" role="alert">${escapeHtml(message)}</p>\n`
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>Sign in · ${safeTitle}</title>
-<style>
+function styles(): string {
+  return `
   :root {
     color-scheme: light dark;
     --bg: #f6f7f9;
@@ -131,9 +126,6 @@ export function renderLoginPage({ title, message = '' }: LoginPageOptions): stri
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-
-  /* Aurora wash. Three wide radial gradients on a fixed layer, so the card has
-     something to float over without loading an image. */
   body::before {
     content: "";
     position: fixed;
@@ -146,7 +138,6 @@ export function renderLoginPage({ title, message = '' }: LoginPageOptions): stri
       radial-gradient(46% 42% at 62% 92%, var(--glow-c), transparent 70%);
     filter: blur(8px);
   }
-
   .card {
     position: relative;
     width: 100%;
@@ -160,7 +151,6 @@ export function renderLoginPage({ title, message = '' }: LoginPageOptions): stri
     -webkit-backdrop-filter: blur(14px) saturate(150%);
     animation: rise .5s cubic-bezier(.22, 1, .36, 1) both;
   }
-  /* Top hairline: the specular edge that reads as glass rather than as a box. */
   .card::before {
     content: "";
     position: absolute;
@@ -173,7 +163,6 @@ export function renderLoginPage({ title, message = '' }: LoginPageOptions): stri
     from { opacity: 0; transform: translateY(10px) scale(.985); }
     to   { opacity: 1; transform: none; }
   }
-
   .badge {
     display: grid;
     place-items: center;
@@ -186,7 +175,6 @@ export function renderLoginPage({ title, message = '' }: LoginPageOptions): stri
     color: var(--accent);
   }
   .badge svg { display: block; width: 22px; height: 22px; }
-
   h1 {
     margin: 0 0 7px;
     font-size: 21px;
@@ -198,7 +186,6 @@ export function renderLoginPage({ title, message = '' }: LoginPageOptions): stri
     color: var(--fg-muted);
     font-size: 13.5px;
   }
-
   label {
     display: block;
     margin-bottom: 8px;
@@ -224,8 +211,8 @@ export function renderLoginPage({ title, message = '' }: LoginPageOptions): stri
     border-color: var(--accent);
     box-shadow: 0 0 0 4px var(--ring);
   }
-
-  button {
+  button, .btn {
+    display: block;
     width: 100%;
     margin-top: 20px;
     padding: 11px 16px;
@@ -236,14 +223,15 @@ export function renderLoginPage({ title, message = '' }: LoginPageOptions): stri
     font: inherit;
     font-weight: 580;
     letter-spacing: -0.003em;
+    text-align: center;
+    text-decoration: none;
     cursor: pointer;
     box-shadow: 0 1px 2px rgba(16, 24, 40, 0.10), 0 8px 18px -10px var(--accent);
     transition: background-color .16s ease, transform .08s ease, box-shadow .16s ease;
   }
-  button:hover { background: var(--accent-hover); transform: translateY(-1px); }
-  button:active { transform: translateY(0.5px); box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12); }
-  button:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--ring); }
-
+  button:hover, .btn:hover { background: var(--accent-hover); transform: translateY(-1px); }
+  button:active, .btn:active { transform: translateY(0.5px); box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12); }
+  button:focus-visible, .btn:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--ring); }
   .error {
     display: flex;
     gap: 9px;
@@ -262,7 +250,6 @@ export function renderLoginPage({ title, message = '' }: LoginPageOptions): stri
     30%, 70% { transform: translateX(2px); }
     50%      { transform: translateX(-2px); }
   }
-
   .foot {
     margin: 26px 0 0;
     padding-top: 18px;
@@ -272,16 +259,81 @@ export function renderLoginPage({ title, message = '' }: LoginPageOptions): stri
     line-height: 1.5;
     text-align: center;
   }
-
   @media (max-width: 420px) {
     .card { padding: 30px 22px 24px; border-radius: 16px; }
     h1 { font-size: 19px; }
   }
-  /* Honour a reduced-motion preference: keep the states, drop the movement. */
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
-    button:hover, button:active { transform: none; }
+    button:hover, button:active, .btn:hover, .btn:active { transform: none; }
   }
+`
+}
+
+/**
+ * Render the primary action for the requested mode.
+ * @param mode - page mode.
+ * @returns HTML for the form or link.
+ */
+function renderAction(mode: LoginPageMode): { subtitle: string; action: string; foot: string } {
+  switch (mode) {
+    case 'github':
+      return {
+        subtitle: 'Sign in with a registered GitHub account to continue.',
+        action: `    <a class="btn" href="/auth/github/login">Continue with GitHub</a>\n`,
+        foot: 'Only GitHub accounts authorized on this host can enter.',
+      }
+    case 'enroll':
+      return {
+        subtitle: 'Bind your GitHub account as the owner of this host.',
+        action: `    <form method="post" action="/auth/github/enroll">
+      <button type="submit">Bind GitHub account</button>
+    </form>\n`,
+        foot: 'After binding, password sign-in is disabled for normal remote access.',
+      }
+    case 'maintenance':
+      return {
+        subtitle: 'This login gate is temporarily unavailable.',
+        action: '',
+        foot: 'Use the host-local recovery command if you administer this instance.',
+      }
+    case 'password':
+    default:
+      return {
+        subtitle: 'Enter the access password to continue.',
+        action: `    <form method="post" action="/login">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password"
+             placeholder="Access password" required autofocus spellcheck="false">
+      <button type="submit">Sign in</button>
+    </form>\n`,
+        foot: 'Sessions are held in memory and end when the server restarts.',
+      }
+  }
+}
+
+/**
+ * Render the sign-in page.
+ * @param options - the page title, optional message, and display mode.
+ * @returns a complete HTML document.
+ */
+export function renderLoginPage({
+  title,
+  message = '',
+  mode = 'password',
+}: LoginPageOptions): string {
+  const safeTitle = escapeHtml(title)
+  const banner =
+    message === '' ? '' : `    <p class="error" role="alert">${escapeHtml(message)}</p>\n`
+  const { subtitle, action, foot } = renderAction(mode)
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Sign in · ${safeTitle}</title>
+<style>${styles()}
 </style>
 </head>
 <body>
@@ -295,14 +347,8 @@ export function renderLoginPage({ title, message = '' }: LoginPageOptions): stri
       </svg>
     </div>
     <h1>${safeTitle}</h1>
-    <p class="sub">Enter the access password to continue.</p>
-${banner}    <form method="post" action="/login">
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password"
-             placeholder="Access password" required autofocus spellcheck="false">
-      <button type="submit">Sign in</button>
-    </form>
-    <p class="foot">Sessions are held in memory and end when the server restarts.</p>
+    <p class="sub">${escapeHtml(subtitle)}</p>
+${banner}${action}    <p class="foot">${escapeHtml(foot)}</p>
   </main>
 </body>
 </html>

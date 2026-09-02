@@ -45,6 +45,25 @@ test('the form posts the password back to /login', () => {
   expect(html).toMatch(/autocomplete="current-password"/)
 })
 
+test('github mode links to the OAuth start path without scripts', () => {
+  const html = renderLoginPage({ title: 'DSH Web', mode: 'github' })
+  expect(html).toMatch(/href="\/auth\/github\/login"/)
+  expect(html).toMatch(/Continue with GitHub/)
+  expect(/<script/i.test(html)).toBe(false)
+})
+
+test('enroll mode posts to the bind endpoint', () => {
+  const html = renderLoginPage({ title: 'DSH Web', mode: 'enroll' })
+  expect(html).toMatch(/<form method="post" action="\/auth\/github\/enroll">/)
+  expect(html).toMatch(/Bind GitHub account/)
+})
+
+test('maintenance mode has no interactive form', () => {
+  const html = renderLoginPage({ title: 'DSH Web', mode: 'maintenance' })
+  expect(html.includes('<form')).toBe(false)
+  expect(html).toMatch(/temporarily unavailable/)
+})
+
 test('the title is interpolated into both the head and the heading', () => {
   const html = renderLoginPage({ title: 'My Shell' })
   expect(html).toMatch(/<title>Sign in · My Shell<\/title>/)

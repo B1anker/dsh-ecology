@@ -12,14 +12,14 @@ import { defineConfig } from '@rslib/core'
  * bundle — and because `dist/hash-password.js` needs to import the same
  * `verifier.js` the plugin uses rather than carry a second copy of the KDF.
  *
- * The CLI is its own entry only so the shebang can be attached to it alone.
- * `banner.js` applies to every file an entry emits, so a single combined entry
- * would prepend `#!/usr/bin/env node` to all twelve modules.
+ * The CLIs are their own entry only so the shebang can be attached to them
+ * alone. `banner.js` applies to every file an entry emits, so a single combined
+ * entry would prepend `#!/usr/bin/env node` to all library modules.
  */
 export default defineConfig({
   lib: [
     {
-      // The library surface: every module except the CLI, which the second
+      // The library surface: every module except the CLIs, which the second
       // entry claims. Type declarations are generated here, so the published
       // `exports.types` resolves for consumers.
       format: 'esm',
@@ -28,7 +28,11 @@ export default defineConfig({
       syntax: 'es2022',
       source: {
         entry: {
-          index: ['./src/**/*.ts', '!./src/hash-password.ts'],
+          index: [
+            './src/**/*.ts',
+            '!./src/hash-password.ts',
+            '!./src/create-recovery.ts',
+          ],
         },
         // Declarations follow this tsconfig, not the default one. The default
         // includes the tests so `typecheck` covers them, which widens tsc's
@@ -39,7 +43,7 @@ export default defineConfig({
       },
     },
     {
-      // The `bin` target. No declarations: nothing imports a CLI, and a
+      // The `bin` targets. No declarations: nothing imports a CLI, and a
       // `hash-password.d.ts` would only invite someone to try.
       format: 'esm',
       bundle: false,
@@ -48,7 +52,7 @@ export default defineConfig({
       banner: { js: '#!/usr/bin/env node' },
       source: {
         entry: {
-          index: ['./src/hash-password.ts'],
+          index: ['./src/hash-password.ts', './src/create-recovery.ts'],
         },
       },
     },

@@ -1,5 +1,6 @@
 import { expect, test } from '@rstest/core'
-import { DEFAULTS, type LoginConfig, resolveConfig } from '../../src/config.js'
+import { defaultAuthorizationPath, defaultRecoveryPath } from '../../src/authorization.js'
+import { DEFAULTS, type LoginConfig, resolveConfig, resolvePublicUrl } from '../../src/config.js'
 
 /**
  * Feed `resolveConfig` a value it is documented to reject.
@@ -16,9 +17,18 @@ function bad(config: unknown): () => unknown {
   return () => resolveConfig(config as LoginConfig)
 }
 
+/** Defaults after path resolution, which depends on DSH_HOME. */
+function resolvedDefaults(env: NodeJS.ProcessEnv = process.env) {
+  return {
+    ...DEFAULTS,
+    authorizationFile: defaultAuthorizationPath(env),
+    recoveryFile: defaultRecoveryPath(env),
+  }
+}
+
 test('an absent config yields the documented defaults', () => {
-  expect({ ...resolveConfig() }).toEqual({ ...DEFAULTS })
-  expect({ ...resolveConfig({}) }).toEqual({ ...DEFAULTS })
+  expect({ ...resolveConfig() }).toEqual(resolvedDefaults())
+  expect({ ...resolveConfig({}) }).toEqual(resolvedDefaults())
 })
 
 test('the resolved config is frozen', () => {
@@ -70,7 +80,7 @@ test('an over-long title is rejected', () => {
 })
 
 test('boolean settings reject truthy non-booleans', () => {
-  for (const key of ['secureCookie', 'trustProxy'] as const) {
+  for (const key of ['secureCookie', 'trustProxy', 'githubEnabled'] as const) {
     expect(bad({ [key]: 'true' }), `${key} string`).toThrow(TypeError)
     expect(bad({ [key]: 1 }), `${key} number`).toThrow(TypeError)
   }
@@ -94,6 +104,11 @@ test('numeric settings are range-checked at both ends', () => {
     ['blockMs', 999, 24 * 60 * 60 * 1000 + 1],
     ['maxAttemptClients', 0, 1_000_001],
     ['sweepIntervalMs', 999, 60 * 60 * 1000 + 1],
+    ['githubStateTtlMs', 59_999, 60 * 60 * 1000 + 1],
+    ['githubMaxPendingStates', 0, 100_001],
+    ['githubRequestTimeoutMs', 999, 60_001],
+    ['githubMaxConcurrentCallbacks', 0, 65],
+    ['recoveryTtlMs', 59_999, 60 * 60 * 1000 + 1],
   ]
   for (const [key, tooLow, tooHigh] of cases) {
     expect(bad({ [key]: tooLow }), `${key} low`).toThrow(RangeError)
@@ -125,4 +140,26 @@ test('passwordHashEnv must be a portable environment variable name', () => {
       /valid environment variable name/,
     )
   }
+})
+
+test('githubEnabled requires a valid publicUrl and keeps secrets in env names', () => {
+  expect(bad({ githubEnabled: true })).toThrow(/publicUrl is required/)
+  expect(bad({ githubEnabled: true, publicUrl: 'http://example.com' })).toThrow(/https/)
+  const options = resolveConfig({
+    githubEnabled: true,
+    publicUrl: 'https://dsh.example.com/',
+  })
+  expect(options.publicUrl).toBe('https://dsh.example.com')
+  expect(options.githubClientIdEnv).toBe('GITHUB_OAUTH_CLIENT_ID')
+  expect(options.githubClientSecretEnv).toBe('GITHUB_OAUTH_CLIENT_SECRET')
+})
+
+test('resolvePublicUrl accepts https and loopback http only', () => {
+  expect(resolvePublicUrl('https://dsh.example.com')).toBe('https://dsh.example.com')
+  expect(resolvePublicUrl('http://127.0.0.1:8080')).toBe('http://127.0.0.1:8080')
+  expect(resolvePublicUrl('http://localhost:3000')).toBe('http://localhost:3000')
+  expect(() => resolvePublicUrl('http://example.com')).toThrow(/https/)
+  expect(() => resolvePublicUrl('https://user:pass@example.com')).toThrow(/credentials/)
+  expect(() => resolvePublicUrl('https://example.com/path')).toThrow(/origin/)
+  expect(() => resolvePublicUrl('https://example.com?x=1')).toThrow(/query/)
 })

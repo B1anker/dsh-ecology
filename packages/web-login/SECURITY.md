@@ -71,6 +71,14 @@ control or TLS.
   must inject that service; the package's installable bundle layer is
   [`cordis.patch.yml`](cordis.patch.yml).
   A route registered before decoration is outside the gate.
+- Optional GitHub OAuth (`githubEnabled`) is an outer human-identity layer.
+  OAuth Client Secret, authorization codes, access tokens, and PKCE verifiers
+  never enter config, cookies, disk sessions, or logs. Access tokens are revoked
+  before a local session is created; revocation failure fails closed. Authorized
+  identities live in `${DSH_HOME}/auth/dsh-web-login/github-users.json` at mode
+  `0600` and contain no tokens. Arbitrary valid GitHub accounts never gain access
+  without a matching local record. This does not replace TLS, proxy policy, or
+  DSH BrowserAuth.
 
 This repository is independent software and is not affiliated with or endorsed
 by DeepSeek AI.

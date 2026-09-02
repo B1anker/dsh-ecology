@@ -1,9 +1,13 @@
 /**
- * In-memory session store.
+ * In-memory session store with optional identity principals.
  *
- * Sessions are opaque random ids mapped to an expiry. Nothing is persisted, so
- * a restart signs everyone out — the deliberate trade for a single-operator
- * deployment: no key material and no session database on disk.
+ * Sessions are opaque random ids mapped to an expiry and a principal. Nothing
+ * is persisted, so a restart signs everyone out — the deliberate trade for a
+ * single-operator deployment: no key material and no session database on disk.
+ *
+ * When GitHub OAuth is enabled, each session carries a principal so revocation
+ * can target a GitHub user and authorization-version checks can reject stale
+ * cookies after an authz file change.
  *
  * @module @seaveyon/dsh-web-login/sessions
  */
@@ -16,6 +20,21 @@ const ID_BYTES = 32
 /** A clock, injectable so tests can advance time without waiting for it. */
 export type Clock = () => number
 
+/** Who a live session represents. */
+export interface SessionPrincipal {
+  provider: 'password' | 'password-bootstrap' | 'github' | 'recovery'
+  githubUserId?: number
+  githubLogin?: string
+  role: 'owner' | 'member'
+  authzVersion: number
+}
+
+/** A live session as the store holds it. */
+export interface SessionRecord {
+  expiresAt: number
+  principal: SessionPrincipal
+}
+
 /** Construction options for {@link createSessionStore}. */
 export interface SessionStoreOptions {
   ttlMs: number
@@ -26,11 +45,17 @@ export interface SessionStoreOptions {
 /** The operations a session store exposes. */
 export interface SessionStore {
   /** Mint a session, or return null when the store is full. */
-  open: () => string | null
+  open: (principal: SessionPrincipal) => string | null
+  /** Return a still-valid session record, or undefined. */
+  get: (id: unknown) => SessionRecord | undefined
   /** Whether an id names a live session. */
   isLive: (id: unknown) => boolean
   /** Revoke a session; a missing id is a no-op. */
   revoke: (id: unknown) => void
+  /** Revoke every session for a GitHub user id. */
+  revokePrincipal: (githubUserId: number) => number
+  /** Revoke every session. */
+  revokeAll: () => void
   /** Drop expired sessions. */
   sweep: () => void
   /** The number of sessions currently held, expired ones included. */
@@ -48,15 +73,31 @@ export function createSessionStore({
   maxSessions,
   now = Date.now,
 }: SessionStoreOptions): SessionStore {
-  /** Session id -> expiry in ms. */
-  const sessions = new Map<string, number>()
+  /** Session id -> record. */
+  const sessions = new Map<string, SessionRecord>()
 
   /** Drop expired ids so a long-lived process does not accumulate them. */
   const sweep = (): void => {
     const cutoff = now()
-    for (const [id, expiry] of sessions) {
-      if (expiry <= cutoff) sessions.delete(id)
+    for (const [id, record] of sessions) {
+      if (record.expiresAt <= cutoff) sessions.delete(id)
     }
+  }
+
+  /**
+   * Look up a live session, dropping it when expired.
+   * @param id - candidate session id.
+   * @returns the live record, or undefined.
+   */
+  const get = (id: unknown): SessionRecord | undefined => {
+    if (typeof id !== 'string' || id === '') return undefined
+    const record = sessions.get(id)
+    if (record === undefined) return undefined
+    if (record.expiresAt <= now()) {
+      sessions.delete(id)
+      return undefined
+    }
+    return record
   }
 
   return {
@@ -68,15 +109,21 @@ export function createSessionStore({
      * unauthenticated flood would turn a resource limit into a denial of
      * service against the legitimate user.
      *
+     * @param principal - identity attached to the session.
      * @returns the new session id, or null when the store is full.
      */
-    open() {
+    open(principal) {
       sweep()
       if (sessions.size >= maxSessions) return null
       const id = randomBytes(ID_BYTES).toString('base64url')
-      sessions.set(id, now() + ttlMs)
+      sessions.set(id, {
+        expiresAt: now() + ttlMs,
+        principal: Object.freeze({ ...principal }),
+      })
       return id
     },
+
+    get,
 
     /**
      * Whether an id names a live session; expired ids are dropped on lookup.
@@ -89,14 +136,7 @@ export function createSessionStore({
      * @returns true when the session is live.
      */
     isLive(id) {
-      if (typeof id !== 'string' || id === '') return false
-      const expiry = sessions.get(id)
-      if (expiry === undefined) return false
-      if (expiry <= now()) {
-        sessions.delete(id)
-        return false
-      }
-      return true
+      return get(id) !== undefined
     },
 
     /**
@@ -105,6 +145,27 @@ export function createSessionStore({
      */
     revoke(id) {
       if (typeof id === 'string') sessions.delete(id)
+    },
+
+    /**
+     * Revoke every session belonging to a GitHub user.
+     * @param githubUserId - numeric GitHub id.
+     * @returns how many sessions were removed.
+     */
+    revokePrincipal(githubUserId) {
+      let removed = 0
+      for (const [id, record] of sessions) {
+        if (record.principal.githubUserId === githubUserId) {
+          sessions.delete(id)
+          removed += 1
+        }
+      }
+      return removed
+    },
+
+    /** Drop every session. Used when the authorization file is replaced. */
+    revokeAll() {
+      sessions.clear()
     },
 
     /** Drop expired sessions. Exposed for the periodic sweep and for tests. */
@@ -116,3 +177,10 @@ export function createSessionStore({
     },
   }
 }
+
+/** Principal used by the classic shared-password mode. */
+export const PASSWORD_PRINCIPAL: SessionPrincipal = Object.freeze({
+  provider: 'password',
+  role: 'owner',
+  authzVersion: 0,
+})

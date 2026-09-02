@@ -19,6 +19,8 @@
  *     loaded later is covered without this plugin knowing its path.
  *   - `GET /login` serves the page, `POST /login` checks the password and mints
  *     a session, `POST /logout` revokes it.
+ *   - Optional GitHub OAuth (`githubEnabled`) binds a stable numeric GitHub id
+ *     as the authorized owner, then admits only that identity on later visits.
  *   - Sessions are opaque random ids behind an HttpOnly, SameSite=Strict
  *     cookie, held in memory. A restart signs everyone out, which is the right
  *     trade for a single-operator deployment: no key material on disk.
@@ -34,12 +36,25 @@
  * The password is never stored here or in config. It is read from an
  * environment variable as an scrypt verifier produced by
  * the installed `dsh-web-login-hash` bin, and compared in constant time.
+ * GitHub client secrets likewise come only from the environment.
  *
  * @module @seaveyon/dsh-web-login
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createAttemptLimiter } from './attempt-limiter.js'
+import {
+  type AuthLifecycle,
+  type AuthorizationDocument,
+  clearRecoveryRecord,
+  createOwnerDocument,
+  digestToken,
+  findActiveUser,
+  loadAuthStartupState,
+  loadRecoveryRecord,
+  saveAuthorizationDocument,
+  touchLastLogin,
+} from './authorization.js'
 import { resolveConfig } from './config.js'
 import {
   readCookie,
@@ -47,6 +62,15 @@ import {
   serializeSessionCookie,
   sessionCookieName,
 } from './cookies.js'
+import {
+  buildAuthorizeUrl,
+  createConcurrencyGate,
+  exchangeCode,
+  fetchGitHubUser,
+  type GitHubAppCredentials,
+  GitHubRequestError,
+  revokeAccessToken,
+} from './github.js'
 import {
   clientKey,
   isDocumentNavigation,
@@ -57,8 +81,9 @@ import {
   sendRedirect,
 } from './http.js'
 import { createKdfGate } from './kdf-gate.js'
-import { renderLoginPage } from './page.js'
-import { createSessionStore } from './sessions.js'
+import { createOAuthStateStore } from './oauth-state.js'
+import { type LoginPageMode, renderLoginPage } from './page.js'
+import { createSessionStore, PASSWORD_PRINCIPAL, type SessionPrincipal } from './sessions.js'
 import type { PluginContext, RouteHandler, WebServerService } from './types.js'
 import { requireVerifier, verifyPassword } from './verifier.js'
 
@@ -82,9 +107,34 @@ export const READY_SERVICE = 'dshWebLoginReady'
 /** Paths the gate owns, which must stay reachable while signed out. */
 const LOGIN_PATH = '/login'
 const LOGOUT_PATH = '/logout'
+const GITHUB_LOGIN_PATH = '/auth/github/login'
+const GITHUB_CALLBACK_PATH = '/auth/github/callback'
+const GITHUB_ENROLL_PATH = '/auth/github/enroll'
+const GITHUB_INVITATION_PATH = '/auth/github/invitation'
+const RECOVERY_PATH = '/auth/recovery'
+
+/** Exact anonymous paths the gate may leave unguarded. */
+const ANON_EXACT_PATHS = new Set([
+  LOGIN_PATH,
+  LOGOUT_PATH,
+  GITHUB_LOGIN_PATH,
+  GITHUB_CALLBACK_PATH,
+  GITHUB_INVITATION_PATH,
+  RECOVERY_PATH,
+])
 
 /** Where a successful sign-in lands. Fixed, so there is no redirect parameter to poison. */
 const HOME_PATH = '/'
+
+/** User-visible OAuth messages. Stable wording from the security spec. */
+const MSG = Object.freeze({
+  cancelled: 'GitHub sign-in was cancelled.',
+  expired: 'This sign-in request expired. Please try again.',
+  notAllowed: 'This GitHub account is not allowed.',
+  unavailable: 'GitHub sign-in is temporarily unavailable.',
+  maintenance: 'Sign-in is temporarily unavailable. Contact the host administrator.',
+  enrollNeeded: 'Sign in with the access password, then bind your GitHub account.',
+})
 
 /**
  * Mount the login gate.
@@ -98,6 +148,23 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   // login plugin must never produce.
   const options = resolveConfig(config)
   const verifier = requireVerifier(process.env[options.passwordHashEnv], options.passwordHashEnv)
+
+  let githubCredentials: GitHubAppCredentials | undefined
+  if (options.githubEnabled) {
+    const clientId = process.env[options.githubClientIdEnv]
+    const clientSecret = process.env[options.githubClientSecretEnv]
+    if (typeof clientId !== 'string' || clientId === '') {
+      throw new Error(
+        `dsh-web-login: ${options.githubClientIdEnv} must be set when githubEnabled is true`,
+      )
+    }
+    if (typeof clientSecret !== 'string' || clientSecret === '') {
+      throw new Error(
+        `dsh-web-login: ${options.githubClientSecretEnv} must be set when githubEnabled is true`,
+      )
+    }
+    githubCredentials = { clientId, clientSecret }
+  }
 
   const server = ctx.get<WebServerService>('webServer')
   if (server === undefined) throw new Error('dsh-web-login: webServer service missing')
@@ -114,43 +181,108 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     globalLimit: options.globalAttemptLimit,
     globalBlockMs: options.globalBlockMs,
   })
-  // The per-client limiter cannot bound total KDF work, because a distributed
-  // caller has as many client identities as it has addresses. This bounds it
-  // process-wide instead, and is the backstop that makes the limiter's own
-  // capacity behaviour survivable.
   const kdf = createKdfGate({
     concurrency: options.kdfConcurrency,
     queueDepth: options.kdfQueueDepth,
   })
+  const oauthStates = createOAuthStateStore({
+    ttlMs: options.githubStateTtlMs,
+    maxPending: options.githubMaxPendingStates,
+  })
+  const callbackGate = createConcurrencyGate(options.githubMaxConcurrentCallbacks)
 
-  // Resolved once: the name depends on whether the deployment sets `Secure`,
-  // and a gate that read one name while writing another would authenticate
-  // nobody in a way that looks like a session bug rather than a naming one.
   const cookieName = sessionCookieName(options.secureCookie)
+  const redirectUri = options.githubEnabled ? `${options.publicUrl}${GITHUB_CALLBACK_PATH}` : ''
+
+  /** Mutable authorization snapshot; rewritten after enroll / login touch. */
+  let authDocument: AuthorizationDocument | null = null
+  let lifecycle: AuthLifecycle = 'active'
+  let authLoadError: string | undefined
+
+  if (options.githubEnabled) {
+    const startup = loadAuthStartupState(options.authorizationFile, options.recoveryFile)
+    authDocument = startup.document
+    lifecycle = startup.lifecycle
+    authLoadError = startup.error
+  }
 
   /**
-   * Whether a request carries a live session cookie.
-   * @param req - the incoming request.
-   * @returns true when the cookie names an unexpired session.
+   * Current page mode for unauthenticated visitors.
    */
-  const isAuthenticated = (req: IncomingMessage): boolean =>
-    sessions.isLive(readCookie(req.headers.cookie, cookieName))
+  const pageModeForAnonymous = (): LoginPageMode => {
+    if (!options.githubEnabled) return 'password'
+    if (lifecycle === 'invalid') return 'maintenance'
+    if (lifecycle === 'bootstrap') return 'password'
+    return 'github'
+  }
+
+  /**
+   * Whether a request carries a live, still-authorized session cookie.
+   */
+  const readPrincipal = (req: IncomingMessage): SessionPrincipal | undefined => {
+    const record = sessions.get(readCookie(req.headers.cookie, cookieName))
+    if (record === undefined) return undefined
+    if (!options.githubEnabled) return record.principal
+    const principal = record.principal
+    if (principal.provider === 'password-bootstrap' || principal.provider === 'recovery') {
+      // Bootstrap/recovery sessions are only useful before an owner exists, or
+      // during an open recovery window. They never unlock the full surface alone
+      // once GitHub is the daily path — but they *do* unlock enroll.
+      if (lifecycle === 'invalid') return undefined
+      return principal
+    }
+    if (principal.provider !== 'github' || principal.githubUserId === undefined) return undefined
+    if (authDocument === null) return undefined
+    if (principal.authzVersion !== authDocument.authzVersion) return undefined
+    const user = findActiveUser(authDocument, principal.githubUserId)
+    if (user === undefined) return undefined
+    return principal
+  }
+
+  const isAuthenticated = (req: IncomingMessage): boolean => {
+    const principal = readPrincipal(req)
+    if (principal === undefined) return false
+    // Bootstrap/recovery principals may reach enroll and the login page, but
+    // must not unlock the rest of DSH until a GitHub owner session exists.
+    if (
+      options.githubEnabled &&
+      (principal.provider === 'password-bootstrap' || principal.provider === 'recovery')
+    ) {
+      return false
+    }
+    return true
+  }
+
+  const isBootstrapSession = (req: IncomingMessage): boolean => {
+    const principal = readPrincipal(req)
+    return (
+      principal !== undefined &&
+      (principal.provider === 'password-bootstrap' || principal.provider === 'recovery')
+    )
+  }
+
+  /**
+   * Issue a session cookie and redirect home.
+   */
+  const admit = (
+    res: ServerResponse,
+    principal: SessionPrincipal,
+    priorSessionId?: string,
+  ): boolean => {
+    const id = sessions.open(principal)
+    if (id === null) return false
+    if (priorSessionId !== undefined) sessions.revoke(priorSessionId)
+    sendRedirect(res, 303, HOME_PATH, {
+      'set-cookie': serializeSessionCookie(id, {
+        maxAgeSeconds: options.sessionTtlMs / 1000,
+        secure: options.secureCookie,
+      }),
+    })
+    return true
+  }
 
   // ── the gate ───────────────────────────────────────────────────────────────
 
-  /**
-   * Wrap a route handler so unauthenticated requests never reach it.
-   *
-   * Only a browser document navigation is redirected to the login page. An
-   * `/api` fetch that received a 302 would follow it and get HTML where it
-   * expected JSON, surfacing to the user as a parse error rather than a prompt
-   * to sign in — so every non-navigation gets a 401 instead, even when it
-   * happens to advertise `Accept: text/html`.
-   *
-   * @param handler - the route's own handler.
-   * @param options - whether an HTML navigation may be redirected.
-   * @returns the guarded handler.
-   */
   const guard = (
     handler: RouteHandler,
     { redirectNavigation = true }: { redirectNavigation?: boolean } = {},
@@ -168,16 +300,6 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     }
   }
 
-  // Decorate the registries rather than claiming paths: routes registered by
-  // plugins loaded after this one are wrapped as they arrive, so coverage does
-  // not depend on this plugin knowing the route table. `/api` in particular is
-  // a prefix route owned by another plugin, and no second plugin may claim the
-  // same (kind, path) pair or the fallback seat.
-  // Two references to each member, for two different jobs. The bound copies are
-  // what the wrappers call through, so the host keeps its own `this`. The raw
-  // property values are what disposal puts back, so a registry restored by this
-  // plugin is identical to the one it found rather than a bound clone of it —
-  // which matters to whatever else may be comparing these by identity.
   const priorRegister = server.register
   const priorRegisterUpgrade = server.registerUpgrade
   const priorRegisterFallback = server.registerFallback
@@ -187,17 +309,14 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   const originalRegisterFallback = priorRegisterFallback.bind(server)
 
   const decoratedRegister: WebServerService['register'] = (route) => {
-    // The gate's own routes must not be guarded, or signing in would require
-    // already being signed in.
-    if (route.kind === 'exact' && (route.path === LOGIN_PATH || route.path === LOGOUT_PATH)) {
+    if (route.kind === 'exact' && ANON_EXACT_PATHS.has(route.path)) {
       return originalRegister(route)
     }
-    // Prefix routes are services and static assets (`/api`, `/plugins`, and
-    // similar), not document destinations. Older clients may send only an
-    // `Accept: text/html` header, which is otherwise our navigation fallback;
-    // redirecting one of these routes would hand the caller HTML where it
-    // expected its own representation. Exact routes and the SPA fallback can
-    // still use that fallback for old-browser document navigation.
+    // Enroll requires a bootstrap session, not a full gate pass — register it
+    // unguarded and enforce bootstrap inside the handler.
+    if (route.kind === 'exact' && route.path === GITHUB_ENROLL_PATH) {
+      return originalRegister(route)
+    }
     return originalRegister({
       ...route,
       handler: guard(route.handler, { redirectNavigation: route.kind !== 'prefix' }),
@@ -209,9 +328,6 @@ export function apply(ctx: PluginContext, config?: unknown): void {
       ...route,
       handler: (req, socket, head) => {
         if (!isAuthenticated(req)) {
-          // A rejected upgrade has no ServerResponse, so the status line goes onto
-          // the raw socket by hand; dropping the connection instead would leave
-          // the client reconnecting forever with no idea why.
           socket.write(
             'HTTP/1.1 401 Unauthorized\r\n' +
               'Connection: close\r\n' +
@@ -228,14 +344,24 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   const decoratedRegisterFallback: WebServerService['registerFallback'] = (handler) =>
     originalRegisterFallback(guard(handler))
 
-  /**
-   * Best-effort restoration, for the failure path below.
-   *
-   * Errors are swallowed because this runs while a more informative one is
-   * already on its way to the caller: whatever refused the wrapper will refuse
-   * the original just as readily, and replacing a diagnosis with "cannot assign
-   * to read only property" would be a strictly worse outcome.
-   */
+  // Cordis exposes service members through a function proxy. Reading a member
+  // after assigning it therefore returns a proxy around our wrapper, not the
+  // wrapper by reference. A marker survives that proxy boundary, while strict
+  // identity does not; it lets us still fail closed when a host ignores an
+  // assignment and avoid removing a decorator installed after ours on dispose.
+  const decorationMarker = Symbol('dsh-web-login registry decoration')
+  const mark = <T extends Function>(wrapper: T): T => {
+    Object.defineProperty(wrapper, decorationMarker, { value: wrapper })
+    return wrapper
+  }
+  const isCurrentWrapper = (candidate: unknown, wrapper: Function): boolean =>
+    typeof candidate === 'function' &&
+    (candidate as unknown as Record<symbol, unknown>)[decorationMarker] === wrapper
+
+  mark(decoratedRegister)
+  mark(decoratedRegisterUpgrade)
+  mark(decoratedRegisterFallback)
+
   const undecorate = (): void => {
     try {
       server.register = priorRegister
@@ -246,24 +372,6 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     }
   }
 
-  /**
-   * Install one wrapper, or refuse to start.
-   *
-   * Assignment is not proof of assignment, and it fails in two different ways.
-   * A host that exposes these as non-writable data properties makes the write
-   * throw, since this module is an ES module and therefore strict. A host that
-   * hands out a Proxy, or an accessor whose setter ignores the write, makes it
-   * succeed and do nothing. The second is the dangerous one: the gate would
-   * load, log that it is active, and guard nothing.
-   *
-   * This is the whole compatibility surface in one check. The plugin's contract
-   * with the host is that these three members are replaceable, and the failure
-   * it prevents is an open port that reports itself as closed.
-   *
-   * @param member - the registry member to wrap.
-   * @param wrapper - the guarded replacement.
-   * @throws when the replacement did not take effect.
-   */
   const install = <K extends 'register' | 'registerUpgrade' | 'registerFallback'>(
     member: K,
     wrapper: WebServerService[K],
@@ -273,7 +381,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     } catch {
       /* reported below, together with the silent case */
     }
-    if (server[member] === wrapper) return
+    if (isCurrentWrapper(server[member], wrapper)) return
     undecorate()
     throw new Error(
       `dsh-web-login: webServer.${member} could not be wrapped — the host does not ` +
@@ -288,29 +396,69 @@ export function apply(ctx: PluginContext, config?: unknown): void {
 
   ctx.effect(
     () => () => {
-      // Restore only what is still ours. If another plugin decorated on top of
-      // this one, blindly reassigning the originals would silently remove *its*
-      // wrapper too — including, potentially, another security boundary.
-      if (server.register === decoratedRegister) server.register = priorRegister
-      if (server.registerUpgrade === decoratedRegisterUpgrade) {
+      if (isCurrentWrapper(server.register, decoratedRegister)) server.register = priorRegister
+      if (isCurrentWrapper(server.registerUpgrade, decoratedRegisterUpgrade)) {
         server.registerUpgrade = priorRegisterUpgrade
       }
-      if (server.registerFallback === decoratedRegisterFallback) {
+      if (isCurrentWrapper(server.registerFallback, decoratedRegisterFallback)) {
         server.registerFallback = priorRegisterFallback
       }
     },
     'dsh-web-login: registry decoration',
   )
 
-  // Expired sessions are dropped on lookup, but an abandoned session that is
-  // never looked up again would sit in the map until restart. The timer is
-  // unreferenced so it cannot by itself hold the process open.
   const sweepTimer = setInterval(() => {
     sessions.sweep()
     limiter.sweep()
+    oauthStates.sweep()
   }, options.sweepIntervalMs)
   sweepTimer.unref?.()
   ctx.effect(() => () => clearInterval(sweepTimer), 'dsh-web-login: expiry sweep')
+
+  /**
+   * Begin a GitHub OAuth redirect for a given intent.
+   */
+  const beginOAuth = (
+    res: ServerResponse,
+    input: {
+      intent: 'login' | 'enroll-owner'
+      initiatorSessionId?: string
+      mode: LoginPageMode
+    },
+  ): void => {
+    if (!options.githubEnabled || githubCredentials === undefined) {
+      sendHtml(
+        res,
+        503,
+        renderLoginPage({ title: options.title, mode: 'maintenance', message: MSG.unavailable }),
+      )
+      return
+    }
+    const opened = oauthStates.open({
+      intent: input.intent,
+      initiatorSessionId: input.initiatorSessionId,
+    })
+    if (opened === null) {
+      sendHtml(
+        res,
+        503,
+        renderLoginPage({
+          title: options.title,
+          mode: input.mode,
+          message: MSG.unavailable,
+        }),
+        { 'retry-after': '30' },
+      )
+      return
+    }
+    const location = buildAuthorizeUrl({
+      clientId: githubCredentials.clientId,
+      redirectUri,
+      state: opened.state,
+      codeChallenge: opened.codeChallenge,
+    })
+    sendRedirect(res, 302, location)
+  }
 
   // ── the login surface ──────────────────────────────────────────────────────
 
@@ -321,12 +469,22 @@ export function apply(ctx: PluginContext, config?: unknown): void {
         path: LOGIN_PATH,
         handler: async (req, res) => {
           if (req.method === 'GET' || req.method === 'HEAD') {
-            // Someone already signed in has no business on this page.
             if (isAuthenticated(req)) {
               sendRedirect(res, 302, HOME_PATH)
               return
             }
-            sendHtml(res, 200, renderLoginPage({ title: options.title }))
+            if (options.githubEnabled && isBootstrapSession(req)) {
+              sendHtml(res, 200, renderLoginPage({ title: options.title, mode: 'enroll' }))
+              return
+            }
+            const mode = pageModeForAnonymous()
+            const message =
+              mode === 'maintenance'
+                ? MSG.maintenance
+                : mode === 'password' && options.githubEnabled
+                  ? MSG.enrollNeeded
+                  : ''
+            sendHtml(res, 200, renderLoginPage({ title: options.title, mode, message }))
             return
           }
           if (req.method !== 'POST') {
@@ -334,11 +492,24 @@ export function apply(ctx: PluginContext, config?: unknown): void {
             return
           }
 
-          const key = clientKey(req, options)
+          // Active GitHub mode refuses network password login.
+          if (options.githubEnabled && lifecycle !== 'bootstrap') {
+            sendHtml(
+              res,
+              403,
+              renderLoginPage({
+                title: options.title,
+                mode: pageModeForAnonymous(),
+                message:
+                  lifecycle === 'invalid'
+                    ? MSG.maintenance
+                    : 'Password sign-in is disabled. Use GitHub.',
+              }),
+            )
+            return
+          }
 
-          // Check the block *before* reading the body or running the KDF: scrypt is
-          // the most expensive thing in this process by design, and a blocked
-          // client must cost a map lookup, not 16 MiB of hashing.
+          const key = clientKey(req, options)
           const blockedFor = limiter.retryAfterMs(key)
           if (blockedFor > 0) {
             const seconds = Math.ceil(blockedFor / 1000)
@@ -347,6 +518,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
               429,
               renderLoginPage({
                 title: options.title,
+                mode: 'password',
                 message: `Too many failed attempts. Try again in ${seconds} second(s).`,
               }),
               { 'retry-after': String(seconds) },
@@ -366,11 +538,6 @@ export function apply(ctx: PluginContext, config?: unknown): void {
           }
 
           const password = new URLSearchParams(body).get('password') ?? ''
-
-          // Admission is decided before the derivation starts, so a flood costs
-          // a queue check rather than 16 MiB and a threadpool slot each. A
-          // refusal here is not a failed attempt: the password was never
-          // examined, so counting it would let a flood lock out the operator.
           const matched = await kdf.run(() => verifyPassword(password, verifier))
           if (matched === null) {
             ctx.logger.warn('dsh-web-login: sign-in queue full; refusing to start another hash')
@@ -379,6 +546,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
               503,
               renderLoginPage({
                 title: options.title,
+                mode: 'password',
                 message: 'The server is busy verifying sign-ins. Try again in a moment.',
               }),
               { 'retry-after': '5' },
@@ -388,8 +556,6 @@ export function apply(ctx: PluginContext, config?: unknown): void {
 
           if (!matched) {
             const waitMs = limiter.fail(key)
-            // The client identity is logged, never the password or the verifier:
-            // startup and failure lines are the most-copied text in any bug report.
             ctx.logger.warn(`dsh-web-login: failed attempt from ${key}`)
             if (waitMs > 0) {
               const seconds = Math.ceil(waitMs / 1000)
@@ -398,6 +564,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
                 429,
                 renderLoginPage({
                   title: options.title,
+                  mode: 'password',
                   message: `Too many failed attempts. Try again in ${seconds} second(s).`,
                 }),
                 { 'retry-after': String(seconds) },
@@ -409,23 +576,25 @@ export function apply(ctx: PluginContext, config?: unknown): void {
               401,
               renderLoginPage({
                 title: options.title,
+                mode: 'password',
                 message: 'Incorrect password. Please try again.',
               }),
             )
             return
           }
 
-          const id = sessions.open()
+          const principal: SessionPrincipal = options.githubEnabled
+            ? { provider: 'password-bootstrap', role: 'owner', authzVersion: 0 }
+            : PASSWORD_PRINCIPAL
+          const id = sessions.open(principal)
           if (id === null) {
-            // Capacity is reported rather than met by evicting a live session:
-            // signing the operator out to make room for a flood would turn a memory
-            // limit into a denial of service against the legitimate user.
             ctx.logger.warn('dsh-web-login: session capacity reached; refusing new sign-in')
             sendHtml(
               res,
               503,
               renderLoginPage({
                 title: options.title,
+                mode: 'password',
                 message: 'Too many active sessions. Try again later.',
               }),
               { 'retry-after': '60' },
@@ -434,8 +603,16 @@ export function apply(ctx: PluginContext, config?: unknown): void {
           }
 
           limiter.succeed(key)
-          // 303 so the browser reissues as GET; a 302 after POST is re-submitted by
-          // some clients on reload.
+          if (options.githubEnabled) {
+            // Land on the enroll affordance rather than the guarded home.
+            sendRedirect(res, 303, LOGIN_PATH, {
+              'set-cookie': serializeSessionCookie(id, {
+                maxAgeSeconds: options.sessionTtlMs / 1000,
+                secure: options.secureCookie,
+              }),
+            })
+            return
+          }
           sendRedirect(res, 303, HOME_PATH, {
             'set-cookie': serializeSessionCookie(id, {
               maxAgeSeconds: options.sessionTtlMs / 1000,
@@ -453,7 +630,6 @@ export function apply(ctx: PluginContext, config?: unknown): void {
         kind: 'exact',
         path: LOGOUT_PATH,
         handler: (req, res) => {
-          // POST only: a GET /logout would let any embedded image sign the user out.
           if (req.method !== 'POST') {
             sendJsonError(res, 405, 'method_not_allowed', { allow: 'POST' })
             return
@@ -467,14 +643,467 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     'dsh-web-login: /logout route',
   )
 
-  // Published last. Anything that injects this service is guaranteed to see the
-  // decorated registries, which is what makes route coverage deterministic
-  // instead of dependent on loader timing.
-  // The third `provide()` argument is an optional *function* that determines
-  // availability. Passing `true` here makes Cordis call a boolean as a
-  // function, leaving every injected route owner pending.
+  if (options.githubEnabled && githubCredentials !== undefined) {
+    const credentials = githubCredentials
+
+    ctx.effect(
+      () =>
+        server.register({
+          kind: 'exact',
+          path: GITHUB_LOGIN_PATH,
+          handler: (req, res) => {
+            if (req.method !== 'GET' && req.method !== 'HEAD') {
+              sendJsonError(res, 405, 'method_not_allowed', { allow: 'GET, HEAD' })
+              return
+            }
+            if (lifecycle === 'invalid') {
+              sendHtml(
+                res,
+                503,
+                renderLoginPage({
+                  title: options.title,
+                  mode: 'maintenance',
+                  message: MSG.maintenance,
+                }),
+              )
+              return
+            }
+            if (lifecycle === 'bootstrap') {
+              sendRedirect(res, 302, LOGIN_PATH)
+              return
+            }
+            beginOAuth(res, { intent: 'login', mode: 'github' })
+          },
+        }),
+      'dsh-web-login: /auth/github/login',
+    )
+
+    ctx.effect(
+      () =>
+        server.register({
+          kind: 'exact',
+          path: GITHUB_ENROLL_PATH,
+          handler: (req, res) => {
+            if (req.method !== 'POST') {
+              sendJsonError(res, 405, 'method_not_allowed', { allow: 'POST' })
+              return
+            }
+            if (lifecycle !== 'bootstrap' && lifecycle !== 'recovery') {
+              sendHtml(
+                res,
+                403,
+                renderLoginPage({
+                  title: options.title,
+                  mode: pageModeForAnonymous(),
+                  message: 'Owner binding is not available in the current state.',
+                }),
+              )
+              return
+            }
+            const sessionId = readCookie(req.headers.cookie, cookieName)
+            const record = sessions.get(sessionId)
+            if (
+              record === undefined ||
+              (record.principal.provider !== 'password-bootstrap' &&
+                record.principal.provider !== 'recovery')
+            ) {
+              sendHtml(
+                res,
+                401,
+                renderLoginPage({
+                  title: options.title,
+                  mode: 'password',
+                  message: MSG.enrollNeeded,
+                }),
+              )
+              return
+            }
+            beginOAuth(res, {
+              intent: 'enroll-owner',
+              initiatorSessionId: typeof sessionId === 'string' ? sessionId : undefined,
+              mode: 'enroll',
+            })
+          },
+        }),
+      'dsh-web-login: /auth/github/enroll',
+    )
+
+    ctx.effect(
+      () =>
+        server.register({
+          kind: 'exact',
+          path: GITHUB_CALLBACK_PATH,
+          handler: async (req, res) => {
+            if (req.method !== 'GET' && req.method !== 'HEAD') {
+              sendJsonError(res, 405, 'method_not_allowed', { allow: 'GET, HEAD' })
+              return
+            }
+
+            const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+            const error = url.searchParams.get('error')
+            if (error !== null) {
+              // Consume state if present so it cannot be replayed later.
+              oauthStates.consume(url.searchParams.get('state'))
+              sendHtml(
+                res,
+                401,
+                renderLoginPage({
+                  title: options.title,
+                  mode: pageModeForAnonymous(),
+                  message: MSG.cancelled,
+                }),
+              )
+              return
+            }
+
+            const state = url.searchParams.get('state')
+            const code = url.searchParams.get('code')
+            const pending = oauthStates.consume(state)
+            if (pending === undefined || typeof code !== 'string' || code === '') {
+              sendHtml(
+                res,
+                401,
+                renderLoginPage({
+                  title: options.title,
+                  mode: pageModeForAnonymous(),
+                  message: MSG.expired,
+                }),
+              )
+              return
+            }
+
+            if (!callbackGate.tryAcquire()) {
+              sendHtml(
+                res,
+                503,
+                renderLoginPage({
+                  title: options.title,
+                  mode: pageModeForAnonymous(),
+                  message: MSG.unavailable,
+                }),
+                { 'retry-after': '5' },
+              )
+              return
+            }
+
+            let accessToken: string | undefined
+            try {
+              accessToken = await exchangeCode({
+                code,
+                codeVerifier: pending.codeVerifier,
+                redirectUri,
+                credentials,
+                options: { timeoutMs: options.githubRequestTimeoutMs },
+              })
+              const user = await fetchGitHubUser(accessToken, {
+                timeoutMs: options.githubRequestTimeoutMs,
+              })
+              await revokeAccessToken(accessToken, credentials, {
+                timeoutMs: options.githubRequestTimeoutMs,
+              })
+              accessToken = undefined
+
+              if (pending.intent === 'enroll-owner') {
+                if (lifecycle !== 'bootstrap' && lifecycle !== 'recovery') {
+                  sendHtml(
+                    res,
+                    403,
+                    renderLoginPage({
+                      title: options.title,
+                      mode: pageModeForAnonymous(),
+                      message: 'Owner binding is not available in the current state.',
+                    }),
+                  )
+                  return
+                }
+                if (pending.initiatorSessionId !== undefined) {
+                  const initiator = sessions.get(pending.initiatorSessionId)
+                  if (
+                    initiator === undefined ||
+                    (initiator.principal.provider !== 'password-bootstrap' &&
+                      initiator.principal.provider !== 'recovery')
+                  ) {
+                    sendHtml(
+                      res,
+                      401,
+                      renderLoginPage({
+                        title: options.title,
+                        mode: 'password',
+                        message: MSG.expired,
+                      }),
+                    )
+                    return
+                  }
+                }
+
+                const document = createOwnerDocument({
+                  githubUserId: user.id,
+                  login: user.login,
+                })
+                try {
+                  await saveAuthorizationDocument(options.authorizationFile, document)
+                } catch (saveError) {
+                  ctx.logger.warn(
+                    `dsh-web-login: failed to persist owner binding: ${
+                      saveError instanceof Error ? saveError.message : 'unknown error'
+                    }`,
+                  )
+                  sendHtml(
+                    res,
+                    503,
+                    renderLoginPage({
+                      title: options.title,
+                      mode: 'enroll',
+                      message: MSG.unavailable,
+                    }),
+                  )
+                  return
+                }
+                authDocument = document
+                lifecycle = 'active'
+                sessions.revokeAll()
+                await clearRecoveryRecord(options.recoveryFile).catch(() => undefined)
+                ctx.logger.info(`dsh-web-login: enrolled GitHub owner id=${user.id}`)
+                const admitted = admit(res, {
+                  provider: 'github',
+                  githubUserId: user.id,
+                  githubLogin: user.login,
+                  role: 'owner',
+                  authzVersion: document.authzVersion,
+                })
+                if (!admitted) {
+                  sendHtml(
+                    res,
+                    503,
+                    renderLoginPage({
+                      title: options.title,
+                      mode: 'github',
+                      message: 'Too many active sessions. Try again later.',
+                    }),
+                    { 'retry-after': '60' },
+                  )
+                }
+                return
+              }
+
+              // Daily login.
+              if (authDocument === null || lifecycle === 'invalid') {
+                sendHtml(
+                  res,
+                  503,
+                  renderLoginPage({
+                    title: options.title,
+                    mode: 'maintenance',
+                    message: MSG.maintenance,
+                  }),
+                )
+                return
+              }
+              const authorized = findActiveUser(authDocument, user.id)
+              if (authorized === undefined) {
+                ctx.logger.warn(`dsh-web-login: rejected GitHub id=${user.id}`)
+                sendHtml(
+                  res,
+                  403,
+                  renderLoginPage({
+                    title: options.title,
+                    mode: 'github',
+                    message: MSG.notAllowed,
+                  }),
+                )
+                return
+              }
+
+              const touched = touchLastLogin(authDocument, user.id)
+              // Best-effort login stamp; failure must not block admission.
+              await saveAuthorizationDocument(options.authorizationFile, {
+                ...touched,
+                users: touched.users.map((entry) =>
+                  entry.githubUserId === user.id ? { ...entry, login: user.login } : entry,
+                ),
+              }).catch(() => undefined)
+              authDocument = {
+                ...touched,
+                users: touched.users.map((entry) =>
+                  entry.githubUserId === user.id ? { ...entry, login: user.login } : entry,
+                ),
+              }
+
+              ctx.logger.info(`dsh-web-login: GitHub login id=${user.id}`)
+              const admitted = admit(res, {
+                provider: 'github',
+                githubUserId: user.id,
+                githubLogin: user.login,
+                role: authorized.role,
+                authzVersion: authDocument.authzVersion,
+              })
+              if (!admitted) {
+                sendHtml(
+                  res,
+                  503,
+                  renderLoginPage({
+                    title: options.title,
+                    mode: 'github',
+                    message: 'Too many active sessions. Try again later.',
+                  }),
+                  { 'retry-after': '60' },
+                )
+              }
+            } catch (callbackError) {
+              const codeName =
+                callbackError instanceof GitHubRequestError ? callbackError.code : 'unavailable'
+              ctx.logger.warn(`dsh-web-login: GitHub callback failed (${codeName})`)
+              sendHtml(
+                res,
+                503,
+                renderLoginPage({
+                  title: options.title,
+                  mode: pageModeForAnonymous(),
+                  message: MSG.unavailable,
+                }),
+              )
+            } finally {
+              accessToken = undefined
+              callbackGate.release()
+            }
+          },
+        }),
+      'dsh-web-login: /auth/github/callback',
+    )
+
+    ctx.effect(
+      () =>
+        server.register({
+          kind: 'exact',
+          path: RECOVERY_PATH,
+          handler: async (req, res) => {
+            if (req.method !== 'GET' && req.method !== 'HEAD') {
+              sendJsonError(res, 405, 'method_not_allowed', { allow: 'GET, HEAD' })
+              return
+            }
+            const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+            const token = url.searchParams.get('token')
+            if (typeof token !== 'string' || token === '') {
+              sendHtml(
+                res,
+                401,
+                renderLoginPage({
+                  title: options.title,
+                  mode: pageModeForAnonymous(),
+                  message: MSG.expired,
+                }),
+              )
+              return
+            }
+            let record
+            try {
+              record = await loadRecoveryRecord(options.recoveryFile)
+            } catch {
+              sendHtml(
+                res,
+                503,
+                renderLoginPage({
+                  title: options.title,
+                  mode: 'maintenance',
+                  message: MSG.maintenance,
+                }),
+              )
+              return
+            }
+            if (record === null || record.tokenDigest !== digestToken(token)) {
+              sendHtml(
+                res,
+                401,
+                renderLoginPage({
+                  title: options.title,
+                  mode: pageModeForAnonymous(),
+                  message: MSG.expired,
+                }),
+              )
+              return
+            }
+            // Consume immediately: single-use.
+            await clearRecoveryRecord(options.recoveryFile)
+            // Clear owners so re-bind is required; keep file invalid-safe by
+            // writing an empty-users bootstrap document only after successful
+            // recovery session mint would be wrong — spec says recovery opens
+            // a short window to re-bind owner. Empty the users list.
+            const cleared: AuthorizationDocument = {
+              schemaVersion: 1,
+              authzVersion: (authDocument?.authzVersion ?? 0) + 1,
+              users: [],
+            }
+            try {
+              await saveAuthorizationDocument(options.authorizationFile, cleared)
+            } catch {
+              sendHtml(
+                res,
+                503,
+                renderLoginPage({
+                  title: options.title,
+                  mode: 'maintenance',
+                  message: MSG.maintenance,
+                }),
+              )
+              return
+            }
+            authDocument = cleared
+            lifecycle = 'bootstrap'
+            sessions.revokeAll()
+            const id = sessions.open({
+              provider: 'recovery',
+              role: 'owner',
+              authzVersion: cleared.authzVersion,
+            })
+            if (id === null) {
+              sendHtml(
+                res,
+                503,
+                renderLoginPage({
+                  title: options.title,
+                  mode: 'password',
+                  message: MSG.unavailable,
+                }),
+              )
+              return
+            }
+            ctx.logger.info('dsh-web-login: recovery session opened')
+            sendRedirect(res, 303, LOGIN_PATH, {
+              'set-cookie': serializeSessionCookie(id, {
+                maxAgeSeconds: options.sessionTtlMs / 1000,
+                secure: options.secureCookie,
+              }),
+            })
+          },
+        }),
+      'dsh-web-login: /auth/recovery',
+    )
+
+    // Phase-2 invitation path is reserved anonymously but answers 501 for now.
+    ctx.effect(
+      () =>
+        server.register({
+          kind: 'exact',
+          path: GITHUB_INVITATION_PATH,
+          handler: (_req, res) => {
+            sendJsonError(res, 501, 'not_implemented')
+          },
+        }),
+      'dsh-web-login: /auth/github/invitation',
+    )
+  }
+
   ctx.provide?.(READY_SERVICE, true, () => true)
   ctx.set?.(READY_SERVICE, true)
 
-  ctx.logger.info('dsh-web-login: gate active; sign in at /login')
+  if (options.githubEnabled) {
+    ctx.logger.info(
+      `dsh-web-login: gate active (github, lifecycle=${lifecycle}); sign in at /login`,
+    )
+    if (authLoadError !== undefined) {
+      ctx.logger.warn(`dsh-web-login: authorization state invalid: ${authLoadError}`)
+    }
+  } else {
+    ctx.logger.info('dsh-web-login: gate active; sign in at /login')
+  }
 }

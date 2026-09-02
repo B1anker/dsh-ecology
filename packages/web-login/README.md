@@ -15,6 +15,8 @@ and WebSocket upgrades.
 
 - reads an scrypt password verifier from an environment variable, never from
   plugin configuration;
+- optionally enables GitHub OAuth so a stable numeric GitHub user id becomes the
+  authorized human identity, after a password bootstrap binds the first owner;
 - creates opaque, random in-memory sessions behind a host-only `HttpOnly`,
   `SameSite=Strict` cookie, named with the `__Host-` prefix wherever TLS makes
   that possible;
@@ -132,6 +134,47 @@ of silently selecting an unsafe default.
 | `maxSessions` | `10000` | 1–1000000 | Maximum live sessions. At capacity a new login receives `503`; live sessions are never evicted. |
 | `maxBodyBytes` | `4096` | 64 B–1 MiB | Maximum accepted login form body. |
 | `sweepIntervalMs` | 5 minutes | 1 second–1 hour | Interval for removing expired session and limiter records. |
+
+#### GitHub OAuth (opt-in)
+
+Default behaviour stays password-only. Set `githubEnabled: true` to bind a
+GitHub identity as the human access gate. OAuth proves who the visitor is;
+only locally authorized numeric GitHub ids may enter. Client secrets come from
+environment variables, never from YAML.
+
+```yaml
+- id: dsh-web-login
+  config:
+    githubEnabled: true
+    publicUrl: https://dsh.example.com
+```
+
+```dotenv
+GITHUB_OAUTH_CLIENT_ID=Ov23li...
+GITHUB_OAUTH_CLIENT_SECRET=...
+LOGIN_PASSWORD_HASH=scrypt$...
+```
+
+First boot with no authorization file is `bootstrap`: sign in with the existing
+password, then bind GitHub as owner. After that, the normal login page only
+offers GitHub. Host-local recovery:
+
+```sh
+dsh plugin --profile web exec dsh-web-login-recovery
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `githubEnabled` | `false` | Enable GitHub OAuth identity mode. |
+| `publicUrl` | _(empty)_ | Canonical HTTPS origin for OAuth callbacks (loopback `http` allowed for local tests). |
+| `githubClientIdEnv` | `GITHUB_OAUTH_CLIENT_ID` | Env var holding the OAuth App client id. |
+| `githubClientSecretEnv` | `GITHUB_OAUTH_CLIENT_SECRET` | Env var holding the OAuth App client secret. |
+| `authorizationFile` | `${DSH_HOME}/auth/dsh-web-login/github-users.json` | Authorized GitHub identities (no tokens). |
+| `recoveryFile` | `${DSH_HOME}/auth/dsh-web-login/recovery.json` | One-time host recovery digest. |
+
+GitHub OAuth is an outer human-identity gate on top of DSH's own BrowserAuth /
+start-token fence. It does not replace TLS, a reverse proxy, or network access
+control. See [`docs/github-oauth-spec.zh-CN.md`](docs/github-oauth-spec.zh-CN.md).
 
 #### Password-attempt limiting
 
