@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.2.0...web-login-v0.3.0) (2026-09-02)
+
+
+### Features
+
+* **testkit:** add portable host contract harness ([9e1ec0b](https://github.com/B1anker/dsh-ecology/commit/9e1ec0bd3c70ecb9eb269065135457cc289c272a))
+
 # [0.2.0](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.1.1...web-login-v0.2.0) (2026-08-28)
 
 
