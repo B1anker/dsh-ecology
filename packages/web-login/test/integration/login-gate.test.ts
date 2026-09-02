@@ -184,13 +184,13 @@ async function fixture(overrides: LoginConfig = {}): Promise<Fixture> {
       ctx,
       port,
       async close() {
-        ctx.dispose()
+        await ctx.dispose()
         await web.close()
         restoreEnv()
       },
     }
   } catch (error) {
-    ctx.dispose()
+    await ctx.dispose()
     await web.close()
     restoreEnv()
     throw error
@@ -638,7 +638,7 @@ test('startup fails closed when a registry member silently refuses the wrapper',
   }
 })
 
-test('disposal does not clobber a decorator installed after the gate', () => {
+test('disposal does not clobber a decorator installed after the gate', async () => {
   const prior = process.env[ENV_NAME]
   process.env[ENV_NAME] = VERIFIER
   const web = createMockWebServer()
@@ -649,7 +649,7 @@ test('disposal does not clobber a decorator installed after the gate', () => {
     const gateDecorator = web.service.register
     const laterDecorator: typeof gateDecorator = (route) => gateDecorator(route)
     web.service.register = laterDecorator
-    ctx.dispose()
+    await ctx.dispose()
     // Blindly restoring the original here would silently remove a later plugin's
     // wrapper too — potentially another security boundary.
     expect(web.service.register).toBe(laterDecorator)

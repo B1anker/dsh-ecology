@@ -24,13 +24,12 @@ export function runContextContract(label: string, create: () => MockContext): vo
     expect(ctx.get('ready')).toBe(true)
   })
 
-  test(`${label}: provide hides a value while available() is false`, () => {
+  test(`${label}: provide publishes a value and returns a disposer`, () => {
     const ctx = create()
-    let open = false
-    ctx.provide('gated', 'secret', () => open)
-    expect(ctx.get('gated')).toBeUndefined()
-    open = true
+    const dispose = ctx.provide('gated', 'secret')
     expect(ctx.get('gated')).toBe('secret')
+    dispose()
+    expect(ctx.get('gated')).toBeUndefined()
   })
 
   test(`${label}: set replaces a provided entry`, () => {
@@ -95,12 +94,12 @@ export function runContextContract(label: string, create: () => MockContext): vo
     expect(seen).toEqual(['short'])
   })
 
-  test(`${label}: dispose runs teardowns in reverse order`, () => {
+  test(`${label}: dispose runs teardowns in reverse order`, async () => {
     const ctx = create()
     const order: string[] = []
     ctx.effect(() => () => order.push('first'), 'first')
     ctx.effect(() => () => order.push('second'), 'second')
-    ctx.dispose()
+    await ctx.dispose()
     expect(order).toEqual(['second', 'first'])
   })
 }

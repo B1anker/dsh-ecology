@@ -41,6 +41,21 @@ export type {
   StreamingRequest,
 } from './http.js'
 export { fakeRequest, fakeResponse, fakeStreamingRequest } from './http.js'
+export { createMockContextDriver, createMockWebServerDriver } from './mock-drivers.js'
+export type {
+  MockToolHooks,
+  MockToolHooksOptions,
+  ToolHookCall,
+  ToolHookContentBlock,
+  ToolHookExecution,
+  ToolHookFailure,
+  ToolHookFixture,
+  ToolHookPostDecision,
+  ToolHookPreDecision,
+  ToolHookResult,
+  ToolHookSuccess,
+} from './tool-hooks.js'
+export { createMockToolHooks } from './tool-hooks.js'
 export type {
   AskAnswerer,
   MockToolsPipeline,

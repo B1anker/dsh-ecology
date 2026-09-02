@@ -14,8 +14,11 @@ test('the entry exports the doubles and nothing that needs a test runner', async
   expect(Object.keys(testkit).toSorted()).toEqual([
     'assertMutualAssignability',
     'createMockContext',
+    'createMockContextDriver',
+    'createMockToolHooks',
     'createMockToolsPipeline',
     'createMockWebServer',
+    'createMockWebServerDriver',
     'fakeRequest',
     'fakeResponse',
     'fakeStreamingRequest',
@@ -35,6 +38,17 @@ test('the entry exports the doubles and nothing that needs a test runner', async
   expect(typeof contract.runWebServerContract).toBe('function')
   expect(typeof contract.runContextContract).toBe('function')
   expect(typeof contract.runToolsPipelineContract).toBe('function')
+
+  // The opt-in entry can be imported without DSH installed. It resolves the
+  // host only when a caller asks it to create a real driver.
+  const real = await import('../src/real.js')
+  expect(typeof real.createRealContextDriver).toBe('function')
+  expect(typeof real.createRealWebServerDriver).toBe('function')
+  expect(real.getInstalledRealHostVersions()).toEqual({
+    '@deepseek-ai/cordis': undefined,
+    '@deepseek-ai/dsh-host-webserver': undefined,
+    '@deepseek-ai/dsh-tools': undefined,
+  })
 })
 
 test('the doubles from the entry are the ones the suites exercise', async () => {

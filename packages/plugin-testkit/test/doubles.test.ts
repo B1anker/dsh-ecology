@@ -4,14 +4,14 @@ import { fakeRequest, fakeResponse, fakeStreamingRequest } from '../src/http.js'
 import { createMockToolsPipeline } from '../src/tools.js'
 import { createMockWebServer } from '../src/web-server.js'
 
-test('the context collects teardowns and runs them in reverse', () => {
+test('the context collects teardowns and runs them in reverse', async () => {
   const order: string[] = []
   const ctx = createMockContext({})
   ctx.effect(() => () => order.push('first'), 'first')
   ctx.effect(() => () => order.push('second'), 'second')
 
   expect(ctx.teardowns.map(({ label }) => label)).toEqual(['first', 'second'])
-  ctx.dispose()
+  await ctx.dispose()
   // Cordis unwinds in reverse, so a teardown can assume everything registered
   // after it has already run.
   expect(order).toEqual(['second', 'first'])
@@ -32,22 +32,23 @@ test('the context records logs instead of printing them', () => {
   expect(ctx.logs).toEqual({ info: ['started'], warn: ['something'] })
 })
 
-test('services are readable and writable through the context', () => {
+test('services supplied by the host are readable, while only owned services are writable', () => {
   const services: Record<string, unknown> = { webServer: 'a service' }
   const ctx = createMockContext(services)
   expect(ctx.get('webServer')).toBe('a service')
   expect(ctx.get('absent')).toBeUndefined()
+  expect(() => ctx.set('published', true)).toThrow(/unprovided/)
+  ctx.provide('published', true)
   ctx.set('published', true)
   expect(ctx.get('published')).toBe(true)
 })
 
-test('provide publishes a readiness value and honours available()', () => {
+test('provide publishes a readiness value immediately and its disposer removes it', () => {
   const ctx = createMockContext({})
-  let open = false
-  ctx.provide('dshWebLoginReady', true, () => open)
-  expect(ctx.get('dshWebLoginReady')).toBeUndefined()
-  open = true
+  const dispose = ctx.provide('dshWebLoginReady', true)
   expect(ctx.get('dshWebLoginReady')).toBe(true)
+  dispose()
+  expect(ctx.get('dshWebLoginReady')).toBeUndefined()
 })
 
 test('waterfall short-circuits when a listener skips next()', () => {

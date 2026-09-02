@@ -47,7 +47,11 @@ export interface UpgradeRoute {
   handler: UpgradeHandler
 }
 
-/** Undoes a registration. Returned by every register call. */
+/**
+ * Undoes a registration. `void` intentionally permits implementations whose
+ * cleanup returns a value (for example `Map.delete`) or a Promise; callers
+ * that own lifecycle await the runtime value defensively.
+ */
 export type Disposer = () => void
 
 /**
@@ -88,6 +92,8 @@ export interface PluginContext {
   get: <T = unknown>(name: string) => T | undefined
   effect: (setup: () => void | Disposer, label?: string) => void
   logger: Logger
+  // Kept structurally compatible with older Cordis hosts. Newer public
+  // declarations omit the third argument, while the runtime still accepts it.
   provide?: (name: string, value: unknown, available?: () => boolean) => void
   set?: (name: string, value: unknown) => void
   on?: (event: string, listener: ContextListener) => Disposer
