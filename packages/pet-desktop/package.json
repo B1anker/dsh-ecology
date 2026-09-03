@@ -1,0 +1,21 @@
+{
+  "name": "@seaveyon/dsh-pet-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Zero-native (Zig + GPU canvas) desktop pet for the DSH Web surface; receives mood state from the dsh-pet plugin over a loopback HTTP bridge",
+  "keywords": [
+    "dsh",
+    "pet",
+    "desktop",
+    "zero-native",
+    "zig"
+  ],
+  "license": "MIT",
+  "author": "B1anker",
+  "type": "module",
+  "scripts": {
+    "build": "zig build",
+    "run": "zig build run",
+    "test:unit": "zig build test"
+  }
+}

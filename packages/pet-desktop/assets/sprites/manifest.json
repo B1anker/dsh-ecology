@@ -1,0 +1,138 @@
+{
+  "scale": 2,
+  "frameSize": 128,
+  "pets": {
+    "blob": {
+      "moods": {
+        "idle": {
+          "file": "blob/idle.png",
+          "frames": 24,
+          "frameDurationMs": 250
+        },
+        "thinking": {
+          "file": "blob/thinking.png",
+          "frames": 24,
+          "frameDurationMs": 100
+        },
+        "working": {
+          "file": "blob/working.png",
+          "frames": 4,
+          "frameDurationMs": 87.5
+        },
+        "waiting": {
+          "file": "blob/waiting.png",
+          "frames": 18,
+          "frameDurationMs": 88.889
+        },
+        "sad": {
+          "file": "blob/sad.png",
+          "frames": 4,
+          "frameDurationMs": 90
+        },
+        "sleeping": {
+          "file": "blob/sleeping.png",
+          "frames": 24,
+          "frameDurationMs": 200
+        },
+        "celebrating": {
+          "file": "blob/celebrating.png",
+          "frames": 7,
+          "frameDurationMs": 85.714
+        },
+        "pet": {
+          "file": "blob/pet.png",
+          "frames": 6,
+          "frameDurationMs": 83.333
+        }
+      }
+    },
+    "cat": {
+      "moods": {
+        "idle": {
+          "file": "cat/idle.png",
+          "frames": 24,
+          "frameDurationMs": 250
+        },
+        "thinking": {
+          "file": "cat/thinking.png",
+          "frames": 24,
+          "frameDurationMs": 100
+        },
+        "working": {
+          "file": "cat/working.png",
+          "frames": 4,
+          "frameDurationMs": 87.5
+        },
+        "waiting": {
+          "file": "cat/waiting.png",
+          "frames": 18,
+          "frameDurationMs": 88.889
+        },
+        "sad": {
+          "file": "cat/sad.png",
+          "frames": 4,
+          "frameDurationMs": 90
+        },
+        "sleeping": {
+          "file": "cat/sleeping.png",
+          "frames": 24,
+          "frameDurationMs": 200
+        },
+        "celebrating": {
+          "file": "cat/celebrating.png",
+          "frames": 7,
+          "frameDurationMs": 85.714
+        },
+        "pet": {
+          "file": "cat/pet.png",
+          "frames": 6,
+          "frameDurationMs": 83.333
+        }
+      }
+    },
+    "robot": {
+      "moods": {
+        "idle": {
+          "file": "robot/idle.png",
+          "frames": 24,
+          "frameDurationMs": 250
+        },
+        "thinking": {
+          "file": "robot/thinking.png",
+          "frames": 24,
+          "frameDurationMs": 100
+        },
+        "working": {
+          "file": "robot/working.png",
+          "frames": 4,
+          "frameDurationMs": 87.5
+        },
+        "waiting": {
+          "file": "robot/waiting.png",
+          "frames": 18,
+          "frameDurationMs": 88.889
+        },
+        "sad": {
+          "file": "robot/sad.png",
+          "frames": 4,
+          "frameDurationMs": 90
+        },
+        "sleeping": {
+          "file": "robot/sleeping.png",
+          "frames": 24,
+          "frameDurationMs": 200
+        },
+        "celebrating": {
+          "file": "robot/celebrating.png",
+          "frames": 7,
+          "frameDurationMs": 85.714
+        },
+        "pet": {
+          "file": "robot/pet.png",
+          "frames": 6,
+          "frameDurationMs": 83.333
+        }
+      }
+    }
+  }
+}
