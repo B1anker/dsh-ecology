@@ -14,8 +14,8 @@
   "author": "B1anker",
   "type": "module",
   "scripts": {
-    "build": "zig build",
+    "build": "command -v zig >/dev/null 2>&1 && zig build || echo 'skip: zig not installed (see README)'",
     "run": "zig build run",
-    "test:unit": "zig build test"
+    "test:unit": "command -v zig >/dev/null 2>&1 && zig build test || echo 'skip: zig not installed (see README)'"
   }
 }
