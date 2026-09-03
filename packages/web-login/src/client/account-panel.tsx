@@ -259,9 +259,10 @@ export function AccountPanel({ t, locale }: AccountPanelProps) {
 
   useEffect(() => {
     let cancelled = false
-    void fetchSessionInfo().then((next) => {
+    void (async () => {
+      const next = await fetchSessionInfo()
       if (!cancelled) setInfo(next)
-    })
+    })()
     return () => {
       cancelled = true
     }
