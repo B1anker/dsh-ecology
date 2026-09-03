@@ -15,11 +15,7 @@
 
 import { writeSync } from 'node:fs'
 import { argv, exit, stderr, stdout } from 'node:process'
-import {
-  defaultRecoveryPath,
-  mintRecoveryToken,
-  saveRecoveryRecord,
-} from './authorization.js'
+import { defaultRecoveryPath, mintRecoveryToken, saveRecoveryRecord } from './authorization.js'
 import { DEFAULTS } from './config.js'
 
 /** The resolved command line. */
@@ -46,7 +42,9 @@ function parseArgs(args: readonly string[]): CliOptions {
       if (arg === '--ttl-ms') {
         const ttlMs = Number(value)
         if (!Number.isInteger(ttlMs) || ttlMs < 60_000 || ttlMs > 60 * 60 * 1000) {
-          throw new Error('dsh-web-login-recovery: --ttl-ms must be an integer between 60000 and 3600000')
+          throw new Error(
+            'dsh-web-login-recovery: --ttl-ms must be an integer between 60000 and 3600000',
+          )
         }
         options.ttlMs = ttlMs
       } else {

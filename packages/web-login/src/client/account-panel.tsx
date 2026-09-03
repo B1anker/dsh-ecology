@@ -7,7 +7,7 @@
  * @module @seaveyon/dsh-web-login/client/account-panel
  */
 
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { type ReactNode, useEffect, useState, useSyncExternalStore } from 'react'
 import type { LocaleService, Translate } from './host-types.js'
 import {
   fetchSessionInfo,
@@ -218,10 +218,7 @@ function methodValue(info: SessionInfo, t: Translate): ReactNode {
               {handle}
             </a>
             {info.githubUserId !== null ? (
-              <span style={mutedStyle}>
-                {' '}
-                (id {info.githubUserId})
-              </span>
+              <span style={mutedStyle}> (id {info.githubUserId})</span>
             ) : null}
           </>
         )
@@ -262,9 +259,10 @@ export function AccountPanel({ t, locale }: AccountPanelProps) {
 
   useEffect(() => {
     let cancelled = false
-    void fetchSessionInfo().then((next) => {
+    void (async () => {
+      const next = await fetchSessionInfo()
       if (!cancelled) setInfo(next)
-    })
+    })()
     return () => {
       cancelled = true
     }
@@ -306,7 +304,10 @@ export function AccountPanel({ t, locale }: AccountPanelProps) {
             <span style={labelStyle}>{t('sessionExpiresLabel')}</span>
             <span style={valueStyle}>
               {formatRemaining(info.sessionRemainingMs, t)}
-              <span style={mutedStyle}> · {formatTimestamp(info.sessionExpiresAt, activeLocale)}</span>
+              <span style={mutedStyle}>
+                {' '}
+                · {formatTimestamp(info.sessionExpiresAt, activeLocale)}
+              </span>
             </span>
           </p>
           {info.githubEnabled && info.githubClientId !== null ? (

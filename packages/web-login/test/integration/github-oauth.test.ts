@@ -19,11 +19,7 @@ import {
 } from '@seaveyon/dsh-plugin-testkit'
 import { mintRecoveryToken, saveRecoveryRecord } from '../../src/authorization.js'
 import type { LoginConfig } from '../../src/config.js'
-import {
-  exchangeCode,
-  fetchGitHubUser,
-  revokeAccessToken,
-} from '../../src/github.js'
+import { exchangeCode, fetchGitHubUser, revokeAccessToken } from '../../src/github.js'
 import { apply, READY_SERVICE } from '../../src/index.js'
 import { hashPassword } from '../../src/verifier.js'
 
@@ -39,11 +35,15 @@ interface Response {
   body: string
 }
 
-function request(port: number, path: string, options: {
-  method?: string
-  headers?: Record<string, string>
-  body?: string
-} = {}): Promise<Response> {
+function request(
+  port: number,
+  path: string,
+  options: {
+    method?: string
+    headers?: Record<string, string>
+    body?: string
+  } = {},
+): Promise<Response> {
   const { method = 'GET', headers = {}, body } = options
   return new Promise((resolve, reject) => {
     const req = httpRequest({ host: '127.0.0.1', port, path, method, headers }, (res) => {
@@ -260,9 +260,7 @@ test('enroll redirects to GitHub with state and PKCE', async () => {
     const url = new URL(location)
     expect(url.origin + url.pathname).toBe('https://github.com/login/oauth/authorize')
     expect(url.searchParams.get('client_id')).toBe('test-client-id')
-    expect(url.searchParams.get('redirect_uri')).toBe(
-      'http://127.0.0.1:9/auth/github/callback',
-    )
+    expect(url.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:9/auth/github/callback')
     expect(url.searchParams.get('code_challenge_method')).toBe('S256')
     expect(url.searchParams.get('state')).toMatch(/^[A-Za-z0-9_-]{43}$/)
   } finally {
@@ -287,15 +285,20 @@ test('github helpers fail closed on malformed GitHub payloads', async () => {
   await expect(
     fetchGitHubUser('tok', {
       timeoutMs: 1000,
-      fetchImpl: async () => new Response(JSON.stringify({ id: 'nope', login: 'x' }), { status: 200 }),
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ id: 'nope', login: 'x' }), { status: 200 }),
     }),
   ).rejects.toMatchObject({ code: 'missing_user_id' })
 
   await expect(
-    revokeAccessToken('tok', { clientId: 'a', clientSecret: 'b' }, {
-      timeoutMs: 1000,
-      fetchImpl: async () => new Response('no', { status: 401 }),
-    }),
+    revokeAccessToken(
+      'tok',
+      { clientId: 'a', clientSecret: 'b' },
+      {
+        timeoutMs: 1000,
+        fetchImpl: async () => new Response('no', { status: 401 }),
+      },
+    ),
   ).rejects.toMatchObject({ code: 'http_status' })
 })
 
@@ -390,7 +393,9 @@ test('bootstrap binding and a later GitHub login both admit the same owner', asy
     expect(afterEnroll.status).toBe(200)
     expect(afterEnroll.body).toBe('exact')
 
-    const session = await request(app.port, '/auth/session', { headers: { cookie: enrolledCookie } })
+    const session = await request(app.port, '/auth/session', {
+      headers: { cookie: enrolledCookie },
+    })
     expect(session.status).toBe(200)
     const sessionBody = JSON.parse(session.body) as Record<string, unknown>
     expect(sessionBody).toMatchObject({

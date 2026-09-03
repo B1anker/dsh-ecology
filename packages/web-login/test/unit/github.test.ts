@@ -21,9 +21,7 @@ test('buildAuthorizeUrl uses fixed hosts, empty scope, and PKCE', () => {
   )
   expect(url.origin + url.pathname).toBe('https://github.com/login/oauth/authorize')
   expect(url.searchParams.get('client_id')).toBe('client')
-  expect(url.searchParams.get('redirect_uri')).toBe(
-    'https://dsh.example.com/auth/github/callback',
-  )
+  expect(url.searchParams.get('redirect_uri')).toBe('https://dsh.example.com/auth/github/callback')
   expect(url.searchParams.get('state')).toBe('state')
   expect(url.searchParams.get('code_challenge')).toBe('challenge')
   expect(url.searchParams.get('code_challenge_method')).toBe('S256')

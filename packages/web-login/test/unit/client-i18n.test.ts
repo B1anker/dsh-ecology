@@ -7,7 +7,7 @@ test('locale namespace is stable for the shell registry', () => {
 })
 
 test('zh and en dictionaries expose the same keys', () => {
-  expect(Object.keys(ZH).sort()).toEqual(Object.keys(EN).sort())
+  expect(Object.keys(ZH).toSorted()).toEqual(Object.keys(EN).toSorted())
   expect(DICTS.zh).toBe(ZH)
   expect(DICTS.en).toBe(EN)
   expect(ZH.nav).toBe('账户')

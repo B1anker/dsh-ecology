@@ -38,7 +38,9 @@ const run = promisify(execFile)
  */
 const PACKAGES = {
   '@seaveyon/dsh-web-login': {
-    skip: ['hash-password.js'],
+    // Browser client is a `__ModuleLoader__` envelope that expects `window`.
+    // CLI bins are covered via `execFile`, not cold import.
+    skip: ['hash-password.js', 'create-recovery.js', 'client.js'],
     /**
      * @param dist - file URL of the extracted `dist/` directory.
      * @param root - filesystem path of the extracted package.
@@ -119,7 +121,22 @@ const PACKAGES = {
         }
       }
 
-      return 'public export, bundle patch, scrypt round trip, render, cookie, bin CLI'
+      // Browser client: assert the published envelope without importing it under
+      // Node (it starts with `window.__ModuleLoader__.load`).
+      if (manifest.exports?.['./client']?.default !== './dist/client.js') {
+        throw new Error(
+          `unexpected client export ${JSON.stringify(manifest.exports?.['./client'])}`,
+        )
+      }
+      if (manifest.dsh?.client?.platform !== 'web') {
+        throw new Error(`unexpected dsh.client ${JSON.stringify(manifest.dsh?.client)}`)
+      }
+      const clientBundle = await readFile(join(root, 'dist/client.js'), 'utf8')
+      if (!clientBundle.startsWith('window.__ModuleLoader__.load')) {
+        throw new Error('client bundle missing ModuleLoader envelope')
+      }
+
+      return 'public export, bundle patch, scrypt round trip, render, cookie, bin CLI, client envelope'
     },
   },
 

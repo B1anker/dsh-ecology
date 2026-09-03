@@ -143,7 +143,7 @@ async function githubFetch(
         accept: 'application/json',
         'user-agent': GITHUB_USER_AGENT,
         'x-github-api-version': GITHUB_API_VERSION,
-        ...(init.headers ?? {}),
+        ...init.headers,
       },
     })
   } catch (error) {
