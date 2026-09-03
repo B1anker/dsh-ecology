@@ -57,6 +57,55 @@ Regenerate the strips after changing the plugin's pet artwork:
 bun packages/pet-desktop/scripts/bake-sprites.mjs   # from the repo root
 ```
 
+### Importing Codex pets
+
+Codex-compatible pet packages (a directory with `pet.json` +
+`spritesheet.webp`, the format used by Codex CLI `/pet` and community
+galleries) can be converted into a native sprite set:
+
+```sh
+bun packages/pet-desktop/scripts/import-codex-pet.mjs <pet-dir|pet.json> [--name <id>] [--out <sprites-dir>]
+```
+
+The importer reads the Codex grid spec (`frame: { width, height, columns,
+rows }`) and its animations, slices the sheet into frames, aspect-fits each
+frame onto the manifest's square physical frame (256×256 px), and writes one
+PNG strip per mood plus a `manifest.json` entry. Without an explicit `frame`,
+the default grid follows `spriteVersionNumber`: v1 (field absent) is 8×9
+(1536×1872, the codex-rs TUI layout) and v2 is 8×11 (1536×2288, the Codex
+desktop app) — v2's two extra look-direction rows are ignored. WebP is
+decoded with the macOS built-in `sips` (or `dwebp` elsewhere); a
+`spritesheet.png` source needs no external tool.
+
+Codex states map onto our 8 moods as follows (the first available Codex
+animation wins; missing ones fall back to idle frames with a warning):
+
+| Our mood | Codex animation(s) | Notes |
+| --- | --- | --- |
+| idle | `idle` | |
+| thinking | `review` | |
+| working | `running` → `running-right` → `move_right` | |
+| waiting | `waiting` | |
+| sad | `failed` → `sad` | |
+| sleeping | `sleeping`/`sleep`/`rest` if defined, else idle frames ×1.5 slower | Codex has no sleep state |
+| celebrating | `jumping` → `bounce` | |
+| pet | `waving` → `wave` | |
+
+Limitations:
+
+- **Four spare pet slots.** `src/manifest.zig` caps the manifest at 8 pets and
+  the stock sets already ship 4, so up to 4 imported pets fit; the importer
+  refuses rather than write a manifest the app would reject. Re-importing an
+  existing id replaces it and is always allowed.
+- **Timing is per-strip.** Codex's per-frame idle durations, `loop`/fallback
+  chains, and the 3×-repeat-then-idle default cadence don't fit the
+  manifest schema; strips keep the primary frames at one average/uniform
+  `frameDurationMs` (custom animations: 1000/fps) and loop seamlessly.
+- **Strips cap at 24 frames** (the baker's ceiling; the 8 MiB decode budget
+  in `app.zon` fits 32 at most). Longer Codex animations are thinned evenly
+  with the duration stretched to preserve the total loop time, with a
+  warning.
+
 Two framework limits shaped the wiring:
 
 - The image registry has **16 slots**; one pet's 8 mood strips occupy 8.
