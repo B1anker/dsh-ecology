@@ -203,7 +203,45 @@ test('password bootstrap cannot unlock protected routes until GitHub enroll comp
 
     const enrollPage = await request(app.port, '/login', { headers: { cookie } })
     expect(enrollPage.status).toBe(200)
-    expect(enrollPage.body).toMatch(/action="\/auth\/github\/enroll"/)
+    expect(enrollPage.body).toMatch(/href="\/auth\/github\/enroll"/)
+    expect(enrollPage.body).toMatch(/action="\/auth\/continue"/)
+  } finally {
+    await app.close()
+  }
+})
+
+test('skipping GitHub bind admits a password session', async () => {
+  const app = await fixture()
+  try {
+    const cookie = await passwordBootstrap(app.port)
+    const skip = await request(app.port, '/auth/continue', {
+      method: 'POST',
+      headers: { cookie },
+    })
+    expect(skip.status).toBe(303)
+    expect(skip.headers.location).toBe('/')
+    const admitted = setCookie(skip).split(';')[0] ?? ''
+    const exact = await request(app.port, '/exact', { headers: { cookie: admitted } })
+    expect(exact.status).toBe(200)
+
+    const session = await request(app.port, '/auth/session', { headers: { cookie: admitted } })
+    expect(session.status).toBe(200)
+    const sessionBody = JSON.parse(session.body) as Record<string, unknown>
+    expect(sessionBody).toMatchObject({
+      provider: 'password',
+      role: 'owner',
+      githubUserId: null,
+      githubLogin: null,
+      githubEnabled: true,
+      canBindGitHub: true,
+      status: 'awaiting_github_bind',
+      enrolledAt: null,
+      lastLoginAt: null,
+      githubClientId: 'test-client-id',
+      githubOAuthAppId: null,
+    })
+    expect(typeof sessionBody.sessionExpiresAt).toBe('string')
+    expect(sessionBody.sessionRemainingMs).toBeGreaterThan(0)
   } finally {
     await app.close()
   }
@@ -214,7 +252,7 @@ test('enroll redirects to GitHub with state and PKCE', async () => {
   try {
     const cookie = await passwordBootstrap(app.port)
     const enroll = await request(app.port, '/auth/github/enroll', {
-      method: 'POST',
+      method: 'GET',
       headers: { cookie },
     })
     expect(enroll.status).toBe(302)
@@ -315,7 +353,7 @@ async function completeOwnerEnroll(
   try {
     const cookie = await passwordBootstrap(app.port)
     const enroll = await request(app.port, '/auth/github/enroll', {
-      method: 'POST',
+      method: 'GET',
       headers: { cookie },
     })
     const location = String(enroll.headers.location)
@@ -326,8 +364,9 @@ async function completeOwnerEnroll(
       app.port,
       `/auth/github/callback?code=test-code&state=${encodeURIComponent(state!)}`,
     )
-    expect(callback.status).toBe(303)
-    expect(callback.headers.location).toBe('/')
+    expect(callback.status).toBe(200)
+    expect(callback.body).toMatch(/href="\/"/)
+    expect(callback.body).toMatch(/http-equiv="refresh"/i)
     const sessionCookie = setCookie(callback).split(';')[0]
     expect(sessionCookie).toMatch(/^dsh_session=/)
 
@@ -351,7 +390,30 @@ test('bootstrap binding and a later GitHub login both admit the same owner', asy
     expect(afterEnroll.status).toBe(200)
     expect(afterEnroll.body).toBe('exact')
 
-    // Password login is closed once active.
+    const session = await request(app.port, '/auth/session', { headers: { cookie: enrolledCookie } })
+    expect(session.status).toBe(200)
+    const sessionBody = JSON.parse(session.body) as Record<string, unknown>
+    expect(sessionBody).toMatchObject({
+      provider: 'github',
+      role: 'owner',
+      githubUserId: 7,
+      githubLogin: 'octo',
+      githubEnabled: true,
+      canBindGitHub: false,
+      status: 'github_bound',
+      githubClientId: 'test-client-id',
+      githubOAuthAppId: null,
+    })
+    expect(typeof sessionBody.enrolledAt).toBe('string')
+    expect(typeof sessionBody.lastLoginAt).toBe('string')
+    expect(typeof sessionBody.sessionExpiresAt).toBe('string')
+    expect(sessionBody.sessionRemainingMs).toBeGreaterThan(0)
+
+    // After enroll, the login page offers GitHub and password as choices.
+    const loginPage = await request(app.port, '/login')
+    expect(loginPage.body).toMatch(/Continue with GitHub/)
+    expect(loginPage.body).toMatch(/<form method="post" action="\/login">/)
+
     const passwordAgain = await request(app.port, '/login', {
       method: 'POST',
       headers: {
@@ -360,11 +422,11 @@ test('bootstrap binding and a later GitHub login both admit the same owner', asy
       },
       body: `password=${encodeURIComponent(PASSWORD)}`,
     })
-    expect(passwordAgain.status).toBe(403)
-    expect(passwordAgain.body).toMatch(/GitHub/)
-
-    const loginPage = await request(app.port, '/login')
-    expect(loginPage.body).toMatch(/Continue with GitHub/)
+    expect(passwordAgain.status).toBe(303)
+    expect(passwordAgain.headers.location).toBe('/')
+    const passwordCookie = setCookie(passwordAgain).split(';')[0] ?? ''
+    const passwordExact = await request(app.port, '/exact', { headers: { cookie: passwordCookie } })
+    expect(passwordExact.status).toBe(200)
 
     const restoreFetch = mockGitHubUser({ id: 7, login: 'octo-renamed' })
     try {
@@ -375,7 +437,8 @@ test('bootstrap binding and a later GitHub login both admit the same owner', asy
         app.port,
         `/auth/github/callback?code=second&state=${encodeURIComponent(state!)}`,
       )
-      expect(callback.status).toBe(303)
+      expect(callback.status).toBe(200)
+      expect(callback.body).toMatch(/href="\/"/)
       const cookie = setCookie(callback).split(';')[0] ?? ''
       const exact = await request(app.port, '/exact', { headers: { cookie } })
       expect(exact.status).toBe(200)
@@ -432,7 +495,7 @@ test('an unregistered GitHub account is rejected and recovery can rebind the own
     const restoreOwner = mockGitHubUser({ id: 77, login: 'new-owner' })
     try {
       const enroll = await request(app.port, '/auth/github/enroll', {
-        method: 'POST',
+        method: 'GET',
         headers: { cookie: recoveryCookie },
       })
       expect(enroll.status).toBe(302)
@@ -441,7 +504,8 @@ test('an unregistered GitHub account is rejected and recovery can rebind the own
         app.port,
         `/auth/github/callback?code=rebind&state=${encodeURIComponent(state!)}`,
       )
-      expect(callback.status).toBe(303)
+      expect(callback.status).toBe(200)
+      expect(callback.body).toMatch(/href="\/"/)
       const cookie = setCookie(callback).split(';')[0] ?? ''
       const exact = await request(app.port, '/exact', { headers: { cookie } })
       expect(exact.status).toBe(200)

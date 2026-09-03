@@ -42,7 +42,7 @@ export function escapeHtml(value: unknown): string {
 }
 
 /** Which sign-in affordance the page should present. */
-export type LoginPageMode = 'password' | 'github' | 'enroll' | 'maintenance'
+export type LoginPageMode = 'password' | 'github' | 'choice' | 'enroll' | 'maintenance'
 
 /** What the page needs in order to render. */
 export interface LoginPageOptions {
@@ -232,6 +232,34 @@ function styles(): string {
   button:hover, .btn:hover { background: var(--accent-hover); transform: translateY(-1px); }
   button:active, .btn:active { transform: translateY(0.5px); box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12); }
   button:focus-visible, .btn:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--ring); }
+  button.secondary, .btn.secondary {
+    margin-top: 12px;
+    background: transparent;
+    color: var(--fg-muted);
+    border-color: var(--border-strong);
+    box-shadow: none;
+  }
+  button.secondary:hover, .btn.secondary:hover {
+    background: var(--field-bg);
+    color: var(--fg);
+    border-color: var(--accent);
+  }
+  .divider {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 12px;
+    align-items: center;
+    margin: 22px 0 2px;
+    color: var(--fg-subtle);
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .divider::before, .divider::after {
+    content: '';
+    height: 1px;
+    background: var(--border);
+  }
   .error {
     display: flex;
     gap: 9px;
@@ -275,6 +303,16 @@ function styles(): string {
  * @param mode - page mode.
  * @returns HTML for the form or link.
  */
+function renderPasswordForm({ autofocus }: { autofocus: boolean }): string {
+  const focus = autofocus ? ' autofocus' : ''
+  return `    <form method="post" action="/login">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password"
+             placeholder="Access password" required${focus} spellcheck="false">
+      <button type="submit">Sign in</button>
+    </form>\n`
+}
+
 function renderAction(mode: LoginPageMode): { subtitle: string; action: string; foot: string } {
   switch (mode) {
     case 'github':
@@ -283,13 +321,24 @@ function renderAction(mode: LoginPageMode): { subtitle: string; action: string; 
         action: `    <a class="btn" href="/auth/github/login">Continue with GitHub</a>\n`,
         foot: 'Only GitHub accounts authorized on this host can enter.',
       }
+    case 'choice':
+      return {
+        subtitle: 'Choose how to sign in.',
+        action: `    <a class="btn" href="/auth/github/login">Continue with GitHub</a>
+    <p class="divider" aria-hidden="true">or</p>
+${renderPasswordForm({ autofocus: false })}`,
+        foot: 'GitHub admits registered accounts; the access password still works on this host.',
+      }
     case 'enroll':
       return {
-        subtitle: 'Bind your GitHub account as the owner of this host.',
-        action: `    <form method="post" action="/auth/github/enroll">
-      <button type="submit">Bind GitHub account</button>
+        subtitle: 'Bind your GitHub account as the owner of this host, or continue with the password.',
+        // GET (not a form POST): CSP form-action 'self' would otherwise block the
+        // browser from following the OAuth redirect to github.com.
+        action: `    <a class="btn" href="/auth/github/enroll">Bind GitHub account</a>
+    <form method="post" action="/auth/continue">
+      <button class="secondary" type="submit">Continue without GitHub</button>
     </form>\n`,
-        foot: 'After binding, password sign-in is disabled for normal remote access.',
+        foot: 'You can bind GitHub later; password sign-in stays available either way.',
       }
     case 'maintenance':
       return {
@@ -301,12 +350,7 @@ function renderAction(mode: LoginPageMode): { subtitle: string; action: string; 
     default:
       return {
         subtitle: 'Enter the access password to continue.',
-        action: `    <form method="post" action="/login">
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password"
-             placeholder="Access password" required autofocus spellcheck="false">
-      <button type="submit">Sign in</button>
-    </form>\n`,
+        action: renderPasswordForm({ autofocus: true }),
         foot: 'Sessions are held in memory and end when the server restarts.',
       }
   }
@@ -349,6 +393,43 @@ export function renderLoginPage({
     <h1>${safeTitle}</h1>
     <p class="sub">${escapeHtml(subtitle)}</p>
 ${banner}${action}    <p class="foot">${escapeHtml(foot)}</p>
+  </main>
+</body>
+</html>
+`
+}
+
+/**
+ * HTML bridge after a cross-site GitHub OAuth callback.
+ *
+ * The session cookie is `SameSite=Strict`. A 302/303 from the GitHub redirect
+ * chain often fails to attach that cookie to the follow-up request for `/`, so
+ * the operator lands back on `/login` despite a successful callback. Serving a
+ * same-origin document first, then navigating to `/` via meta refresh / link,
+ * makes the cookie first-party for the home request.
+ *
+ * @param title - product title shown on the bridge page.
+ * @returns a complete HTML document.
+ */
+export function renderOAuthContinuePage(title: string): string {
+  const safeTitle = escapeHtml(title)
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="refresh" content="0;url=/">
+<title>Signed in · ${safeTitle}</title>
+<style>${styles()}
+</style>
+</head>
+<body>
+  <main class="card">
+    <h1>${safeTitle}</h1>
+    <p class="sub">Sign-in succeeded. Continuing…</p>
+    <a class="btn" href="/">Continue</a>
+    <p class="foot">If nothing happens, use the button above.</p>
   </main>
 </body>
 </html>

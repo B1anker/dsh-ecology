@@ -77,12 +77,13 @@ import {
   isFormPost,
   readBody,
   sendHtml,
+  sendJson,
   sendJsonError,
   sendRedirect,
 } from './http.js'
 import { createKdfGate } from './kdf-gate.js'
 import { createOAuthStateStore } from './oauth-state.js'
-import { type LoginPageMode, renderLoginPage } from './page.js'
+import { type LoginPageMode, renderLoginPage, renderOAuthContinuePage } from './page.js'
 import { createSessionStore, PASSWORD_PRINCIPAL, type SessionPrincipal } from './sessions.js'
 import type { PluginContext, RouteHandler, WebServerService } from './types.js'
 import { requireVerifier, verifyPassword } from './verifier.js'
@@ -107,10 +108,12 @@ export const READY_SERVICE = 'dshWebLoginReady'
 /** Paths the gate owns, which must stay reachable while signed out. */
 const LOGIN_PATH = '/login'
 const LOGOUT_PATH = '/logout'
+const SESSION_PATH = '/auth/session'
 const GITHUB_LOGIN_PATH = '/auth/github/login'
 const GITHUB_CALLBACK_PATH = '/auth/github/callback'
 const GITHUB_ENROLL_PATH = '/auth/github/enroll'
 const GITHUB_INVITATION_PATH = '/auth/github/invitation'
+const CONTINUE_PATH = '/auth/continue'
 const RECOVERY_PATH = '/auth/recovery'
 
 /** Exact anonymous paths the gate may leave unguarded. */
@@ -123,6 +126,28 @@ const ANON_EXACT_PATHS = new Set([
   RECOVERY_PATH,
 ])
 
+/**
+ * Public SPA chrome assets served through the fallback seat.
+ *
+ * The browser requests these without credentials from a signed-out tab (and
+ * sometimes even after sign-in when the link is in index.html). Blocking them
+ * only yields console 401 noise; the files carry no secrets.
+ */
+const ANON_STATIC_PATHS = new Set(['/manifest.webmanifest', '/favicon.svg', '/favicon.ico'])
+
+/**
+ * Read the request pathname for anonymous-asset checks.
+ * @param req - incoming request.
+ * @returns pathname, or empty string when the URL cannot be parsed.
+ */
+function requestPathname(req: IncomingMessage): string {
+  try {
+    return new URL(req.url ?? '/', 'http://127.0.0.1').pathname
+  } catch {
+    return ''
+  }
+}
+
 /** Where a successful sign-in lands. Fixed, so there is no redirect parameter to poison. */
 const HOME_PATH = '/'
 
@@ -133,7 +158,7 @@ const MSG = Object.freeze({
   notAllowed: 'This GitHub account is not allowed.',
   unavailable: 'GitHub sign-in is temporarily unavailable.',
   maintenance: 'Sign-in is temporarily unavailable. Contact the host administrator.',
-  enrollNeeded: 'Sign in with the access password, then bind your GitHub account.',
+  enrollNeeded: 'Sign in with the access password. You can bind GitHub next, or skip.',
 })
 
 /**
@@ -213,7 +238,8 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     if (!options.githubEnabled) return 'password'
     if (lifecycle === 'invalid') return 'maintenance'
     if (lifecycle === 'bootstrap') return 'password'
-    return 'github'
+    // Owner exists: offer GitHub and the shared password as equal choices.
+    return 'choice'
   }
 
   /**
@@ -224,10 +250,12 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     if (record === undefined) return undefined
     if (!options.githubEnabled) return record.principal
     const principal = record.principal
+    // Password sessions unlock the surface after the operator skips binding, or
+    // when they choose password on the post-enroll choice page.
+    if (principal.provider === 'password') return principal
     if (principal.provider === 'password-bootstrap' || principal.provider === 'recovery') {
-      // Bootstrap/recovery sessions are only useful before an owner exists, or
-      // during an open recovery window. They never unlock the full surface alone
-      // once GitHub is the daily path — but they *do* unlock enroll.
+      // Bootstrap/recovery sessions reach the enroll/continue surface only —
+      // they do not unlock the rest of DSH until the operator binds or skips.
       if (lifecycle === 'invalid') return undefined
       return principal
     }
@@ -242,8 +270,8 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   const isAuthenticated = (req: IncomingMessage): boolean => {
     const principal = readPrincipal(req)
     if (principal === undefined) return false
-    // Bootstrap/recovery principals may reach enroll and the login page, but
-    // must not unlock the rest of DSH until a GitHub owner session exists.
+    // Bootstrap/recovery principals may reach enroll/continue, but must not
+    // unlock the rest of DSH until the operator binds GitHub or skips.
     if (
       options.githubEnabled &&
       (principal.provider === 'password-bootstrap' || principal.provider === 'recovery')
@@ -261,6 +289,29 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     )
   }
 
+  const isEnrollEligibleSession = (req: IncomingMessage): boolean => {
+    const principal = readPrincipal(req)
+    if (principal === undefined) return false
+    if (principal.provider === 'password-bootstrap' || principal.provider === 'recovery') {
+      return true
+    }
+    // Password sessions that skipped binding can still enroll while no owner exists.
+    return (
+      principal.provider === 'password' &&
+      (lifecycle === 'bootstrap' || lifecycle === 'recovery')
+    )
+  }
+
+  const isEnrollEligiblePrincipal = (principal: SessionPrincipal): boolean => {
+    if (principal.provider === 'password-bootstrap' || principal.provider === 'recovery') {
+      return true
+    }
+    return (
+      principal.provider === 'password' &&
+      (lifecycle === 'bootstrap' || lifecycle === 'recovery')
+    )
+  }
+
   /**
    * Issue a session cookie and redirect home.
    */
@@ -273,6 +324,31 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     if (id === null) return false
     if (priorSessionId !== undefined) sessions.revoke(priorSessionId)
     sendRedirect(res, 303, HOME_PATH, {
+      'set-cookie': serializeSessionCookie(id, {
+        maxAgeSeconds: options.sessionTtlMs / 1000,
+        secure: options.secureCookie,
+      }),
+    })
+    return true
+  }
+
+  /**
+   * Admit after a GitHub OAuth callback without a cross-site 303.
+   *
+   * GitHub → `/auth/github/callback` is a cross-site top-level navigation. A
+   * `SameSite=Strict` cookie set on that response is often omitted from the
+   * immediate redirect follow to `/`, which looks like “login succeeded but
+   * I’m still on the login page.” Serve a same-origin bridge document instead.
+   */
+  const admitFromOAuth = (
+    res: ServerResponse,
+    principal: SessionPrincipal,
+    priorSessionId?: string,
+  ): boolean => {
+    const id = sessions.open(principal)
+    if (id === null) return false
+    if (priorSessionId !== undefined) sessions.revoke(priorSessionId)
+    sendHtml(res, 200, renderOAuthContinuePage(options.title), {
       'set-cookie': serializeSessionCookie(id, {
         maxAgeSeconds: options.sessionTtlMs / 1000,
         secure: options.secureCookie,
@@ -312,9 +388,12 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     if (route.kind === 'exact' && ANON_EXACT_PATHS.has(route.path)) {
       return originalRegister(route)
     }
-    // Enroll requires a bootstrap session, not a full gate pass — register it
-    // unguarded and enforce bootstrap inside the handler.
-    if (route.kind === 'exact' && route.path === GITHUB_ENROLL_PATH) {
+    // Enroll/continue require a bootstrap session, not a full gate pass —
+    // register them unguarded and enforce the session check inside the handler.
+    if (
+      route.kind === 'exact' &&
+      (route.path === GITHUB_ENROLL_PATH || route.path === CONTINUE_PATH)
+    ) {
       return originalRegister(route)
     }
     return originalRegister({
@@ -342,7 +421,17 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     })
 
   const decoratedRegisterFallback: WebServerService['registerFallback'] = (handler) =>
-    originalRegisterFallback(guard(handler))
+    originalRegisterFallback(async (req, res) => {
+      if (isAuthenticated(req) || ANON_STATIC_PATHS.has(requestPathname(req))) {
+        await handler(req, res)
+        return
+      }
+      if (isDocumentNavigation(req)) {
+        sendRedirect(res, 302, LOGIN_PATH)
+        return
+      }
+      sendJsonError(res, 401, 'unauthenticated')
+    })
 
   // Cordis exposes service members through a function proxy. Reading a member
   // after assigning it therefore returns a proxy around our wrapper, not the
@@ -503,18 +592,16 @@ export function apply(ctx: PluginContext, config?: unknown): void {
             return
           }
 
-          // Active GitHub mode refuses network password login.
-          if (options.githubEnabled && lifecycle !== 'bootstrap') {
+          // Maintenance refuses network password login; otherwise password stays
+          // available even after a GitHub owner is enrolled (choice page).
+          if (options.githubEnabled && lifecycle === 'invalid') {
             sendHtml(
               res,
               403,
               renderLoginPage({
                 title: options.title,
-                mode: pageModeForAnonymous(),
-                message:
-                  lifecycle === 'invalid'
-                    ? MSG.maintenance
-                    : 'Password sign-in is disabled. Use GitHub.',
+                mode: 'maintenance',
+                message: MSG.maintenance,
               }),
             )
             return
@@ -529,7 +616,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
               429,
               renderLoginPage({
                 title: options.title,
-                mode: 'password',
+                mode: pageModeForAnonymous() === 'choice' ? 'choice' : 'password',
                 message: `Too many failed attempts. Try again in ${seconds} second(s).`,
               }),
               { 'retry-after': String(seconds) },
@@ -565,6 +652,9 @@ export function apply(ctx: PluginContext, config?: unknown): void {
             return
           }
 
+          const failMode: LoginPageMode =
+            pageModeForAnonymous() === 'choice' ? 'choice' : 'password'
+
           if (!matched) {
             const waitMs = limiter.fail(key)
             ctx.logger.warn(`dsh-web-login: failed attempt from ${key}`)
@@ -575,7 +665,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
                 429,
                 renderLoginPage({
                   title: options.title,
-                  mode: 'password',
+                  mode: failMode,
                   message: `Too many failed attempts. Try again in ${seconds} second(s).`,
                 }),
                 { 'retry-after': String(seconds) },
@@ -587,16 +677,20 @@ export function apply(ctx: PluginContext, config?: unknown): void {
               401,
               renderLoginPage({
                 title: options.title,
-                mode: 'password',
+                mode: failMode,
                 message: 'Incorrect password. Please try again.',
               }),
             )
             return
           }
 
-          const principal: SessionPrincipal = options.githubEnabled
-            ? { provider: 'password-bootstrap', role: 'owner', authzVersion: 0 }
-            : PASSWORD_PRINCIPAL
+          // Before an owner is bound, password mint a bootstrap session that
+          // only unlocks the enroll/continue page. After enroll, password is a
+          // full daily sign-in choice alongside GitHub.
+          const principal: SessionPrincipal =
+            options.githubEnabled && (lifecycle === 'bootstrap' || lifecycle === 'recovery')
+              ? { provider: 'password-bootstrap', role: 'owner', authzVersion: 0 }
+              : PASSWORD_PRINCIPAL
           const id = sessions.open(principal)
           if (id === null) {
             ctx.logger.warn('dsh-web-login: session capacity reached; refusing new sign-in')
@@ -605,7 +699,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
               503,
               renderLoginPage({
                 title: options.title,
-                mode: 'password',
+                mode: failMode,
                 message: 'Too many active sessions. Try again later.',
               }),
               { 'retry-after': '60' },
@@ -614,7 +708,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
           }
 
           limiter.succeed(key)
-          if (options.githubEnabled) {
+          if (principal.provider === 'password-bootstrap') {
             // Land on the enroll affordance rather than the guarded home.
             sendRedirect(res, 303, LOGIN_PATH, {
               'set-cookie': serializeSessionCookie(id, {
@@ -654,6 +748,80 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     'dsh-web-login: /logout route',
   )
 
+  ctx.effect(
+    () =>
+      server.register({
+        kind: 'exact',
+        path: SESSION_PATH,
+        handler: (req, res) => {
+          if (req.method !== 'GET' && req.method !== 'HEAD') {
+            sendJsonError(res, 405, 'method_not_allowed', { allow: 'GET, HEAD' })
+            return
+          }
+          const principal = readPrincipal(req)
+          if (principal === undefined || !isAuthenticated(req)) {
+            sendJsonError(res, 401, 'unauthenticated')
+            return
+          }
+          const sessionId = readCookie(req.headers.cookie, cookieName)
+          const record = sessions.get(sessionId)
+          if (record === undefined) {
+            sendJsonError(res, 401, 'unauthenticated')
+            return
+          }
+
+          const canBindGitHub =
+            options.githubEnabled &&
+            (lifecycle === 'bootstrap' || lifecycle === 'recovery') &&
+            isEnrollEligiblePrincipal(principal)
+
+          let enrolledAt: string | null = null
+          let lastLoginAt: string | null = null
+          if (authDocument !== null) {
+            const user =
+              principal.githubUserId !== undefined
+                ? findActiveUser(authDocument, principal.githubUserId)
+                : authDocument.users.find(
+                    (entry) => entry.role === 'owner' && entry.status === 'active',
+                  )
+            if (user !== undefined) {
+              enrolledAt = user.enrolledAt
+              if (principal.provider === 'github') {
+                lastLoginAt = user.lastLoginAt ?? null
+              }
+            }
+          }
+
+          const status = !options.githubEnabled
+            ? 'password_only'
+            : canBindGitHub || lifecycle === 'bootstrap' || lifecycle === 'recovery'
+              ? 'awaiting_github_bind'
+              : 'github_bound'
+
+          const now = Date.now()
+          sendJson(res, 200, {
+            provider: principal.provider,
+            role: principal.role,
+            githubUserId: principal.githubUserId ?? null,
+            githubLogin: principal.githubLogin ?? null,
+            githubEnabled: options.githubEnabled,
+            canBindGitHub,
+            status,
+            enrolledAt,
+            lastLoginAt,
+            sessionExpiresAt: new Date(record.expiresAt).toISOString(),
+            sessionRemainingMs: Math.max(0, record.expiresAt - now),
+            // Client ID is public by design. Application numeric id is optional
+            // config — GitHub never returns it from Client ID alone.
+            githubClientId: githubCredentials?.clientId ?? null,
+            githubOAuthAppId:
+              options.githubOAuthAppId > 0 ? options.githubOAuthAppId : null,
+          })
+        },
+      }),
+    'dsh-web-login: /auth/session',
+  )
+
   if (options.githubEnabled && githubCredentials !== undefined) {
     const credentials = githubCredentials
 
@@ -683,7 +851,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
               sendRedirect(res, 302, LOGIN_PATH)
               return
             }
-            beginOAuth(res, { intent: 'login', mode: 'github' })
+            beginOAuth(res, { intent: 'login', mode: 'choice' })
           },
         }),
       'dsh-web-login: /auth/github/login',
@@ -695,8 +863,10 @@ export function apply(ctx: PluginContext, config?: unknown): void {
           kind: 'exact',
           path: GITHUB_ENROLL_PATH,
           handler: (req, res) => {
-            if (req.method !== 'POST') {
-              sendJsonError(res, 405, 'method_not_allowed', { allow: 'POST' })
+            // GET link (not form POST): avoids CSP form-action blocking the
+            // browser from following the redirect to github.com.
+            if (req.method !== 'GET' && req.method !== 'HEAD') {
+              sendJsonError(res, 405, 'method_not_allowed', { allow: 'GET, HEAD' })
               return
             }
             if (lifecycle !== 'bootstrap' && lifecycle !== 'recovery') {
@@ -707,6 +877,51 @@ export function apply(ctx: PluginContext, config?: unknown): void {
                   title: options.title,
                   mode: pageModeForAnonymous(),
                   message: 'Owner binding is not available in the current state.',
+                }),
+              )
+              return
+            }
+            if (!isEnrollEligibleSession(req)) {
+              sendHtml(
+                res,
+                401,
+                renderLoginPage({
+                  title: options.title,
+                  mode: 'password',
+                  message: MSG.enrollNeeded,
+                }),
+              )
+              return
+            }
+            const sessionId = readCookie(req.headers.cookie, cookieName)
+            beginOAuth(res, {
+              intent: 'enroll-owner',
+              initiatorSessionId: typeof sessionId === 'string' ? sessionId : undefined,
+              mode: 'enroll',
+            })
+          },
+        }),
+      'dsh-web-login: /auth/github/enroll',
+    )
+
+    ctx.effect(
+      () =>
+        server.register({
+          kind: 'exact',
+          path: CONTINUE_PATH,
+          handler: (req, res) => {
+            if (req.method !== 'POST') {
+              sendJsonError(res, 405, 'method_not_allowed', { allow: 'POST' })
+              return
+            }
+            if (lifecycle === 'invalid') {
+              sendHtml(
+                res,
+                503,
+                renderLoginPage({
+                  title: options.title,
+                  mode: 'maintenance',
+                  message: MSG.maintenance,
                 }),
               )
               return
@@ -729,14 +944,23 @@ export function apply(ctx: PluginContext, config?: unknown): void {
               )
               return
             }
-            beginOAuth(res, {
-              intent: 'enroll-owner',
-              initiatorSessionId: typeof sessionId === 'string' ? sessionId : undefined,
-              mode: 'enroll',
-            })
+            if (
+              !admit(res, PASSWORD_PRINCIPAL, typeof sessionId === 'string' ? sessionId : undefined)
+            ) {
+              sendHtml(
+                res,
+                503,
+                renderLoginPage({
+                  title: options.title,
+                  mode: 'enroll',
+                  message: 'Too many active sessions. Try again later.',
+                }),
+                { 'retry-after': '60' },
+              )
+            }
           },
         }),
-      'dsh-web-login: /auth/github/enroll',
+      'dsh-web-login: /auth/continue',
     )
 
     ctx.effect(
@@ -831,8 +1055,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
                   const initiator = sessions.get(pending.initiatorSessionId)
                   if (
                     initiator === undefined ||
-                    (initiator.principal.provider !== 'password-bootstrap' &&
-                      initiator.principal.provider !== 'recovery')
+                    !isEnrollEligiblePrincipal(initiator.principal)
                   ) {
                     sendHtml(
                       res,
@@ -875,7 +1098,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
                 sessions.revokeAll()
                 await clearRecoveryRecord(options.recoveryFile).catch(() => undefined)
                 ctx.logger.info(`dsh-web-login: enrolled GitHub owner id=${user.id}`)
-                const admitted = admit(res, {
+                const admitted = admitFromOAuth(res, {
                   provider: 'github',
                   githubUserId: user.id,
                   githubLogin: user.login,
@@ -888,7 +1111,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
                     503,
                     renderLoginPage({
                       title: options.title,
-                      mode: 'github',
+                      mode: 'choice',
                       message: 'Too many active sessions. Try again later.',
                     }),
                     { 'retry-after': '60' },
@@ -918,7 +1141,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
                   403,
                   renderLoginPage({
                     title: options.title,
-                    mode: 'github',
+                    mode: 'choice',
                     message: MSG.notAllowed,
                   }),
                 )
@@ -941,7 +1164,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
               }
 
               ctx.logger.info(`dsh-web-login: GitHub login id=${user.id}`)
-              const admitted = admit(res, {
+              const admitted = admitFromOAuth(res, {
                 provider: 'github',
                 githubUserId: user.id,
                 githubLogin: user.login,
@@ -954,7 +1177,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
                   503,
                   renderLoginPage({
                     title: options.title,
-                    mode: 'github',
+                    mode: 'choice',
                     message: 'Too many active sessions. Try again later.',
                   }),
                   { 'retry-after': '60' },

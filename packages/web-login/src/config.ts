@@ -58,6 +58,9 @@ export const DEFAULTS = Object.freeze({
   githubMaxPendingStates: 1000,
   githubRequestTimeoutMs: 10_000,
   githubMaxConcurrentCallbacks: 4,
+  // Numeric id from https://github.com/settings/applications/{id}. Client ID
+  // alone cannot deep-link that page; 0 means "not configured".
+  githubOAuthAppId: 0,
   authorizationFile: '',
   recoveryFile: '',
   recoveryTtlMs: 10 * 60 * 1000,
@@ -126,6 +129,7 @@ type NumericKey =
   | 'githubMaxPendingStates'
   | 'githubRequestTimeoutMs'
   | 'githubMaxConcurrentCallbacks'
+  | 'githubOAuthAppId'
   | 'recoveryTtlMs'
 
 /** Inclusive bounds for the numeric settings. */
@@ -157,6 +161,8 @@ const RANGES: Readonly<Record<NumericKey, readonly [number, number]>> = Object.f
   githubMaxPendingStates: [1, 100000],
   githubRequestTimeoutMs: [1000, 60 * 1000],
   githubMaxConcurrentCallbacks: [1, 64],
+  // 0 = unset. Positive values deep-link https://github.com/settings/applications/{id}.
+  githubOAuthAppId: [0, Number.MAX_SAFE_INTEGER],
   recoveryTtlMs: [60 * 1000, 60 * 60 * 1000],
 })
 
