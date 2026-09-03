@@ -1,6 +1,6 @@
 {
   "name": "@seaveyon/dsh-web-login",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Cookie-session login gate for the dsh Web surface, with optional GitHub OAuth identity",
   "keywords": [
     "dsh",

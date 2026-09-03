@@ -1,3 +1,17 @@
+# [0.4.0](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.3.0...web-login-v0.4.0) (2026-09-03)
+
+
+### Bug Fixes
+
+* **web-login:** resolve oxlint errors blocking CI ([6913bf7](https://github.com/B1anker/dsh-ecology/commit/6913bf7355289b4557a3880784cf6d56614cb95e))
+
+
+### Features
+
+* **web-login:** add optional GitHub OAuth owner identity ([b65de48](https://github.com/B1anker/dsh-ecology/commit/b65de4839eec3c51187d8b0f3276fed901f4ae35))
+* **web-login:** add settings account panel and OAuth UX polish ([bb4e0df](https://github.com/B1anker/dsh-ecology/commit/bb4e0dfc86c26d9de0c5f77d3883a043f362b47d))
+* **web-login:** restart dsh web after password hash changes ([384a03c](https://github.com/B1anker/dsh-ecology/commit/384a03cb0304a28a187323312cac089b863ce616))
+
 # [0.3.0](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.2.0...web-login-v0.3.0) (2026-09-02)
 
 
