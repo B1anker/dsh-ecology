@@ -297,8 +297,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     }
     // Password sessions that skipped binding can still enroll while no owner exists.
     return (
-      principal.provider === 'password' &&
-      (lifecycle === 'bootstrap' || lifecycle === 'recovery')
+      principal.provider === 'password' && (lifecycle === 'bootstrap' || lifecycle === 'recovery')
     )
   }
 
@@ -307,8 +306,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
       return true
     }
     return (
-      principal.provider === 'password' &&
-      (lifecycle === 'bootstrap' || lifecycle === 'recovery')
+      principal.provider === 'password' && (lifecycle === 'bootstrap' || lifecycle === 'recovery')
     )
   }
 
@@ -814,8 +812,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
             // Client ID is public by design. Application numeric id is optional
             // config — GitHub never returns it from Client ID alone.
             githubClientId: githubCredentials?.clientId ?? null,
-            githubOAuthAppId:
-              options.githubOAuthAppId > 0 ? options.githubOAuthAppId : null,
+            githubOAuthAppId: options.githubOAuthAppId > 0 ? options.githubOAuthAppId : null,
           })
         },
       }),
@@ -1053,10 +1050,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
                 }
                 if (pending.initiatorSessionId !== undefined) {
                   const initiator = sessions.get(pending.initiatorSessionId)
-                  if (
-                    initiator === undefined ||
-                    !isEnrollEligiblePrincipal(initiator.principal)
-                  ) {
+                  if (initiator === undefined || !isEnrollEligiblePrincipal(initiator.principal)) {
                     sendHtml(
                       res,
                       401,

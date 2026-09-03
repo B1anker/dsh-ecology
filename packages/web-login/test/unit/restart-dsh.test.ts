@@ -1,5 +1,5 @@
 import { expect, test } from '@rstest/core'
-import { isDshWebCommand, splitCommandLine, spawnDetached } from '../../src/restart-dsh.js'
+import { isDshWebCommand, spawnDetached, splitCommandLine } from '../../src/restart-dsh.js'
 
 test('isDshWebCommand recognizes web boots and ignores helpers', () => {
   expect(isDshWebCommand('dsh web')).toBe(true)

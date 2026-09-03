@@ -10,18 +10,9 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { lstatSync, readFileSync } from 'node:fs'
-import {
-  chmod,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rename,
-  rm,
-  writeFile,
-} from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { resolveDshHome, type EnvLike } from './env-file.js'
+import { type EnvLike, resolveDshHome } from './env-file.js'
 
 /** Current on-disk schema version. */
 export const AUTHORIZATION_SCHEMA_VERSION = 1
@@ -374,10 +365,7 @@ export function readSecureTextSync(path: string, maxBytes: number): string | nul
  */
 export async function loadAuthorizationDocument(
   path: string,
-): Promise<
-  | { ok: true; document: AuthorizationDocument | null }
-  | { ok: false; reason: string }
-> {
+): Promise<{ ok: true; document: AuthorizationDocument | null } | { ok: false; reason: string }> {
   let raw: string | null
   try {
     raw = await readSecureText(path, MAX_AUTHORIZATION_BYTES)

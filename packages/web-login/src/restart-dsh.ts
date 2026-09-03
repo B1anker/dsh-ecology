@@ -9,9 +9,8 @@
  * @module @seaveyon/dsh-web-login/restart-dsh
  */
 
-import { execFile } from 'node:child_process'
-import { openSync, closeSync } from 'node:fs'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { closeSync, openSync } from 'node:fs'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)

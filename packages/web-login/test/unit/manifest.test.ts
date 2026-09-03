@@ -16,7 +16,10 @@ const manifest = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
 ) as {
   bin: Record<string, string>
-  dsh: { bundle: { patch: string }; client?: { platform: string; inject: unknown[]; immediately: boolean } }
+  dsh: {
+    bundle: { patch: string }
+    client?: { platform: string; inject: unknown[]; immediately: boolean }
+  }
   exports: Record<string, unknown>
   files: string[]
 }

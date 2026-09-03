@@ -26,10 +26,7 @@ export function apply(ctx: ClientContext): void {
   const locale = ctx.locale ?? ctx.get('locale')
   if (slots === undefined || locale === undefined) return
 
-  ctx.effect?.(
-    () => locale.register(LOCALE_NS, DICTS),
-    'dsh-web-login: account dictionaries',
-  )
+  ctx.effect?.(() => locale.register(LOCALE_NS, DICTS), 'dsh-web-login: account dictionaries')
 
   const t = locale.bind(LOCALE_NS)
   const Panel = (props: { t?: typeof t }) =>

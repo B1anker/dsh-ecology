@@ -331,7 +331,8 @@ ${renderPasswordForm({ autofocus: false })}`,
       }
     case 'enroll':
       return {
-        subtitle: 'Bind your GitHub account as the owner of this host, or continue with the password.',
+        subtitle:
+          'Bind your GitHub account as the owner of this host, or continue with the password.',
         // GET (not a form POST): CSP form-action 'self' would otherwise block the
         // browser from following the OAuth redirect to github.com.
         action: `    <a class="btn" href="/auth/github/enroll">Bind GitHub account</a>

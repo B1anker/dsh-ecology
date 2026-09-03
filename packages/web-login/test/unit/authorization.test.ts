@@ -16,7 +16,11 @@ import {
 } from '../../src/authorization.js'
 
 test('parseAuthorizationDocument accepts a valid owner document', () => {
-  const document = createOwnerDocument({ githubUserId: 1, login: 'owner', enrolledAt: '2026-01-01T00:00:00.000Z' })
+  const document = createOwnerDocument({
+    githubUserId: 1,
+    login: 'owner',
+    enrolledAt: '2026-01-01T00:00:00.000Z',
+  })
   const raw = `${JSON.stringify(document)}\n`
   const parsed = parseAuthorizationDocument(raw)
   expect(parsed).toEqual({ ok: true, document })
@@ -45,9 +49,10 @@ test('parseAuthorizationDocument rejects duplicates, missing owners, and bad sch
       }),
     ).ok,
   ).toBe(false)
-  expect(parseAuthorizationDocument(JSON.stringify({ schemaVersion: 99, authzVersion: 1, users: [] })).ok).toBe(
-    false,
-  )
+  expect(
+    parseAuthorizationDocument(JSON.stringify({ schemaVersion: 99, authzVersion: 1, users: [] }))
+      .ok,
+  ).toBe(false)
 })
 
 test('resolveLifecycle distinguishes bootstrap, active, recovery, and invalid', () => {
