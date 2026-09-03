@@ -140,6 +140,63 @@ const PACKAGES = {
     },
   },
 
+  '@seaveyon/dsh-pet': {
+    // client.js is a browser artifact: its first statement touches `window`,
+    // so importing it in Node fails by design. It is exercised below as text
+    // (envelope assertion) instead of as a module.
+    skip: ['client.js'],
+    /**
+     * @param _dist - file URL of the extracted `dist/` directory.
+     * @param root - filesystem path of the extracted package.
+     * @param entry - package namespace resolved through the public exports map.
+     * @param manifest - extracted package.json.
+     * @returns a description of what was exercised.
+     */
+    async check(_dist, root, entry, manifest) {
+      const { apply, name } = entry
+      if (typeof apply !== 'function') throw new Error('apply is not a function')
+      if (name !== 'dsh-pet') throw new Error(`name is ${name}`)
+
+      // The client bundle is the whole product; the host entry is a no-op that
+      // exists so the Loader row has something to activate. What can be proven
+      // here is the envelope the shell's module loader requires.
+      const clientRel = manifest.exports?.['./client']?.default
+      if (clientRel !== './dist/client.js') throw new Error(`./client export is ${clientRel}`)
+      const bundle = await readFile(join(root, 'dist', 'client.js'), 'utf8')
+      if (!bundle.startsWith('window.__ModuleLoader__.load({')) {
+        throw new Error('client bundle lost its __ModuleLoader__ envelope')
+      }
+      // The shell rejects a bundle whose registration id differs from the
+      // Loader entry name ("loaded without registering <id>"), and this is the
+      // check that keeps a scoped rename from shipping that failure again.
+      if (!bundle.includes('id: "@seaveyon/dsh-pet"')) {
+        throw new Error('client bundle registers the wrong module id')
+      }
+      if (!bundle.includes('require("react")')) {
+        throw new Error('client bundle no longer externalizes react')
+      }
+
+      const client = manifest.dsh?.client
+      if (client?.platform !== 'web' || client?.immediately !== true) {
+        throw new Error(`unexpected dsh.client declaration ${JSON.stringify(client)}`)
+      }
+
+      // The discovery row: without it the client module system never serves
+      // the bundle, and the plugin is an invisible dependency.
+      const declaredPatch = manifest.dsh?.bundle?.patch
+      if (declaredPatch !== './cordis.patch.yml') {
+        throw new Error(`unexpected dsh.bundle.patch ${declaredPatch}`)
+      }
+      const patch = load(await readFile(join(root, declaredPatch), 'utf8'))
+      if (!Array.isArray(patch)) throw new Error('bundle patch is not a top-level array')
+      const inserted = patch.flatMap((item) => (Array.isArray(item?.insert) ? item.insert : []))
+      const pet = inserted.find((row) => row?.id === 'dsh-pet')
+      if (pet?.name !== '@seaveyon/dsh-pet') throw new Error('bundle plugin row')
+
+      return 'public export, client bundle envelope, dsh.client manifest, discovery patch row'
+    },
+  },
+
   '@seaveyon/dsh-plugin-testkit': {
     // The contract suites declare tests, so they import @rstest/core — an
     // optional peer that is deliberately absent here. Everything a consumer can

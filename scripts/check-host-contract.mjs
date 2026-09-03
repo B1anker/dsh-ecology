@@ -36,11 +36,35 @@ const CONTRACT = [
     package: '@deepseek-ai/dsh-host-webserver',
     members: ['register', 'registerUpgrade', 'registerFallback'],
     why: 'the gate wraps all three to guard routes registered after it loads',
+    fix: 'packages/web-login/src/types.ts and the tested-version notes in its README.md and SECURITY.md',
   },
   {
     package: '@deepseek-ai/cordis',
     members: ['effect', 'provide'],
     why: 'disposal and the dshWebLoginReady readiness service depend on them',
+    fix: 'packages/web-login/src/types.ts and the tested-version notes in its README.md and SECURITY.md',
+  },
+  // The pet's client half binds to the shell's browser-side services, whose
+  // packages are likewise absent from the public registry. Same rule: checked
+  // where installed, skipped (loudly) everywhere else.
+  {
+    package: '@deepseek-ai/dsh-client-runtime',
+    members: [
+      'currentProvideInfo',
+      'running',
+      'runningCalls',
+      'pending',
+      'turnEnds',
+      'lastAgentError',
+    ],
+    why: 'the pet reads live agent state from sessions.currentProvideInfo and these ConversationSnapshot members',
+    fix: 'packages/pet/src/client/host-types.ts and the contract notes in its header comment',
+  },
+  {
+    package: '@deepseek-ai/dsh-client-ui-settings',
+    members: ['settingsScope', 'SettingsScopeBinder'],
+    why: 'the pet persists its configuration through the settingsScope binder',
+    fix: 'packages/pet/src/client/host-types.ts and the contract notes in its header comment',
   },
 ]
 
@@ -117,14 +141,13 @@ for (const entry of CONTRACT) {
   console.error(
     `FAIL  ${entry.package}@${manifest.version} no longer declares ${missing.join(', ')}\n` +
       `      ${entry.why}\n` +
-      '      Update packages/web-login/src/types.ts and the tested-version notes ' +
-      'in README.md and SECURITY.md.',
+      `      Update ${entry.fix}.`,
   )
 }
 
 if (checked === 0) {
   console.log(
-    '\nNothing to check. Both host packages are optional peers, and the targeted\n' +
+    '\nNothing to check. The host packages are optional peers, and the targeted\n' +
       'version is not on the public registry, so this is the expected result in a\n' +
       'normal checkout. Install them alongside the workspace to make this check real.',
   )

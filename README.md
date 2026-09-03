@@ -9,7 +9,8 @@ endorsed by DeepSeek AI.
 | Package | Version | Description |
 | --- | --- | --- |
 | [`@seaveyon/dsh-web-login`](packages/web-login) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-web-login.svg)](https://www.npmjs.com/package/@seaveyon/dsh-web-login) | Cookie-session login gate for the DSH Web surface, replacing a reverse proxy's HTTP Basic prompt with a styled sign-in page. |
-| [`@seaveyon/dsh-plugin-testkit`](packages/plugin-testkit) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-plugin-testkit.svg)](https://www.npmjs.com/package/@seaveyon/dsh-plugin-testkit) | Test doubles for the `webServer` registry, Cordis context events, and a minimal tools pipeline, plus the conformance suites that keep them honest. |
+| [`@seaveyon/dsh-plugin-testkit`](packages/plugin-testkit) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-plugin-testkit.svg)](https://www.npmjs.com/package/@seaveyon/dsh-plugin-testkit) | Test doubles for the `webServer` registry, Cordis context events, a minimal tools pipeline, and the shell's client-side services, plus the conformance suites that keep them honest. |
+| [`@seaveyon/dsh-pet`](packages/pet) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-pet.svg)](https://www.npmjs.com/package/@seaveyon/dsh-pet) | A desktop pet for the DSH Web surface: hand-crafted sprites whose mood follows the live agent state, installable with one command. |
 
 Each package is independently versioned and published; the workspace exists to
 share one toolchain, not to release them together.

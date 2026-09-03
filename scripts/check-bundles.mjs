@@ -1,11 +1,16 @@
 /**
- * Validate this workspace's installable Web-login bundle without booting DSH.
+ * Validate this workspace's installable bundles without booting DSH.
  *
  * This is intentionally separate from `npm pack --dry-run`: npm will happily
  * pack a manifest whose `dsh.bundle.patch` names a file that is not in the
  * tarball, and it does not know that Loader patch fields replace whole values.
- * The fixture below encodes the four route-owner rows in the rc.7/rc.8 Web
- * profile, then applies the same field-replacement subset this bundle uses.
+ *
+ * The web-login fixture below encodes the four route-owner rows in the
+ * rc.7/rc.8 Web profile, then applies the same field-replacement subset that
+ * bundle uses. The pet fixture is simpler: the pet's row only has to exist,
+ * because the client module system discovers client bundles by scanning the
+ * Loader's active entries — a row that fails to insert makes the plugin an
+ * invisible dependency.
  *
  * A real `dsh --dump-config` remains the stronger compatibility test. This
  * check is the fast, dependency-light release gate that catches a missing
@@ -18,25 +23,47 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { load } from 'js-yaml'
 
+/** Refuse with one release-oriented diagnostic. */
+function assert(condition, message) {
+  if (!condition) throw new Error(message)
+}
+
+/**
+ * Read and parse a package's bundle patch.
+ *
+ * @param packageDir - URL of the package directory.
+ * @param manifest - the package's parsed package.json.
+ * @param label - diagnostic prefix.
+ * @returns the parsed top-level patch array.
+ */
+async function readPatch(packageDir, manifest, label) {
+  assert(
+    manifest.dsh?.bundle?.patch === './cordis.patch.yml',
+    `${label}: unexpected dsh.bundle.patch`,
+  )
+  assert(
+    manifest.files?.includes('cordis.patch.yml'),
+    `${label}: cordis.patch.yml is absent from files`,
+  )
+  assert(
+    manifest.exports?.['./cordis.patch.yml'] === './cordis.patch.yml',
+    `${label}: cordis.patch.yml is absent from exports`,
+  )
+  const patchPath = join(fileURLToPath(packageDir), manifest.dsh.bundle.patch)
+  const patches = load(await readFile(patchPath, 'utf8'))
+  assert(Array.isArray(patches), `${label}: patch must be a top-level YAML array`)
+  return patches
+}
+
 const root = new URL('../packages/web-login/', import.meta.url)
 const manifest = JSON.parse(await readFile(new URL('package.json', root), 'utf8'))
 
 /** Refuse with one release-oriented diagnostic. */
-function assert(condition, message) {
+function assertLogin(condition, message) {
   if (!condition) throw new Error(`web-login bundle: ${message}`)
 }
 
-assert(manifest.dsh?.bundle?.patch === './cordis.patch.yml', 'unexpected dsh.bundle.patch')
-assert(manifest.files?.includes('cordis.patch.yml'), 'cordis.patch.yml is absent from files')
-assert(
-  manifest.exports?.['./cordis.patch.yml'] === './cordis.patch.yml',
-  'cordis.patch.yml is absent from exports',
-)
-
-const patchPath = join(fileURLToPath(root), manifest.dsh.bundle.patch)
-const source = await readFile(patchPath, 'utf8')
-const patches = load(source)
-assert(Array.isArray(patches), 'patch must be a top-level YAML array')
+const patches = await readPatch(root, manifest, 'web-login bundle')
 
 const initial = [
   {
@@ -58,7 +85,7 @@ const initial = [
 const rows = structuredClone(initial)
 const byId = new Map(rows.map((row) => [row.id, row]))
 for (const patch of patches) {
-  assert(typeof patch === 'object' && patch !== null, 'every patch entry must be a mapping')
+  assertLogin(typeof patch === 'object' && patch !== null, 'every patch entry must be a mapping')
   if (Array.isArray(patch.insert)) {
     for (const row of patch.insert) {
       rows.push(structuredClone(row))
@@ -66,9 +93,9 @@ for (const patch of patches) {
     }
     continue
   }
-  assert(typeof patch.id === 'string', 'a non-insert patch is missing id')
+  assertLogin(typeof patch.id === 'string', 'a non-insert patch is missing id')
   const target = byId.get(patch.id)
-  assert(target !== undefined, `patch targets unknown row ${patch.id}`)
+  assertLogin(target !== undefined, `patch targets unknown row ${patch.id}`)
   for (const [key, value] of Object.entries(patch)) {
     if (key !== 'id' && key !== 'name') target[key] = structuredClone(value)
   }
@@ -82,28 +109,59 @@ const expectedInject = {
 }
 for (const [id, expected] of Object.entries(expectedInject)) {
   const actual = byId.get(id)?.inject
-  assert(
+  assertLogin(
     JSON.stringify(actual) === JSON.stringify(expected),
     `${id} inject is ${JSON.stringify(actual)}`,
   )
 }
 
 for (const original of initial) {
-  assert(
+  assertLogin(
     JSON.stringify(byId.get(original.id)?.config) === JSON.stringify(original.config),
     `${original.id} config changed while adding readiness`,
   )
 }
 
 const login = byId.get('dsh-web-login')
-assert(
+assertLogin(
   login?.name === '@seaveyon/dsh-web-login',
   'plugin row is missing or names the wrong package',
 )
-assert(
+assertLogin(
   JSON.stringify(login.inject) === JSON.stringify(['webServer']),
   'plugin row must wait for webServer',
 )
-assert(login.config?.secureCookie === true, 'bundle must fail secure by default')
+assertLogin(login.config?.secureCookie === true, 'bundle must fail secure by default')
 
 console.log('ok    web-login bundle manifest, YAML, row insert, and readiness injections')
+
+// ── @seaveyon/dsh-pet ───────────────────────────────────────────────────────
+//
+// The pet has no route-owner interactions to simulate; its bundle promises are
+// the client declaration (what the shell reads to serve and load the browser
+// bundle) and the discovery row (without which the package never enters the
+// Loader's tree and the client module system never sees it).
+
+const petRoot = new URL('../packages/pet/', import.meta.url)
+const petManifest = JSON.parse(await readFile(new URL('package.json', petRoot), 'utf8'))
+
+const petClient = petManifest.dsh?.client
+assert(petClient?.platform === 'web', 'pet bundle: dsh.client.platform must be "web"')
+assert(
+  Array.isArray(petClient?.inject) && petClient.inject.length === 0,
+  'pet bundle: dsh.client.inject must be an empty array (service wiring lives in the bundle)',
+)
+assert(petClient?.immediately === true, 'pet bundle: dsh.client.immediately must be true')
+assert(
+  petManifest.exports?.['./client']?.default === './dist/client.js',
+  'pet bundle: ./client export must point at ./dist/client.js',
+)
+assert(petManifest.files?.includes('dist/'), 'pet bundle: dist/ is absent from files')
+
+const petPatches = await readPatch(petRoot, petManifest, 'pet bundle')
+const petRow = petPatches
+  .flatMap((patch) => (Array.isArray(patch?.insert) ? patch.insert : []))
+  .find((row) => row?.id === 'dsh-pet')
+assert(petRow?.name === '@seaveyon/dsh-pet', 'pet bundle: discovery row is missing or misnamed')
+
+console.log('ok    pet bundle manifest, client declaration, and discovery row')
