@@ -45,6 +45,10 @@ jobs:
           # semantic-release reads the whole history to find the last tag and
           # the commits since it, and pushes the release commit back.
           fetch-depth: 0
+          # The release commit is pushed straight to main, which the "Protect
+          # main" ruleset forbids for github-actions[bot]; the repo admin's PAT
+          # is on the ruleset's bypass list, so the push goes through.
+          token: ${{ secrets.RELEASE_TOKEN }}
           persist-credentials: true
 
       - uses: oven-sh/setup-bun@v2
@@ -84,7 +88,9 @@ jobs:
       # them cannot bump the version of the other.
       - name: Release each package in turn
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Same PAT as checkout: semantic-release uses it for the GitHub
+          # release API as well, keeping auth on one identity.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           # Provenance lives here rather than in a package's publishConfig,
           # because npm refuses to publish at all when it is asked for outside a
           # supported CI — which is where the one-time first publish happens.
@@ -153,4 +159,9 @@ jobs:
 
           release_package packages/plugin-testkit ./release/plugin-testkit.config.mjs
           release_package packages/web-login ./release/web-login.config.mjs
-          release_package packages/pet ./release/pet.config.mjs
+          # dsh-pet is not in the loop yet: its first version must be published
+          # by hand and its trusted publisher registered before CI can release
+          # it (README → "Bootstrapping a new package on npm"). Until then this
+          # line stays commented out, because an unbootstrapped pet fails the
+          # whole job and blocks the other packages.
+          # release_package packages/pet ./release/pet.config.mjs
