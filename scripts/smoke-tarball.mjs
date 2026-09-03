@@ -124,7 +124,9 @@ const PACKAGES = {
       // Browser client: assert the published envelope without importing it under
       // Node (it starts with `window.__ModuleLoader__.load`).
       if (manifest.exports?.['./client']?.default !== './dist/client.js') {
-        throw new Error(`unexpected client export ${JSON.stringify(manifest.exports?.['./client'])}`)
+        throw new Error(
+          `unexpected client export ${JSON.stringify(manifest.exports?.['./client'])}`,
+        )
       }
       if (manifest.dsh?.client?.platform !== 'web') {
         throw new Error(`unexpected dsh.client ${JSON.stringify(manifest.dsh?.client)}`)
