@@ -362,6 +362,14 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   mark(decoratedRegisterUpgrade)
   mark(decoratedRegisterFallback)
 
+  /**
+   * Best-effort restoration, for the failure path below.
+   *
+   * Errors are swallowed because this runs while a more informative one is
+   * already on its way to the caller: whatever refused the wrapper will refuse
+   * the original just as readily, and replacing a diagnosis with "cannot assign
+   * to read only property" would be a strictly worse outcome.
+   */
   const undecorate = (): void => {
     try {
       server.register = priorRegister
@@ -396,6 +404,9 @@ export function apply(ctx: PluginContext, config?: unknown): void {
 
   ctx.effect(
     () => () => {
+      // Restore only what is still ours. If another plugin decorated on top of
+      // this one, blindly reassigning the originals would silently remove *its*
+      // wrapper too — including, potentially, another security boundary.
       if (isCurrentWrapper(server.register, decoratedRegister)) server.register = priorRegister
       if (isCurrentWrapper(server.registerUpgrade, decoratedRegisterUpgrade)) {
         server.registerUpgrade = priorRegisterUpgrade

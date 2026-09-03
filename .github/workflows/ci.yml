@@ -70,6 +70,30 @@ jobs:
       - name: Pack
         run: bun run pack:check
 
+  # The normal suite deliberately has no DSH runtime dependencies. This small
+  # job installs one exact host tuple and verifies that web-login decorates the
+  # real WebServer registry, not merely the testkit mock.
+  real-host-login:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      - name: Install the tested DSH host tuple
+        run: >-
+          bun add --no-save --exact
+          @deepseek-ai/cordis@4.0.2
+          @deepseek-ai/dsh-host-webserver@0.1.2-alpha.5
+
+      - name: Test login gate against the real host
+        run: bun run --filter @seaveyon/dsh-web-login test:real-host
+
   # The packages declare `engines.node: >=20.11.0`, and the job above only ever
   # exercises whichever Node the bun runtime happens to embed. This runs the
   # built output on each supported major, because the promise is about the
