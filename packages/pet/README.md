@@ -42,6 +42,19 @@ Settings persist through the DSH settings service when it is available and
 fall back to `localStorage` — including for browsers on a remote host, whose
 settings RPCs never leave the server.
 
+### Imported desktop pets
+
+If the [pet desktop companion](../pet-desktop) is running, any bitmap pets
+imported into it (for example a Codex pet pack such as
+`ai-sleepy-silver-wolf`) also appear in **Settings → Pet**, marked with a
+*Desktop* badge. The plugin discovers them over the companion's loopback
+server (`GET http://127.0.0.1:45731/pets`) and animates their sprite strips in
+the overlay with stepped CSS background animation — one strip per mood, sized
+exactly like the built-in sprites. Discovery is best-effort: if the desktop
+app is offline, the picker simply shows the built-in roster, and an imported
+pet that is selected but unreachable falls back to the blob instead of leaving
+an empty corner.
+
 ## How it works
 
 The package is a dual-face DSH plugin whose host face is a no-op Cordis plugin

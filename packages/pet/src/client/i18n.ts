@@ -32,6 +32,8 @@ export interface Strings {
   visibleLabel: string
   /** Settings panel: desktop-companion bridge switch. */
   companionLabel: string
+  /** Badge marking an imported desktop pet in the appearance picker. */
+  desktopPetBadge: string
 }
 
 const DICTIONARIES: Record<Locale, Strings> = {
@@ -45,6 +47,7 @@ const DICTIONARIES: Record<Locale, Strings> = {
     scaleLabel: '大小',
     visibleLabel: '显示宠物',
     companionLabel: '桌面伴侣',
+    desktopPetBadge: '桌面',
   },
   en: {
     defaultPetName: 'Mochi',
@@ -56,6 +59,7 @@ const DICTIONARIES: Record<Locale, Strings> = {
     scaleLabel: 'Size',
     visibleLabel: 'Show pet',
     companionLabel: 'Desktop companion',
+    desktopPetBadge: 'Desktop',
   },
 }
 

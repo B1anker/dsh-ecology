@@ -16,6 +16,7 @@
 import { createElement } from 'react'
 
 import { DesktopBridge } from './bridge.js'
+import { DesktopPetsStore } from './desktop-pets.js'
 import type { ClientContext } from './host-types.js'
 import { getStrings } from './i18n.js'
 import { PetStateMachine } from './mood.js'
@@ -45,10 +46,15 @@ export function apply(ctx: ClientContext): void {
   const bridge = new DesktopBridge({ settings, machine })
   ctx.effect?.(() => () => bridge.dispose(), 'dsh-pet:bridge')
 
+  // Imported-pet discovery: one shared roster, pulled lazily by the surfaces
+  // (overlay on mount, panel each time it opens). Empty until the desktop app
+  // answers, and simply empty when it never does.
+  const desktopPets = new DesktopPetsStore()
+
   // The slot API mounts components without props, so the components are
   // closures over the wiring above.
-  const Overlay = () => createElement(PetOverlay, { settings, machine, sessions })
-  const Panel = () => createElement(PetSettingsPanel, { settings })
+  const Overlay = () => createElement(PetOverlay, { settings, machine, sessions, desktopPets })
+  const Panel = () => createElement(PetSettingsPanel, { settings, desktopPets })
 
   slots.inject('shell.overlay', () =>
     slots.register(

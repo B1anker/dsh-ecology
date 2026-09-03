@@ -10,13 +10,21 @@
  * @module @seaveyon/dsh-pet/client/settings-panel
  */
 
-import { useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
+import type { DesktopPet } from './bridge.js'
+import { type DesktopPetsStore, prettifyImportedPetId } from './desktop-pets.js'
 import { detectLocale, getStrings } from './i18n.js'
+import { RasterPet, useOptionalObservable } from './overlay.js'
 import { PETS } from './pets.js'
 import { MAX_SCALE, MIN_SCALE, type PetSettingsStore } from './settings.js'
 
 export interface PetSettingsPanelProps {
   settings: PetSettingsStore
+  /**
+   * Imported-pet discovery. Absent in tests and minimal mounts: only the
+   * built-in roster shows and no fetch is attempted.
+   */
+  desktopPets?: DesktopPetsStore
 }
 
 const rowStyle = {
@@ -26,17 +34,29 @@ const rowStyle = {
   marginBlock: '8px',
 } as const
 
-export function PetSettingsPanel({ settings }: PetSettingsPanelProps) {
+const NO_IMPORTED_PETS: readonly DesktopPet[] = []
+
+/** The picker's tile is 56px with a 2px border; the preview gets the rest. */
+const PREVIEW_SIZE = 52
+
+export function PetSettingsPanel({ settings, desktopPets }: PetSettingsPanelProps) {
   const strings = getStrings()
   const locale = detectLocale(navigator.language)
   const config = useSyncExternalStore(settings.subscribe, settings.getSnapshot)
+  const importedPets = useOptionalObservable(desktopPets, NO_IMPORTED_PETS)
+
+  // Opening the panel is the discovery moment: the desktop app is the kind of
+  // thing users start right before importing a pet, so ask again every mount.
+  useEffect(() => {
+    void desktopPets?.refresh()
+  }, [desktopPets])
 
   return (
     <section aria-label={strings.settingsSection}>
       <div
         role="group"
         aria-label={strings.appearanceLabel}
-        style={{ display: 'flex', gap: '8px' }}
+        style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}
       >
         {PETS.map((pet) => (
           <button
@@ -60,6 +80,52 @@ export function PetSettingsPanel({ settings }: PetSettingsPanelProps) {
             // biome-ignore lint/security/noDangerouslySetInnerHtml: see pets.ts
             dangerouslySetInnerHTML={{ __html: pet.svg(config.petId === pet.id ? 'pet' : 'idle') }}
           />
+        ))}
+        {importedPets.map((pet) => (
+          <button
+            key={pet.id}
+            type="button"
+            title={prettifyImportedPetId(pet.id)}
+            aria-pressed={config.petId === pet.id}
+            onClick={() => settings.update({ petId: pet.id })}
+            style={{
+              position: 'relative',
+              width: '56px',
+              height: '56px',
+              padding: 0,
+              borderRadius: '10px',
+              cursor: 'pointer',
+              border:
+                config.petId === pet.id
+                  ? '2px solid var(--dsw-color-primary, #4b6bfb)'
+                  : '2px solid transparent',
+              background: 'var(--dsw-color-surface, #f3f4f6)',
+              overflow: 'hidden',
+            }}
+          >
+            {/* Same pose rule as the built-ins: affection when selected. */}
+            <RasterPet
+              pet={pet}
+              mood={config.petId === pet.id ? 'pet' : 'idle'}
+              size={PREVIEW_SIZE}
+            />
+            <span
+              style={{
+                position: 'absolute',
+                right: '2px',
+                bottom: '2px',
+                padding: '0 4px',
+                borderRadius: '6px',
+                fontSize: '9px',
+                lineHeight: '14px',
+                background: 'var(--dsw-color-primary, #4b6bfb)',
+                color: 'var(--dsw-color-surface, #fff)',
+                pointerEvents: 'none',
+              }}
+            >
+              {strings.desktopPetBadge}
+            </span>
+          </button>
         ))}
       </div>
       <label style={rowStyle}>
