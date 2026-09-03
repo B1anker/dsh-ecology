@@ -105,6 +105,7 @@ test('the CLI documents its arguments without requiring a TTY', async () => {
   expect(result.stdout).toMatch(/^Usage: dsh-web-login-hash/m)
   expect(result.stdout).toMatch(/--env-path <path>/)
   expect(result.stdout).toMatch(/--var <NAME>/)
+  expect(result.stdout).toMatch(/--no-restart/)
   expect(result.stderr, 'help is not an error').toBe('')
 })
 
