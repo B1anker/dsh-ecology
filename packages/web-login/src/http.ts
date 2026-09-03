@@ -88,6 +88,27 @@ export function sendJsonError(
 }
 
 /**
+ * Send a JSON body with the security headers applied.
+ * @param res - the server response.
+ * @param status - HTTP status code.
+ * @param body - JSON-serializable payload.
+ * @param extra - additional headers.
+ */
+export function sendJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  extra: ExtraHeaders = {},
+): void {
+  res.writeHead(status, {
+    ...SECURITY_HEADERS,
+    'content-type': 'application/json; charset=utf-8',
+    ...extra,
+  })
+  res.end(JSON.stringify(body))
+}
+
+/**
  * Send a redirect with the security headers applied.
  * @param res - the server response.
  * @param status - 302 for navigation, 303 after a successful POST.

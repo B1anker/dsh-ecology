@@ -1,13 +1,15 @@
 {
   "name": "@seaveyon/dsh-web-login",
   "version": "0.3.0",
-  "description": "Cookie-session login gate for the dsh Web surface, replacing reverse-proxy HTTP Basic auth with a styled login page",
+  "description": "Cookie-session login gate for the dsh Web surface, with optional GitHub OAuth identity",
   "keywords": [
     "dsh",
     "cordis",
     "authentication",
     "login",
     "session",
+    "github",
+    "oauth",
     "reverse-proxy"
   ],
   "license": "MIT",
@@ -23,11 +25,15 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./client": {
+      "default": "./dist/client.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "bin": {
-    "dsh-web-login-hash": "./dist/hash-password.js"
+    "dsh-web-login-hash": "./dist/hash-password.js",
+    "dsh-web-login-recovery": "./dist/create-recovery.js"
   },
   "files": [
     "dist/",
@@ -40,6 +46,11 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [],
+      "immediately": true
     }
   },
   "repository": {
@@ -78,12 +89,17 @@
     "pack:check": "bun run build && npm pack --dry-run"
   },
   "devDependencies": {
+    "@rsbuild/plugin-react": "^1",
     "@rslib/core": "^0.23.2",
     "@rstest/core": "^0.11.9",
     "@rstest/coverage-v8": "^0.11.9",
     "@seaveyon/dsh-plugin-testkit": "workspace:*",
     "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "fast-check": "^4.9.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "typescript": "^5.9.3"
   }
 }

@@ -5,8 +5,9 @@
     // remaining effect would be to reject the sibling sources the `paths` below
     // deliberately pull in. `tsconfig.build.json`, which does emit, sets its
     // own.
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"],
+    "jsx": "react-jsx",
     "noEmit": true,
     // Resolve the testkit to its sources rather than to the `dist/` its
     // package.json advertises. Without this, `typecheck` silently depends on

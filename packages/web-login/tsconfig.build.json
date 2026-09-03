@@ -13,6 +13,6 @@
   // The CLI is built by its own rslib entry, which sets `dts: false`. That flag
   // only governs the entry's own pass, so without this the library entry's tsc
   // run would emit `hash-password.d.ts` anyway — declarations for an executable
-  // nothing imports.
-  "exclude": ["src/hash-password.ts"]
+  // nothing imports. Client sources ship as a bundled `client.js` only.
+  "exclude": ["src/hash-password.ts", "src/create-recovery.ts", "src/client"]
 }

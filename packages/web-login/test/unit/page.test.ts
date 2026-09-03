@@ -1,5 +1,5 @@
 import { expect, test } from '@rstest/core'
-import { escapeHtml, renderLoginPage } from '../../src/page.js'
+import { escapeHtml, renderLoginPage, renderOAuthContinuePage } from '../../src/page.js'
 
 test('escapeHtml neutralizes every HTML-significant character', () => {
   expect(escapeHtml(`<script>alert("x" + 'y')</script> & more`)).toBe(
@@ -43,6 +43,43 @@ test('the form posts the password back to /login', () => {
   expect(html).toMatch(/<form method="post" action="\/login">/)
   expect(html).toMatch(/name="password" type="password"/)
   expect(html).toMatch(/autocomplete="current-password"/)
+})
+
+test('github mode links to the OAuth start path without scripts', () => {
+  const html = renderLoginPage({ title: 'DSH Web', mode: 'github' })
+  expect(html).toMatch(/href="\/auth\/github\/login"/)
+  expect(html).toMatch(/Continue with GitHub/)
+  expect(/<script/i.test(html)).toBe(false)
+})
+
+test('choice mode offers GitHub and the password form', () => {
+  const html = renderLoginPage({ title: 'DSH Web', mode: 'choice' })
+  expect(html).toMatch(/href="\/auth\/github\/login"/)
+  expect(html).toMatch(/<form method="post" action="\/login">/)
+  expect(html).toMatch(/Continue with GitHub/)
+})
+
+test('enroll mode links to bind and can skip via continue', () => {
+  const html = renderLoginPage({ title: 'DSH Web', mode: 'enroll' })
+  expect(html).toMatch(/href="\/auth\/github\/enroll"/)
+  expect(html).toMatch(/Bind GitHub account/)
+  expect(html).toMatch(/<form method="post" action="\/auth\/continue">/)
+  expect(html).toMatch(/Continue without GitHub/)
+  expect(html.includes('action="/auth/github/enroll"')).toBe(false)
+})
+
+test('oauth continue bridge is a same-origin hop without scripts', () => {
+  const html = renderOAuthContinuePage('DSH Web')
+  expect(html).toMatch(/http-equiv="refresh" content="0;url=\/"/i)
+  expect(html).toMatch(/href="\/"/)
+  expect(html).toMatch(/Signed in/)
+  expect(/<script/i.test(html)).toBe(false)
+})
+
+test('maintenance mode has no interactive form', () => {
+  const html = renderLoginPage({ title: 'DSH Web', mode: 'maintenance' })
+  expect(html.includes('<form')).toBe(false)
+  expect(html).toMatch(/temporarily unavailable/)
 })
 
 test('the title is interpolated into both the head and the heading', () => {

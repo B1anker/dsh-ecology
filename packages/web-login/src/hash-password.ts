@@ -7,7 +7,10 @@
  * a value echoed to a terminal is a value that lives in scrollback, in a
  * screenshot, and eventually in a pasted bug report.
  *
- * Usage: dsh-web-login-hash [--env-path <path>] [--var <NAME>]
+ * After a successful write the CLI tries to restart any running `dsh web`
+ * process so the new verifier is picked up without a manual bounce.
+ *
+ * Usage: dsh-web-login-hash [--env-path <path>] [--var <NAME>] [--no-restart]
  *
  * The path flag is `--env-path`, not `--env-file`, because Node itself owns
  * `--env-file`: it consumes that flag wherever it appears — even after the
@@ -27,6 +30,7 @@ import { argv, exit, stderr, stdout } from 'node:process'
 import { DEFAULTS } from './config.js'
 import { isEnvName, resolveEnvPath, writeEnvAssignment } from './env-file.js'
 import { askHidden } from './prompt.js'
+import { restartDshWebProcesses } from './restart-dsh.js'
 import { hashPassword, MAX_PASSWORD_BYTES } from './verifier.js'
 
 /** Shortest password accepted. */
@@ -37,6 +41,7 @@ interface CliOptions {
   envPath?: string
   varName: string
   help?: boolean
+  restart: boolean
 }
 
 /**
@@ -46,7 +51,7 @@ interface CliOptions {
  * @throws on an unknown or incomplete flag.
  */
 function parseArgs(args: readonly string[]): CliOptions {
-  const options: CliOptions = { varName: DEFAULTS.passwordHashEnv }
+  const options: CliOptions = { varName: DEFAULTS.passwordHashEnv, restart: true }
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
     // Rejected by name rather than ignored, for the users this branch can still
@@ -74,6 +79,10 @@ function parseArgs(args: readonly string[]): CliOptions {
       i += 1
       continue
     }
+    if (arg === '--no-restart') {
+      options.restart = false
+      continue
+    }
     if (arg === '--help' || arg === '-h') {
       options.help = true
       continue
@@ -88,6 +97,7 @@ const USAGE = `Usage: dsh-web-login-hash [options]
 Options:
   --env-path <path>  file to update (default: $DSH_HOME/.env, else ~/.dsh/.env)
   --var <NAME>       variable to set (default: ${DEFAULTS.passwordHashEnv})
+  --no-restart       do not try to restart a running dsh web process
   -h, --help         show this message
 `
 
@@ -168,4 +178,12 @@ try {
 }
 
 stdout.write(`Saved ${options.varName} to ${envPath} (mode 0600).\n`)
-stdout.write('Restart dsh to activate the login gate.\n')
+if (options.restart) {
+  const summary = await restartDshWebProcesses()
+  stdout.write(`${summary}\n`)
+} else {
+  stdout.write('Restart dsh to activate the login gate.\n')
+}
+// Force a clean exit: a detached relaunch must not keep this CLI (or
+// `dsh plugin exec`) waiting on the new dsh process.
+exit(0)

@@ -16,7 +16,7 @@ const manifest = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
 ) as {
   bin: Record<string, string>
-  dsh: { bundle: { patch: string } }
+  dsh: { bundle: { patch: string }; client?: { platform: string; inject: unknown[]; immediately: boolean } }
   exports: Record<string, unknown>
   files: string[]
 }
@@ -48,4 +48,24 @@ test('the password CLI bin target exists in the built artifact', async () => {
   await expect(readFile(new URL(`../../${target}`, import.meta.url), 'utf8')).resolves.toMatch(
     /^#!\/usr\/bin\/env node/,
   )
+})
+
+test('the recovery CLI bin target exists in the built artifact', async () => {
+  const target = manifest.bin['dsh-web-login-recovery']
+  expect(target).toBe('./dist/create-recovery.js')
+  await expect(readFile(new URL(`../../${target}`, import.meta.url), 'utf8')).resolves.toMatch(
+    /^#!\/usr\/bin\/env node/,
+  )
+})
+
+test('the manifest declares a loadable web client', async () => {
+  expect(manifest.dsh.client).toEqual({
+    platform: 'web',
+    inject: [],
+    immediately: true,
+  })
+  expect(manifest.exports['./client']).toEqual({ default: './dist/client.js' })
+  const client = await readFile(new URL('../../dist/client.js', import.meta.url), 'utf8')
+  expect(client).toMatch(/__ModuleLoader__\.load/)
+  expect(client).toContain('@seaveyon/dsh-web-login')
 })

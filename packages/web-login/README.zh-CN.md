@@ -9,6 +9,7 @@
 ## 功能
 
 - 从环境变量读取 scrypt 密码校验值，不从插件配置读取密码；
+- 可选启用 GitHub OAuth：首次用密码引导绑定 owner 后，仅允许本地登记的 GitHub 数字 ID 登录；
 - 生成高熵、不透明的内存会话 ID，并使用 host-only、`HttpOnly`、`SameSite=Strict` Cookie；在 TLS 环境下还会带上 `__Host-` 前缀；
 - 浏览器文档导航会跳转到 `/login`；API、插件和其他资源路由返回可处理的 JSON `401`，不会返回 HTML 登录页；
 - 仅允许 `POST /logout`，同时撤销服务端会话并清除浏览器 Cookie；
@@ -89,6 +90,40 @@ DSH 会用这个 mapping 替换该行的整个 `config`；未写出的插件设�
 | `maxSessions` | `10000` | 1–1000000 | 最大活跃会话数。满额时新登录返回 `503`，不会驱逐活跃会话。 |
 | `maxBodyBytes` | `4096` | 64 B–1 MiB | 登录表单最大字节数。 |
 | `sweepIntervalMs` | 5 分钟 | 1 秒–1 小时 | 清理过期会话和限流记录的间隔。 |
+
+#### GitHub OAuth（可选）
+
+默认仍是纯密码模式。设置 `githubEnabled: true` 后，用 GitHub 数字用户 ID 作为人类身份门禁。OAuth 只证明“是谁”，本地授权记录决定“能否进入”。Client Secret 只能来自环境变量，不能写进 YAML。
+
+```yaml
+- id: dsh-web-login
+  config:
+    githubEnabled: true
+    publicUrl: https://dsh.example.com
+```
+
+```dotenv
+GITHUB_OAUTH_CLIENT_ID=Ov23li...
+GITHUB_OAUTH_CLIENT_SECRET=...
+LOGIN_PASSWORD_HASH=scrypt$...
+```
+
+尚未绑定 owner 时进入 `bootstrap`：先用现有密码登录，再绑定 GitHub。绑定完成后，正常登录页只提供 GitHub。本机恢复：
+
+```sh
+dsh plugin --profile web exec dsh-web-login-recovery
+```
+
+| 键 | 默认值 | 说明 |
+| --- | --- | --- |
+| `githubEnabled` | `false` | 启用 GitHub OAuth 身份模式。 |
+| `publicUrl` | （空） | OAuth 回调用的规范 HTTPS 源站（本机测试可显式使用 loopback `http`）。 |
+| `githubClientIdEnv` | `GITHUB_OAUTH_CLIENT_ID` | 存放 OAuth App Client ID 的环境变量名。 |
+| `githubClientSecretEnv` | `GITHUB_OAUTH_CLIENT_SECRET` | 存放 OAuth App Client Secret 的环境变量名。 |
+| `authorizationFile` | `${DSH_HOME}/auth/dsh-web-login/github-users.json` | 已授权 GitHub 身份（不含 token）。 |
+| `recoveryFile` | `${DSH_HOME}/auth/dsh-web-login/recovery.json` | 一次性本机恢复 token 摘要。 |
+
+GitHub OAuth 是叠在 DSH 自身 BrowserAuth / 启动令牌之上的外层人类身份门禁，不能替代 TLS、反向代理或网络访问控制。完整规格见 [`docs/github-oauth-spec.zh-CN.md`](docs/github-oauth-spec.zh-CN.md)。
 
 #### 登录尝试限流
 

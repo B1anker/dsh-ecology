@@ -317,6 +317,16 @@ test('unauthenticated API and plugin requests receive JSON 401, never an HTML re
   })
 })
 
+test('public SPA chrome assets stay reachable without a session', async () => {
+  await withFixture({}, async ({ port }) => {
+    for (const path of ['/manifest.webmanifest', '/favicon.svg']) {
+      const response = await request(port, path)
+      expect(response.status, path).toBe(200)
+      expect(response.body, path).toBe('<main>spa</main>')
+    }
+  })
+})
+
 test('unauthenticated raw WebSocket upgrades receive an explanatory 401', async () => {
   await withFixture({}, async ({ port }) => {
     const response = await upgrade(port, '/ws')
@@ -340,6 +350,26 @@ test('a successful login grants access to exact, prefix, fallback, and upgrade r
     expect(setCookie(login).includes('Secure'), 'fixture deliberately uses local HTTP').toBe(false)
 
     const cookie = login.cookie ?? ''
+
+    const session = await request(port, '/auth/session', { headers: { cookie } })
+    expect(session.status).toBe(200)
+    const sessionBody = JSON.parse(session.body) as Record<string, unknown>
+    expect(sessionBody).toMatchObject({
+      provider: 'password',
+      role: 'owner',
+      githubUserId: null,
+      githubLogin: null,
+      githubEnabled: false,
+      canBindGitHub: false,
+      status: 'password_only',
+      enrolledAt: null,
+      lastLoginAt: null,
+      githubClientId: null,
+      githubOAuthAppId: null,
+    })
+    expect(typeof sessionBody.sessionExpiresAt).toBe('string')
+    expect(typeof sessionBody.sessionRemainingMs).toBe('number')
+    expect(sessionBody.sessionRemainingMs).toBeGreaterThan(0)
 
     const exact = await request(port, '/exact', { headers: { cookie } })
     expect(exact.status).toBe(200)
