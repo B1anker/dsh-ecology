@@ -7,6 +7,8 @@ A hand-crafted sprite lives at the corner of your DSH Web GUI and mirrors what
 your agent is doing right now: thinking, running tools, waiting for your
 approval, celebrating a finished turn, dozing off when you both go quiet.
 
+![Mochi the blob mirroring agent state: idle, thinking, working, celebrating, petted](assets/demo.gif)
+
 ## Install
 
 ```sh
