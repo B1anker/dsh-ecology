@@ -1,0 +1,13 @@
+.{
+    .name = .pet_desktop,
+    .fingerprint = 0x172f8542f88e80cf,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .native_sdk = .{
+            .url = "https://github.com/vercel-labs/zero-native/archive/5665a355cae768dff734d79dd4c0bd9d099f83fb.tar.gz",
+            .hash = "native_sdk-0.1.0-hzDzQsgTsgLYuia25nP8kRXdGyfVgpwLVmdAsMzdCAxE",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "assets", "app.zon", "README.md" },
+}

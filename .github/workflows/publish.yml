@@ -153,3 +153,4 @@ jobs:
 
           release_package packages/plugin-testkit ./release/plugin-testkit.config.mjs
           release_package packages/web-login ./release/web-login.config.mjs
+          release_package packages/pet ./release/pet.config.mjs

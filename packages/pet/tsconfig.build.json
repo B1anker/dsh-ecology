@@ -1,0 +1,10 @@
+{
+  // Declaration emit only, and only for the host entries: the client bundle is
+  // a CJS artifact for the shell's module loader, nothing imports its types.
+  // See packages/web-login/tsconfig.build.json for why this file exists.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src"
+  },
+  "include": ["src/index.ts", "src/desktop.ts"]
+}

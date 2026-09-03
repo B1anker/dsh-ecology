@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": [],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "paths": {
+      "@seaveyon/dsh-plugin-testkit": ["../plugin-testkit/src/index.ts"],
+      "@seaveyon/dsh-plugin-testkit/contract": ["../plugin-testkit/src/contract.ts"]
+    }
+  },
+  "include": ["src", "test", "rslib.config.ts", "rstest.config.ts"]
+}

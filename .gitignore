@@ -4,6 +4,9 @@ dist/
 *.tgz
 coverage/
 .nyc_output/
+zig-out/
+.zig-cache/
+zig-pkg/
 
 # Local runtime secrets and state
 .env

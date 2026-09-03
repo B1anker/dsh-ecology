@@ -166,7 +166,7 @@ jobs:
       matrix:
         # Each published package makes its own `engines.node` promise, and a
         # promise is worth what the job that tests it is worth.
-        package: [web-login, plugin-testkit]
+        package: [web-login, plugin-testkit, pet]
     steps:
       - uses: actions/checkout@v7
 

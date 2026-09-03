@@ -1,0 +1,11 @@
+# dsh-pet bundle layer for the shipped DSH Web profile.
+#
+# The client module system discovers plugin bundles by scanning the host
+# Loader's active entries for packages declaring `dsh.client` — a plain
+# dependency is invisible to it. This row exists so the pet's client bundle is
+# discovered and served at `/plugins/@seaveyon/dsh-pet/client.js`; the host
+# half it activates is a deliberate no-op (see src/host.ts).
+
+- insert:
+    - id: dsh-pet
+      name: '@seaveyon/dsh-pet'

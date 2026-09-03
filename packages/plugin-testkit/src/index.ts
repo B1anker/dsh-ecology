@@ -30,6 +30,27 @@
  * @module @seaveyon/dsh-plugin-testkit
  */
 
+export type {
+  ClientObservable,
+  MockClientContext,
+  MockClientRuntime,
+  MockModuleLoader,
+  MockObservable,
+  MockSessions,
+  MockSettingsScope,
+  MockSettingsScopeBinder,
+  MockSlots,
+  SlotRegistrationRecord,
+} from './client.js'
+export {
+  createMockClientContext,
+  createMockClientRuntime,
+  createMockModuleLoader,
+  createMockObservable,
+  createMockSessions,
+  createMockSettingsScopeBinder,
+  createMockSlots,
+} from './client.js'
 export type { CapturedLogs, CapturedTeardown, MockContext } from './context.js'
 export { createMockContext } from './context.js'
 export type { ListenerMap } from './events.js'

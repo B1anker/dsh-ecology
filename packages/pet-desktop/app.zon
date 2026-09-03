@@ -1,0 +1,43 @@
+.{
+    .id = "dev.seaveyon.dsh-pet",
+    .name = "dsh-pet",
+    .display_name = "DSH Pet",
+    .description = "Desktop pet for the DSH Web surface: transparent always-on-top chromeless canvas window driven by the plugin's mood state.",
+    .version = "0.1.0",
+    .icons = .{ "assets/icon.icns" },
+    .platforms = .{"macos"},
+    .permissions = .{ "view", "command" },
+    .capabilities = .{ "native_views", "gpu_surfaces" },
+    // The 24-frame strips decode to 6144x256 RGBA = 6 MiB per registry
+    // slot — over the 1 MiB default decode-to-fit target, which would
+    // downscale them and break the fixed 256px frame stride. Raise the
+    // target to the 8 MiB ceiling (allocation is lazy per used slot).
+    .images = .{ .max_image_pixel_bytes = 8388608 },
+    .shell = .{
+        .windows = .{
+            .{
+                .label = "main",
+                .title = "DSH Pet",
+                .width = 192,
+                .height = 192,
+                .resizable = false,
+                .restore_state = false,
+                .restore_policy = "center_on_primary",
+                .titlebar = "chromeless",
+                .transparent = true,
+                .always_on_top = true,
+                .views = .{
+                    .{ .label = "pet-canvas", .kind = "gpu_surface", .fill = true, .role = "Pet canvas", .accessibility_label = "Pet", .gpu_backend = "metal", .gpu_pixel_format = "bgra8_unorm", .gpu_present_mode = "timer", .gpu_alpha_mode = "premultiplied", .gpu_color_space = "srgb", .gpu_vsync = true },
+                },
+            },
+        },
+    },
+    .security = .{
+        .navigation = .{
+            .allowed_origins = .{ "zero://app", "zero://inline" },
+            .external_links = .{ .action = "deny" },
+        },
+    },
+    .web_engine = "system",
+    .cef = .{ .dir = "third_party/cef/macos", .auto_install = false },
+}

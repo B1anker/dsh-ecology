@@ -13,8 +13,15 @@ import * as testkit from '../src/index.js'
 test('the entry exports the doubles and nothing that needs a test runner', async () => {
   expect(Object.keys(testkit).toSorted()).toEqual([
     'assertMutualAssignability',
+    'createMockClientContext',
+    'createMockClientRuntime',
     'createMockContext',
     'createMockContextDriver',
+    'createMockModuleLoader',
+    'createMockObservable',
+    'createMockSessions',
+    'createMockSettingsScopeBinder',
+    'createMockSlots',
     'createMockToolHooks',
     'createMockToolsPipeline',
     'createMockWebServer',

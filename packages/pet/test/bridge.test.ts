@@ -1,0 +1,203 @@
+/**
+ * The desktop-companion bridge: gating on the setting, payload shape, and the
+ * fire-and-forget guarantee. fetch is injected as a stub, so "the desktop app
+ * isn't running" is simulated by a rejecting promise rather than a real port.
+ */
+
+import { describe, expect, test } from '@rstest/core'
+import { DEFAULT_ENDPOINT, DESKTOP_COMPANION_PORT, DesktopBridge } from '../src/client/bridge.js'
+import type { ConversationSnapshotSlice } from '../src/client/host-types.js'
+import { PetStateMachine } from '../src/client/mood.js'
+import { PetSettingsStore } from '../src/client/settings.js'
+
+interface FetchCall {
+  url: unknown
+  init: RequestInit | undefined
+}
+
+/** A fetch stub that records calls and resolves or rejects as asked. */
+function fetchStub(impl: () => Promise<Response> = () => Promise.resolve(new Response())) {
+  const calls: FetchCall[] = []
+  const fn = (url: unknown, init?: RequestInit) => {
+    calls.push({ url, init })
+    return impl()
+  }
+  return { calls, fn: fn as unknown as typeof fetch }
+}
+
+function snap(overrides: Partial<ConversationSnapshotSlice> = {}): ConversationSnapshotSlice {
+  return {
+    running: false,
+    runningCalls: [],
+    pending: [],
+    promptError: null,
+    lastAgentError: null,
+    turnEnds: new Map(),
+    turnTimings: new Map(),
+    ...overrides,
+  }
+}
+
+/** A settings store with a private in-memory backend, so no state leaks between tests. */
+function bareSettings(): PetSettingsStore {
+  const map = new Map<string, string>()
+  const storage: Storage = {
+    get length() {
+      return map.size
+    },
+    clear: () => map.clear(),
+    getItem: (key) => map.get(key) ?? null,
+    key: (index) => Array.from(map.keys())[index] ?? null,
+    removeItem: (key) => void map.delete(key),
+    setItem: (key, value) => void map.set(key, value),
+  }
+  return new PetSettingsStore({ storage })
+}
+
+/** The full wiring under test: store + machine + bridge + the fetch record. */
+function wire(options: { impl?: () => Promise<Response>; endpoint?: string } = {}) {
+  const stub = fetchStub(options.impl)
+  const settings = bareSettings()
+  const machine = new PetStateMachine()
+  const bridge = new DesktopBridge({
+    settings,
+    machine,
+    fetchFn: stub.fn,
+    ...(options.endpoint !== undefined ? { endpoint: options.endpoint } : {}),
+  })
+  return { stub, settings, machine, bridge }
+}
+
+describe('gating', () => {
+  test('with the toggle off, no state change ever sends a request', () => {
+    const { stub, settings, machine, bridge } = wire()
+
+    machine.update(snap({ running: true }))
+    machine.pet()
+    settings.update({ name: 'Momo', petId: 'cat' })
+
+    expect(stub.calls).toHaveLength(0)
+    bridge.dispose()
+  })
+
+  test('flipping the toggle on announces the current state immediately', () => {
+    const { stub, settings, bridge } = wire()
+
+    settings.update({ companionEnabled: true })
+
+    expect(stub.calls).toHaveLength(1)
+    expect(stub.calls[0]?.url).toBe(DEFAULT_ENDPOINT)
+    expect(stub.calls[0]?.init?.method).toBe('POST')
+    expect(stub.calls[0]?.init?.headers).toEqual({ 'Content-Type': 'application/json' })
+    expect(JSON.parse(String(stub.calls[0]?.init?.body))).toEqual({
+      mood: 'idle',
+      petId: 'blob',
+      name: 'Mochi',
+    })
+    bridge.dispose()
+  })
+
+  test('flipping the toggle back off stops the traffic', () => {
+    const { stub, settings, machine, bridge } = wire()
+
+    settings.update({ companionEnabled: true })
+    settings.update({ companionEnabled: false })
+    machine.update(snap({ running: true }))
+
+    expect(stub.calls).toHaveLength(1) // only the announcement from enabling
+    bridge.dispose()
+  })
+
+  test('a disposed bridge goes quiet even with the toggle on', () => {
+    const { stub, settings, machine, bridge } = wire()
+    settings.update({ companionEnabled: true })
+
+    bridge.dispose()
+    machine.update(snap({ running: true }))
+
+    expect(stub.calls).toHaveLength(1)
+  })
+})
+
+describe('state pushes', () => {
+  test('a mood change POSTs the new state to the companion endpoint', () => {
+    const { stub, settings, machine, bridge } = wire()
+    settings.update({ companionEnabled: true })
+
+    machine.update(snap({ running: true, runningCalls: [{ name: 'bash' }] }))
+
+    expect(stub.calls).toHaveLength(2)
+    expect(JSON.parse(String(stub.calls[1]?.init?.body))).toEqual({
+      mood: 'working',
+      petId: 'blob',
+      name: 'Mochi',
+    })
+    bridge.dispose()
+  })
+
+  test('renaming the pet pushes the new name; species changes too', () => {
+    const { stub, settings, bridge } = wire()
+    settings.update({ companionEnabled: true })
+
+    settings.update({ name: '豆豆', petId: 'cat' })
+
+    expect(stub.calls).toHaveLength(2)
+    expect(JSON.parse(String(stub.calls[1]?.init?.body))).toEqual({
+      mood: 'idle',
+      petId: 'cat',
+      name: '豆豆',
+    })
+    bridge.dispose()
+  })
+
+  test('notifications that change nothing are not re-sent', () => {
+    const { stub, settings, machine, bridge } = wire()
+    settings.update({ companionEnabled: true })
+
+    // Same effective state arriving repeatedly: scale is not part of the
+    // payload, and re-feeding an unchanged snapshot keeps the mood.
+    settings.update({ scale: 1.5 })
+    machine.update(snap())
+    machine.tick()
+
+    expect(stub.calls).toHaveLength(1)
+    bridge.dispose()
+  })
+
+  test('the endpoint is injectable, and the port constant anchors the default', () => {
+    const { stub, settings, bridge } = wire({ endpoint: 'http://127.0.0.1:9/state' })
+    settings.update({ companionEnabled: true })
+
+    expect(stub.calls[0]?.url).toBe('http://127.0.0.1:9/state')
+    expect(DEFAULT_ENDPOINT).toBe(`http://127.0.0.1:${DESKTOP_COMPANION_PORT}/state`)
+    bridge.dispose()
+  })
+})
+
+describe('fire-and-forget', () => {
+  test('a rejected fetch (app not running) throws nothing and stops nothing', () => {
+    const { stub, settings, machine, bridge } = wire({
+      impl: () => Promise.reject(new Error('connection refused')),
+    })
+
+    expect(() => settings.update({ companionEnabled: true })).not.toThrow()
+    expect(() => machine.update(snap({ running: true }))).not.toThrow()
+
+    // Both changes were attempted; the failure of the first changed nothing.
+    expect(stub.calls).toHaveLength(2)
+    expect(JSON.parse(String(stub.calls[1]?.init?.body))).toMatchObject({ mood: 'thinking' })
+    bridge.dispose()
+  })
+
+  test('a fetch that throws synchronously is survived too', () => {
+    const { stub, settings, bridge } = wire({
+      impl: () => {
+        throw new Error('fetch itself exploded')
+      },
+    })
+
+    expect(() => settings.update({ companionEnabled: true })).not.toThrow()
+    expect(stub.calls).toHaveLength(1)
+    bridge.dispose()
+  })
+})
