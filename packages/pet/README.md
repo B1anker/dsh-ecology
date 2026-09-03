@@ -34,8 +34,9 @@ the pet appears in the bottom-right corner.
   agent waits for you, the pet waits with it; when a turn completes, it
   celebrates.
 
-Configure it under **Settings → Pet**: three built-in sprites (blob, cat,
-robot), a name, size from 0.5× to 2×, and visibility.
+Configure it under **Settings → Pet**: four built-in sprites (blob, cat,
+robot, DeepSeek-chan「DeepSeek 酱」), a name, size from 0.5× to 2×, and
+visibility.
 
 Settings persist through the DSH settings service when it is available and
 fall back to `localStorage` — including for browsers on a remote host, whose
