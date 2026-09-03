@@ -1,3 +1,10 @@
+# [0.4.0](https://github.com/B1anker/dsh-ecology/compare/plugin-testkit-v0.3.0...plugin-testkit-v0.4.0) (2026-09-03)
+
+
+### Features
+
+* **plugin-testkit:** add client-runtime doubles for dsh.client plugins ([ba9789e](https://github.com/B1anker/dsh-ecology/commit/ba9789e659e0707e5f0a242f903f58d34ad4693e))
+
 # [0.3.0](https://github.com/B1anker/dsh-ecology/compare/plugin-testkit-v0.2.0...plugin-testkit-v0.3.0) (2026-09-02)
 
 

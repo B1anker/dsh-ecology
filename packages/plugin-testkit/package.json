@@ -1,6 +1,6 @@
 {
   "name": "@seaveyon/dsh-plugin-testkit",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Test doubles and conformance suites for dsh Cordis plugins (webServer, context events, tools pipeline)",
   "keywords": [
     "dsh",
