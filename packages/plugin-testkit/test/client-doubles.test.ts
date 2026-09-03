@@ -96,6 +96,38 @@ test('the module loader captures load, runs the factory, and fails loud on undec
   expect('__ModuleLoader__' in target).toBe(false)
 })
 
+test('the settingsScope snapshot reads through the bound cell', async () => {
+  const runtime = createMockClientRuntime()
+  const scope = runtime.settingsScope.bind({ namespace: 'pet' })
+
+  expect(scope.getSnapshot()).toEqual({ status: 'ready', value: {} })
+  await scope.set('scale', 1.5)
+  expect(scope.getSnapshot()).toEqual({ status: 'ready', value: { scale: 1.5 } })
+})
+
+test('uninstalling the loader restores a pre-existing __ModuleLoader__', () => {
+  const loader = createMockModuleLoader()
+  const sentinel = { load: () => {} }
+  const target: Record<string, unknown> = { __ModuleLoader__: sentinel }
+
+  const uninstall = loader.install(target)
+  expect(target['__ModuleLoader__']).not.toBe(sentinel)
+
+  uninstall()
+  expect(target['__ModuleLoader__']).toBe(sentinel)
+})
+
+test('context.effect records the optional label', () => {
+  const runtime = createMockClientRuntime()
+  const fn = () => {}
+  runtime.context.effect(fn)
+  runtime.context.effect(fn, 'mount-overlay')
+
+  expect(runtime.context.effects).toHaveLength(2)
+  expect(runtime.context.effects[0]).toEqual({ fn })
+  expect(runtime.context.effects[1]).toEqual({ fn, label: 'mount-overlay' })
+})
+
 test('a bundle round trip: load, invoke, apply, and the slot is registered', () => {
   const runtime = createMockClientRuntime()
   const loader = runtime.loader
