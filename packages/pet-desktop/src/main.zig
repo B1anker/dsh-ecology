@@ -1,4 +1,4 @@
-//! dsh-pet: the zero-native desktop pet for the DSH Web surface.
+//! dsh-pet-desktop: the zero-native desktop pet for the DSH Web surface.
 //!
 //! A 192x192 transparent, always-on-top, chromeless window whose whole
 //! surface is one gpu_surface canvas (premultiplied alpha). The canvas
@@ -6,8 +6,10 @@
 //! frame at a time via image_src — flipped at the manifest's cadence
 //! (src/manifest.zig), driven by the DSH Web plugin's POSTs to the
 //! loopback state server (src/server.zig). Click toggles a 1.25x zoom,
-//! right-click carries Quit, and dragging is app-owned: on_drag starts
-//! the gesture, then a 60Hz poll timer follows NSEvent.mouseLocation
+//! hovering hops with excitement (pet strip + a sine bounce), right-click
+//! carries Quit (in the driving page's language — the bridge mirrors its
+//! locale through /state), and dragging is app-owned: on_drag starts the
+//! gesture, then a 60Hz poll timer follows NSEvent.mouseLocation
 //! absolutely (src/appkit.zig) until the physical left button releases.
 //!
 //! WebView-free: no frontend/, no WebViewSource — a pure Zig-core UiApp
@@ -24,6 +26,7 @@ const geometry = native_sdk.geometry;
 
 const model_mod = @import("model.zig");
 const view_mod = @import("view.zig");
+const assets = @import("assets.zig");
 
 pub const Model = model_mod.Model;
 pub const Msg = model_mod.Msg;
@@ -63,7 +66,7 @@ pub const PetApp = native_sdk.UiApp(Model, Msg);
 
 pub fn petOptions() PetApp.Options {
     return .{
-        .name = "dsh-pet",
+        .name = "dsh-pet-desktop",
         .scene = shell_scene,
         .canvas_label = canvas_label,
         .update_fx = update,
@@ -95,11 +98,15 @@ pub fn main(init: std.process.Init) !void {
     defer std.heap.page_allocator.destroy(app_state);
     app_state.* = PetApp.init(std.heap.page_allocator, .{}, petOptions());
     defer app_state.deinit();
+    // The icon lives under the resolved assets root too — this buffer
+    // stays alive because runWithOptions blocks for the app's lifetime.
+    var icon_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const icon_path = assets.assetPath(&icon_buffer, "icon.icns") orelse "assets/icon.icns";
     try runner.runWithOptions(app_state.app(), .{
-        .app_name = "dsh-pet",
+        .app_name = "dsh-pet-desktop",
         .window_title = "DSH Pet",
-        .bundle_id = "dev.seaveyon.dsh-pet",
-        .icon_path = "assets/icon.icns",
+        .bundle_id = "dev.seaveyon.dsh-pet-desktop",
+        .icon_path = icon_path,
         .default_frame = geometry.RectF.init(0, 0, window_size, window_size),
         .js_window_api = false,
         .security = .{

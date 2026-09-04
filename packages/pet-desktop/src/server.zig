@@ -19,6 +19,15 @@
 //!                  match against declared names is the whole traversal
 //!                  defense, so ".." segments, absolute paths, and files
 //!                  the manifest never lists never reach the filesystem
+//!   GET    /events -> 200 text/event-stream: a liveness channel. No
+//!                  events are ever published — the connection ITSELF is
+//!                  the message. The panel holds it open; app quit (clean
+//!                  or crashed) closes the socket and the panel knows at
+//!                  once, which no quit-time "goodbye" POST could promise
+//!                  (a crash sends nothing). Heartbeat comments keep
+//!                  middleboxes from eating the silence; `retry: 1000`
+//!                  makes the browser's EventSource reconnect quickly
+//!                  after an app restart.
 //!   OPTIONS *      CORS preflight -> 204
 //!   anything else  -> 404
 //! Bodies over 4 KiB are refused with 413; invalid JSON or an unknown
@@ -26,9 +35,12 @@
 //! `access-control-allow-origin: *` — the plugin POSTs from the shell
 //! page's origin, so without it the fetch never leaves the browser.
 //!
-//! One request per connection (`keep_alive = false`): the plugin posts
-//! at state-change cadence, so connection reuse buys nothing and a
-//! single-threaded accept loop stays trivially correct.
+//! One request per connection (`keep_alive = false`), and one detached
+//! thread per accepted connection: the /events stream stays open for the
+//! app's whole lifetime and must not starve /state and /pets behind it.
+//! Shared state across those threads is read-only after boot (manifest,
+//! assets root); the channel handle is the thread-safe one from
+//! fx.openChannel.
 //!
 //! Socket/io plumbing follows the runtime's own fetch fixture
 //! (src/runtime/effects_fetch_tests.zig Fixture): std.Io.Threaded on
@@ -37,6 +49,7 @@
 
 const std = @import("std");
 const native_sdk = @import("native_sdk");
+const assets = @import("assets.zig");
 const manifest = @import("manifest.zig");
 const state = @import("state.zig");
 
@@ -49,6 +62,11 @@ const head_buffer_bytes: usize = 8192;
 /// manifest `file` fields verbatim ("/sprites/" + file = the url /pets
 /// advertises).
 pub const sprites_prefix = "/sprites/";
+/// The liveness route: an EventSource-held SSE stream whose drop means
+/// the app is gone. Advertised in /pets as `eventsUrl`.
+pub const events_path = "/events";
+/// SSE heartbeat cadence; only keeps the path warm, no semantics.
+const heartbeat_seconds = 15;
 /// Cap on one served strip. Today's largest PNG is ~440 KiB; the cap
 /// leaves room for denser imported strips without letting a single GET
 /// read unbounded.
@@ -87,17 +105,31 @@ fn serverMain(handle: native_sdk.ChannelHandle) void {
 
     const address = std.Io.net.IpAddress.parseIp4(host, port) catch return;
     var listener = std.Io.net.IpAddress.listen(&address, io, .{ .reuse_address = true }) catch |err| {
-        std.debug.print("dsh-pet: state server listen {s}:{d} failed: {s}\n", .{ host, port, @errorName(err) });
+        std.debug.print("dsh-pet-desktop: state server listen {s}:{d} failed: {s}\n", .{ host, port, @errorName(err) });
         return;
     };
     defer listener.deinit(io);
-    std.debug.print("dsh-pet: state server listening on http://{s}:{d}/state\n", .{ host, port });
+    std.debug.print("dsh-pet-desktop: state server listening on http://{s}:{d}/state\n", .{ host, port });
 
     while (true) {
         const stream = listener.accept(io) catch return;
-        handleConnection(io, stream, handle) catch {};
-        stream.close(io);
+        // A thread per connection: /events holds its socket open for the
+        // app's lifetime, so inline handling would starve every /state
+        // POST behind one panel's liveness watch.
+        const thread = std.Thread.spawn(.{}, connectionMain, .{ stream, handle }) catch {
+            stream.close(io);
+            continue;
+        };
+        thread.detach();
     }
+}
+
+fn connectionMain(stream: std.Io.net.Stream, handle: native_sdk.ChannelHandle) void {
+    var threaded: std.Io.Threaded = .init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    defer stream.close(io);
+    handleConnection(io, stream, handle) catch {};
 }
 
 fn handleConnection(io: std.Io, stream: std.Io.net.Stream, handle: native_sdk.ChannelHandle) !void {
@@ -114,7 +146,7 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream, handle: native_sdk.Ch
         return;
     }
     if (head.method == .GET) {
-        try handleGet(io, &request, head.target);
+        try handleGet(io, &request, &conn_writer.interface, head.target);
         return;
     }
     if (head.method != .POST or !std.mem.eql(u8, head.target, "/state")) {
@@ -165,14 +197,50 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream, handle: native_sdk.Ch
     }
 }
 
-/// Read-only routes for the plugin's pet discovery. Both are no-body
-/// requests answered straight after receiveHead; a query string (cache
-/// busters) is stripped before matching.
-fn handleGet(io: std.Io, request: *std.http.Server.Request, target: []const u8) !void {
+/// Read-only routes for the plugin's pet discovery. All are no-body
+/// requests answered straight after receiveHead — except /events, which
+/// writes its head raw and then holds the connection open (see
+/// serveEvents). A query string (cache busters) is stripped before matching.
+fn handleGet(
+    io: std.Io,
+    request: *std.http.Server.Request,
+    raw_writer: *std.Io.Writer,
+    target: []const u8,
+) !void {
     const path = target[0 .. std.mem.indexOfScalar(u8, target, '?') orelse target.len];
     if (std.mem.eql(u8, path, "/pets")) return servePets(request);
+    if (std.mem.eql(u8, path, events_path)) return serveEvents(io, raw_writer);
     if (std.mem.startsWith(u8, path, sprites_prefix)) return serveSprite(io, request, path[sprites_prefix.len..]);
     try request.respond("not found\n", .{ .status = .not_found, .keep_alive = false, .extra_headers = &cors_headers });
+}
+
+/// The SSE response head, written raw: std.http's chunked BodyWriter only
+/// emits on a full buffer or end-of-stream, neither of which a heartbeat
+/// ever reaches, so the streaming API cannot serve a trickle. Close-
+/// delimited (no content-length, no chunking) is exactly right here — the
+/// stream ends when the process dies, which is the event itself.
+const sse_head = "HTTP/1.1 200 OK\r\n" ++
+    "content-type: text/event-stream\r\n" ++
+    "cache-control: no-cache\r\n" ++
+    "access-control-allow-origin: *\r\n" ++
+    "connection: close\r\n" ++
+    "\r\n";
+
+/// The liveness route the panel's EventSource holds (see the module
+/// header). Heartbeats until the write fails — a closed socket means the
+/// panel is gone, and this connection's thread exits with it. The app
+/// quitting kills the process and every socket with it, which is the event
+/// the panel is really after.
+fn serveEvents(io: std.Io, writer: *std.Io.Writer) !void {
+    // retry: fast EventSource reconnection after an app restart; the first
+    // comment gives the browser bytes to fire `open` on.
+    try writer.writeAll(sse_head ++ "retry: 1000\n\n: ready\n\n");
+    try writer.flush();
+    while (true) {
+        std.Io.sleep(io, .fromSeconds(heartbeat_seconds), .awake) catch return;
+        try writer.writeAll(": hb\n\n");
+        try writer.flush();
+    }
 }
 
 fn servePets(request: *std.http.Server.Request) !void {
@@ -209,13 +277,16 @@ fn serveSprite(io: std.Io, request: *std.http.Server.Request, tail: []const u8) 
     try request.respond(bytes, .{ .keep_alive = false, .extra_headers = &png_headers });
 }
 
-/// The /pets body: {"pets":[{"id":..., "moods":{<mood>:{"frames":N,
-/// "frameDurationMs":F,"url":"/sprites/<file>"}, ...}}]} — every pet the
-/// manifest declares, all 8 moods each, in Mood enum order.
+/// The /pets body: {"eventsUrl":"/events","pets":[{"id":..., "moods":
+/// {<mood>:{"frames":N, "frameDurationMs":F,"url":"/sprites/<file>"}, ...}}]}
+/// — every pet the manifest declares, all 8 moods each, in Mood enum order.
+/// `eventsUrl` is the capability marker for the liveness stream: a desktop
+/// too old to serve it simply omits the field, and the plugin stays on
+/// plain polling.
 pub fn petsJson(allocator: std.mem.Allocator, m: *const manifest.Manifest) ![]const u8 {
     var out = std.Io.Writer.Allocating.init(allocator);
     const w = &out.writer;
-    try w.writeAll("{\"pets\":[");
+    try w.print("{{\"eventsUrl\":\"{s}\",\"pets\":[", .{events_path});
     for (m.pets[0..m.pet_count], 0..) |pet, pet_index| {
         if (pet_index > 0) try w.writeByte(',');
         try w.print("{{\"id\":\"{s}\",\"moods\":{{", .{pet.id});
@@ -242,12 +313,13 @@ pub fn declaredSpriteFile(m: *const manifest.Manifest, tail: []const u8) ?[]cons
     return null;
 }
 
-/// Read one declared strip: "assets/sprites/" ++ file, the same prefix
-/// model.zig prepends when registering images. `dir` is a parameter so
-/// tests serve out of a tmpDir instead of the real assets.
+/// Read one declared strip through the resolved assets root (assets.zig),
+/// the same path model.zig registers. `dir` is a parameter so tests serve
+/// out of a tmpDir instead of the real assets; tests force a null root so
+/// the cwd-relative fallback below stays tmpDir-relative.
 fn readSprite(io: std.Io, dir: std.Io.Dir, allocator: std.mem.Allocator, file: []const u8) ![]u8 {
-    var path_buffer: [256]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buffer, "assets/sprites/{s}", .{file}) catch return error.FileNotFound;
+    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const path = assets.spritePath(&path_buffer, file) orelse return error.FileNotFound;
     return dir.readFileAlloc(io, path, allocator, .limited(max_sprite_bytes));
 }
 
@@ -271,6 +343,8 @@ test "pets json lists every pet with all 8 moods and sprite urls" {
         .object => |obj| obj,
         else => return error.TestUnexpectedResult,
     };
+    // The liveness-stream capability marker rides along.
+    try std.testing.expectEqualStrings(events_path, root.get("eventsUrl").?.string);
     const pets = switch (root.get("pets").?) {
         .array => |arr| arr,
         else => return error.TestUnexpectedResult,
@@ -322,6 +396,9 @@ test "sprite route serves only manifest-declared files" {
 }
 
 test "sprite file reads through the assets/sprites prefix, bounded" {
+    // Keep the path resolution on the cwd-relative fallback so the read
+    // stays inside tmpDir even when the test cwd holds real assets.
+    assets.forceRootForTests(null);
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(std.testing.io, "assets/sprites/wolf");

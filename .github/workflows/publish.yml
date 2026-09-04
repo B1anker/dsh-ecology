@@ -37,7 +37,48 @@ permissions:
   pull-requests: write
 
 jobs:
+  # The pet's desktop companion is a macOS binary that ships INSIDE the
+  # @seaveyon/dsh-pet tarball (packages/pet/desktop/ is in its files), so the
+  # ubuntu publish job cannot build it. This job does, and hands the staged
+  # directory over as an artifact. It runs on every main push even while the
+  # pet release line below is commented out — cheap, and it keeps this lane
+  # proven for the day the line is enabled.
+  desktop-binary:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          # Pinned to the version pet-desktop's README and build graph
+          # declare; the zero-native SDK is a locked-commit tarball
+          # dependency, fetched by zig itself.
+          version: 0.16.0
+
+      # One build per Mac architecture, staged under the names the launcher's
+      # `process.arch` template selects (`dsh-pet-desktop-arm64`,
+      # `dsh-pet-desktop-x64`). The x86_64 build is a zig cross-compile off
+      # the same sysroot — macos-latest runners are Apple silicon, and zig
+      # needs no Intel host to target Intel.
+      - run: |
+          zig build -Doptimize=ReleaseSmall --prefix zig-out-arm64
+          zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-macos --prefix zig-out-x64
+        working-directory: packages/pet-desktop
+
+      - run: |
+          mkdir -p packages/pet/desktop
+          install -m 755 packages/pet-desktop/zig-out-arm64/bin/dsh-pet-desktop packages/pet/desktop/dsh-pet-desktop-arm64
+          install -m 755 packages/pet-desktop/zig-out-x64/bin/dsh-pet-desktop packages/pet/desktop/dsh-pet-desktop-x64
+          cp -R packages/pet-desktop/assets packages/pet/desktop/assets
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pet-desktop-binary
+          path: packages/pet/desktop/
+          if-no-files-found: error
+
   publish:
+    needs: desktop-binary
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -50,6 +91,15 @@ jobs:
           # is on the ruleset's bypass list, so the push goes through.
           token: ${{ secrets.RELEASE_TOKEN }}
           persist-credentials: true
+
+      # The companion binary lands where npm pack picks it up. upload/
+      # download-artifact does not preserve the executable bit, so restore
+      # it — npm pack does keep it from here into the tarball.
+      - uses: actions/download-artifact@v4
+        with:
+          name: pet-desktop-binary
+          path: packages/pet/desktop/
+      - run: chmod +x packages/pet/desktop/dsh-pet-desktop-*
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -163,5 +213,7 @@ jobs:
           # by hand and its trusted publisher registered before CI can release
           # it (README → "Bootstrapping a new package on npm"). Until then this
           # line stays commented out, because an unbootstrapped pet fails the
-          # whole job and blocks the other packages.
+          # whole job and blocks the other packages. The manual first publish
+          # must run `bun run build:desktop` in packages/pet first, so the
+          # tarball carries the companion binary this job's sibling builds.
           # release_package packages/pet ./release/pet.config.mjs

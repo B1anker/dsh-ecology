@@ -36,6 +36,7 @@
   },
   "files": [
     "dist/",
+    "desktop/",
     "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",
@@ -71,7 +72,8 @@
     "test:coverage": "rstest run --coverage",
     "test:watch": "rstest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "pack:check": "bun run build && npm pack --dry-run"
+    "pack:check": "bun run build && npm pack --dry-run",
+    "build:desktop": "cd ../pet-desktop && zig build -Doptimize=ReleaseSmall --prefix zig-out-arm64 && zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-macos --prefix zig-out-x64 && mkdir -p ../pet/desktop && install -m 755 zig-out-arm64/bin/dsh-pet-desktop ../pet/desktop/dsh-pet-desktop-arm64 && install -m 755 zig-out-x64/bin/dsh-pet-desktop ../pet/desktop/dsh-pet-desktop-x64 && rm -rf ../pet/desktop/assets && cp -R assets ../pet/desktop/assets"
   },
   "devDependencies": {
     "@rsbuild/plugin-react": "^1",
@@ -79,6 +81,7 @@
     "@rstest/core": "^0.11.9",
     "@rstest/coverage-v8": "^0.11.9",
     "@seaveyon/dsh-plugin-testkit": "workspace:*",
+    "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "jsdom": "^26.0.0",

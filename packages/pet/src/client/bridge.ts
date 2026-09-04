@@ -10,12 +10,14 @@
  * desktop app may be absent, the port closed, the request blocked — every
  * failure is swallowed silently. Nothing here throws, logs, or otherwise
  * touches the plugin's own behavior, and not one request is made while the
- * `companionEnabled` setting is off (the default).
+ * `companionEnabled` setting is off (it is on by default: driving the desktop
+ * pet is the plugin's whole job).
  *
  * @module @seaveyon/dsh-pet/client/bridge
  */
 
 import { MOODS } from '../desktop.js'
+import { detectLocale, type Locale } from './i18n.js'
 import type { Mood, PetStateMachine } from './mood.js'
 import type { PetSettingsStore } from './settings.js'
 
@@ -32,9 +34,9 @@ export const DEFAULT_ENDPOINT = `http://127.0.0.1:${DESKTOP_COMPANION_PORT}/stat
 export const DESKTOP_BASE_URL = `http://127.0.0.1:${DESKTOP_COMPANION_PORT}`
 
 /**
- * How long pet discovery may take before the plugin settles for the built-in
- * roster. The desktop app not running is the normal case, and it must never
- * stall the settings panel.
+ * How long pet discovery may take before the plugin settles for offline. The
+ * desktop app not running is the normal case, and it must never stall the
+ * settings panel.
  */
 export const DESKTOP_PETS_TIMEOUT_MS = 800
 
@@ -84,14 +86,30 @@ function parseMoodSprite(raw: unknown, baseUrl: string): DesktopPetMoodSprite | 
 }
 
 /**
+ * What a successful /pets answer carries: the roster, plus the capabilities
+ * the desktop advertises. `eventsUrl` (the liveness stream, absolute) is
+ * absent on desktops too old to serve it — the caller stays on polling.
+ */
+export interface DesktopPetsResult {
+  pets: DesktopPet[]
+  eventsUrl: string | null
+}
+
+/**
  * Narrow the `GET /pets` body. A body that is not the documented envelope is
  * a protocol violation (`null`); an envelope whose individual pets are broken
  * keeps the healthy ones — one truncated import should not hide the rest.
  */
-function parseDesktopPets(body: unknown, baseUrl: string): DesktopPet[] | null {
+function parseDesktopPets(body: unknown, baseUrl: string): DesktopPetsResult | null {
   if (typeof body !== 'object' || body === null) return null
-  const list = (body as Record<string, unknown>)['pets']
+  const envelope = body as Record<string, unknown>
+  const list = envelope['pets']
   if (!Array.isArray(list)) return null
+  const rawEventsUrl = envelope['eventsUrl']
+  const eventsUrl =
+    typeof rawEventsUrl === 'string' && rawEventsUrl.startsWith('/')
+      ? `${baseUrl}${rawEventsUrl}`
+      : null
   const pets: DesktopPet[] = []
   for (const raw of list) {
     if (typeof raw !== 'object' || raw === null) continue
@@ -114,20 +132,20 @@ function parseDesktopPets(body: unknown, baseUrl: string): DesktopPet[] | null {
     }
     if (complete) pets.push({ id, moods })
   }
-  return pets
+  return { pets, eventsUrl }
 }
 
 /**
- * Discover the imported pets the desktop app is currently serving.
+ * Discover the pets the desktop app is currently serving.
  *
- * Returns the roster on success and `null` on every failure — app not
- * running, timeout, non-200, unreadable JSON. The distinction matters: `null`
- * means "desktop unreachable, keep whatever list we had", while an empty
- * array means "desktop is up and has nothing imported".
+ * Returns the parsed envelope on success and `null` on every failure — app
+ * not running, timeout, non-200, unreadable JSON. The distinction matters:
+ * `null` means "desktop unreachable, keep whatever list we had", while an
+ * empty roster means "desktop is up and has nothing to show".
  */
 export async function fetchDesktopPets(
   options: FetchDesktopPetsOptions = {},
-): Promise<DesktopPet[] | null> {
+): Promise<DesktopPetsResult | null> {
   const baseUrl = options.baseUrl ?? DESKTOP_BASE_URL
   const fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis)
   const timeoutMs = options.timeoutMs ?? DESKTOP_PETS_TIMEOUT_MS
@@ -136,7 +154,7 @@ export async function fetchDesktopPets(
   // Every error inside run() — including a fetch implementation that throws
   // synchronously — collapses to null, so the raced promise can never reject
   // after the timeout wins and nobody is left awaiting it.
-  const run = async (): Promise<DesktopPet[] | null> => {
+  const run = async (): Promise<DesktopPetsResult | null> => {
     try {
       const response = await fetchFn(`${baseUrl}/pets`, { signal: controller.signal })
       if (!response.ok) return null
@@ -162,6 +180,11 @@ export interface DesktopBridgeState {
   mood: Mood
   petId: string
   name: string
+  /**
+   * The page's locale, so the desktop app's own chrome (the right-click
+   * Quit item) speaks the same language as the DSH page that drives it.
+   */
+  locale: Locale
 }
 
 export interface DesktopBridgeOptions {
@@ -205,9 +228,11 @@ export class DesktopBridge {
 
   /**
    * The single notification handler. Builds the payload, skips it if nothing
-   * changed since the last send, and otherwise POSTs it. The `.catch` (and
-   * the try around the call itself, for fetch implementations that throw
-   * synchronously) is the whole error story: the desktop app is optional, so
+   * changed since the last send, and otherwise POSTs it. A failed send rolls
+   * the dedupe back — `lastSent` must mean "the app has this", and a POST
+   * that died in the void (app down, port not yet bound) has to be retried
+   * at the next change or {@link announce}, not remembered as delivered.
+   * Remaining errors are still swallowed: the desktop app is optional, so
    * its absence must be invisible.
    */
   private push = (): void => {
@@ -218,19 +243,39 @@ export class DesktopBridge {
       mood: this.machine.getSnapshot(),
       petId: config.petId,
       name: config.name,
+      locale: detectLocale(navigator.language),
     }
     const body = JSON.stringify(state)
     if (body === this.lastSent) return
     this.lastSent = body
+    const forgetIfUnchanged = () => {
+      if (this.lastSent === body) this.lastSent = ''
+    }
 
     try {
       this.fetchFn(this.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
-      }).catch(() => {})
+      })
+        .then((res) => {
+          if (!res.ok) forgetIfUnchanged()
+        })
+        .catch(forgetIfUnchanged)
     } catch {
-      // A synchronous throw is the same story as a rejection: ignore it.
+      // A synchronous throw is the same story as a rejection: not delivered.
+      forgetIfUnchanged()
     }
+  }
+
+  /**
+   * Force a resend of the current state even when nothing changed. The
+   * desktop app restores its own state file at boot; when it answers
+   * discovery after this page's first push went into the void, this is how
+   * the page's selection reasserts itself.
+   */
+  announce(): void {
+    this.lastSent = ''
+    this.push()
   }
 }

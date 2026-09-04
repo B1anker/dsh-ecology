@@ -103,10 +103,24 @@ describe('gating', () => {
     expect(stub.calls[0]?.init?.headers).toEqual({ 'Content-Type': 'application/json' })
     expect(JSON.parse(String(stub.calls[0]?.init?.body))).toEqual({
       mood: 'idle',
-      petId: 'blob',
+      petId: 'deepseek-chan',
       name: 'Mochi',
+      locale: 'en',
     })
     bridge.dispose()
+  })
+
+  test('a zh page sends its locale so the desktop chrome speaks Chinese', () => {
+    const original = window.navigator.language
+    Object.defineProperty(window.navigator, 'language', { value: 'zh-CN', configurable: true })
+    try {
+      const { stub, bridge } = wire()
+
+      expect(JSON.parse(String(stub.calls[0]?.init?.body))).toMatchObject({ locale: 'zh' })
+      bridge.dispose()
+    } finally {
+      Object.defineProperty(window.navigator, 'language', { value: original, configurable: true })
+    }
   })
 
   test('flipping the toggle on later announces the current state at that moment', () => {
@@ -148,8 +162,9 @@ describe('state pushes', () => {
     expect(stub.calls).toHaveLength(2)
     expect(JSON.parse(String(stub.calls[1]?.init?.body))).toEqual({
       mood: 'working',
-      petId: 'blob',
+      petId: 'deepseek-chan',
       name: 'Mochi',
+      locale: 'en',
     })
     bridge.dispose()
   })
@@ -164,6 +179,7 @@ describe('state pushes', () => {
       mood: 'idle',
       petId: 'cat',
       name: '豆豆',
+      locale: 'en',
     })
     bridge.dispose()
   })
@@ -219,6 +235,62 @@ describe('fire-and-forget', () => {
   })
 })
 
+describe('redelivery', () => {
+  test('a failed send is not remembered: toggling the bridge re-delivers the same state', async () => {
+    let fail = true
+    const { stub, settings, bridge } = wire({
+      impl: () =>
+        fail ? Promise.reject(new Error('connection refused')) : Promise.resolve(new Response()),
+    })
+    expect(stub.calls).toHaveLength(1) // the announcement attempt, into the void
+    await new Promise((resolve) => setTimeout(resolve, 0)) // let the rejection land
+    fail = false
+
+    // companionEnabled is not part of the payload, so off→on rebuilds the
+    // exact body that just failed: a poisoned dedupe would skip the resend.
+    settings.update({ companionEnabled: false })
+    settings.update({ companionEnabled: true })
+
+    expect(stub.calls).toHaveLength(2)
+    expect(stub.calls[1]?.init?.body).toBe(stub.calls[0]?.init?.body)
+    bridge.dispose()
+  })
+
+  test('a non-ok response counts as not delivered either', async () => {
+    const { stub, settings, bridge } = wire({
+      impl: () => Promise.resolve(new Response(null, { status: 500 })),
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    settings.update({ companionEnabled: false })
+    settings.update({ companionEnabled: true })
+
+    expect(stub.calls).toHaveLength(2)
+    bridge.dispose()
+  })
+
+  test('announce() resends the current state even when nothing changed', async () => {
+    const { stub, bridge } = wire()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(stub.calls).toHaveLength(1)
+
+    bridge.announce()
+
+    expect(stub.calls).toHaveLength(2)
+    expect(stub.calls[1]?.init?.body).toBe(stub.calls[0]?.init?.body)
+    bridge.dispose()
+  })
+
+  test('announce() with the toggle off still sends nothing', () => {
+    const { stub, bridge } = wire({ companionEnabled: false })
+
+    bridge.announce()
+
+    expect(stub.calls).toHaveLength(0)
+    bridge.dispose()
+  })
+})
+
 /** A wire-format imported pet with every mood covered. */
 function desktopPetFixture(id = 'ai-sleepy-silver-wolf', frames = 6, frameDurationMs = 1100) {
   return {
@@ -237,20 +309,52 @@ describe('fetchDesktopPets', () => {
       ),
     )
 
-    const pets = await fetchDesktopPets({ fetchFn: stub.fn })
+    const result = await fetchDesktopPets({ fetchFn: stub.fn })
 
     expect(stub.calls).toHaveLength(1)
     expect(stub.calls[0]?.url).toBe(`${DESKTOP_BASE_URL}/pets`)
     expect(stub.calls[0]?.init?.signal).toBeInstanceOf(AbortSignal)
-    expect(pets).toHaveLength(1)
-    expect(pets?.[0]?.id).toBe('ai-sleepy-silver-wolf')
+    expect(result?.pets).toHaveLength(1)
+    expect(result?.pets[0]?.id).toBe('ai-sleepy-silver-wolf')
+    expect(result?.eventsUrl).toBeNull()
     for (const mood of MOODS) {
-      expect(pets?.[0]?.moods[mood]).toEqual({
+      expect(result?.pets[0]?.moods[mood]).toEqual({
         frames: 6,
         frameDurationMs: 1100,
         url: `${DESKTOP_BASE_URL}/sprites/ai-sleepy-silver-wolf/${mood}.png`,
       })
     }
+  })
+
+  test('an advertised events stream resolves against the bridge origin', async () => {
+    const stub = fetchStub(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ eventsUrl: '/events', pets: [desktopPetFixture()] }), {
+          status: 200,
+        }),
+      ),
+    )
+
+    const result = await fetchDesktopPets({ fetchFn: stub.fn })
+
+    expect(result?.eventsUrl).toBe(`${DESKTOP_BASE_URL}/events`)
+  })
+
+  test.each([
+    ['an absolute URL', 'https://evil.example/events'],
+    ['an empty string', ''],
+    ['a non-string', 42],
+  ])('a malformed eventsUrl (%s) parses as absent', async (_label, eventsUrl) => {
+    const stub = fetchStub(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ eventsUrl, pets: [desktopPetFixture()] }), { status: 200 }),
+      ),
+    )
+
+    const result = await fetchDesktopPets({ fetchFn: stub.fn })
+
+    expect(result?.eventsUrl).toBeNull()
+    expect(result?.pets).toHaveLength(1)
   })
 
   test('an injected base URL anchors both the request and the resolved sprites', async () => {
@@ -260,10 +364,10 @@ describe('fetchDesktopPets', () => {
       ),
     )
 
-    const pets = await fetchDesktopPets({ fetchFn: stub.fn, baseUrl: 'http://127.0.0.1:9' })
+    const result = await fetchDesktopPets({ fetchFn: stub.fn, baseUrl: 'http://127.0.0.1:9' })
 
     expect(stub.calls[0]?.url).toBe('http://127.0.0.1:9/pets')
-    expect(pets?.[0]?.moods.idle.url).toBe(
+    expect(result?.pets[0]?.moods.idle.url).toBe(
       'http://127.0.0.1:9/sprites/ai-sleepy-silver-wolf/idle.png',
     )
   })
@@ -306,14 +410,17 @@ describe('fetchDesktopPets', () => {
     }
     const stub = fetchStub(() => Promise.resolve(new Response(JSON.stringify(body))))
 
-    const pets = await fetchDesktopPets({ fetchFn: stub.fn })
+    const result = await fetchDesktopPets({ fetchFn: stub.fn })
 
-    expect(pets?.map((pet) => pet.id)).toEqual(['healthy'])
+    expect(result?.pets.map((pet) => pet.id)).toEqual(['healthy'])
   })
 
   test('an online desktop with no imports answers with an empty roster, not null', async () => {
     const stub = fetchStub(() => Promise.resolve(new Response(JSON.stringify({ pets: [] }))))
-    await expect(fetchDesktopPets({ fetchFn: stub.fn })).resolves.toEqual([])
+    await expect(fetchDesktopPets({ fetchFn: stub.fn })).resolves.toEqual({
+      pets: [],
+      eventsUrl: null,
+    })
   })
 
   test('a fetch that never answers loses the race to the timeout', async () => {

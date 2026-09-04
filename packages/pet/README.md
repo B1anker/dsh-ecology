@@ -28,20 +28,46 @@ the plugin starts feeding the desktop app immediately.
 
 > The row exists because the client module system discovers plugin bundles by
 > scanning the host Loader's active entries: a package installed as a plain
-> dependency is never served. The host plugin the row activates is a deliberate
-> no-op — every feature lives in the browser bundle.
+> dependency is never served. The host plugin the row activates owns exactly
+> one route — the desktop-app launcher below — and nothing else.
 
 ## Using the pet
 
 The pet itself appears on your desktop, courtesy of the companion app. What
 you get in the web UI is **Settings → Pet**:
 
-- Which pet shows on the desktop: four built-in sprites (blob, cat, robot,
-  DeepSeek-chan「DeepSeek 酱」), plus any pets imported into the desktop app.
+- Which pet shows on the desktop: the built-in sprite (deepseek-chan),
+  plus any pets imported into the desktop app.
 - The pet's name.
-- The desktop-companion switch — on by default, because driving the desktop
-  pet is this plugin's whole job. When the desktop app isn't running the
-  bridge fails silently, so leaving it on costs nothing.
+- The desktop companion's summon button. The bridge itself is always on —
+  driving the desktop pet is this plugin's whole job, and when the desktop
+  app isn't running the bridge fails silently, so it costs nothing.
+
+### Launching the desktop app from the panel
+
+On a loopback page (the DSH server on the same machine as the browser), the
+companion row offers a **Launch desktop app** button whenever the desktop app
+is unreachable. The button asks the plugin's host face, which runs inside the
+DSH server, to start the app via `POST /dsh-pet/launch-desktop`
+([`src/launch.ts`](src/launch.ts)): loopback peers only, a mandatory custom
+header so no cross-origin page can drive-by trigger it, and the login gate's
+session when the profile has one. On a remote host the
+button never appears — launching would start the pet on the server, not on
+your desktop.
+
+What the host starts, in order:
+
+1. The companion binary bundled inside this npm package
+   (`desktop/dsh-pet-desktop-<arch>` — one build per Mac architecture, the
+   launcher picks by `process.arch` — plus its sprite assets in
+   `desktop/assets/`, staged by the release workflow). It is
+   version-locked to the plugin, so the bridge protocol can never drift, and
+   npm-installed files carry no quarantine attribute, so it spawns without a
+   Gatekeeper prompt.
+2. An installed `DSH Pet.app` — resolved by bundle id first, then the
+   standard Applications folders (development and pre-bundle installs).
+
+If the host finds neither, the panel links to the download page instead.
 
 Settings persist through the DSH settings service when it is available and
 fall back to `localStorage` — including for browsers on a remote host, whose
@@ -53,18 +79,20 @@ The picker's single source of truth is the desktop app: when it answers
 `GET http://127.0.0.1:45731/pets`, that roster — built-ins included — is the
 whole list, and every preview is a sprite strip off the bridge server played
 with stepped CSS background animation. Known built-in ids keep their
-localized names (deepseek-chan stays「DeepSeek 酱」); anything else is an
-import, humanized from its id and marked with an *Imported* badge. If the
-desktop app is unreachable the picker falls back to the built-in SVG roster
-with a "not connected" hint, retries quietly a couple of times while the
-panel stays open, and a selection made against either roster stays selected
-across the switch since ids match on both sides. The desktop app itself owns
-what happens to a selected-but-unavailable imported pet on its own surface.
+localized names; anything else is an
+import, humanized from its id and marked with an *Imported* badge. Until the
+desktop app answers (or if it is unreachable) the picker stays empty — the
+pet lives on the desktop, so the page offers no stand-in roster — with a
+"not connected" hint, and discovery retries quietly a couple of times while
+the panel stays open. A stored petId stays selected once the desktop
+answers, since ids match on both sides. The desktop app itself owns what
+happens to a selected-but-unavailable imported pet on its own surface.
 
 ## How it works
 
-The package is a dual-face DSH plugin whose host face is a no-op Cordis plugin
-(see [`src/index.ts`](src/index.ts)) and whose client face
+The package is a dual-face DSH plugin whose host face
+([`src/index.ts`](src/index.ts)) registers a single launcher route and whose
+client face
 ([`src/client/`](src/client)) is served by the shell's client module system at
 `/plugins/@seaveyon/dsh-pet/client.js`. The client reads live agent state from
 the `sessions.currentProvideInfo` provide channel, derives the pet's mood from
@@ -80,7 +108,7 @@ at the top of [`src/client/host-types.ts`](src/client/host-types.ts).
 
 ```sh
 bun install
-bun run build   # emits dist/index.js (host no-op) and dist/client.js (browser bundle)
+bun run build   # emits dist/index.js (host: the launch route) and dist/client.js (browser bundle)
 bun run test    # jsdom suite against the client doubles in @seaveyon/dsh-plugin-testkit
 ```
 
