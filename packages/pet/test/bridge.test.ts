@@ -293,20 +293,52 @@ describe('fetchDesktopPets', () => {
       ),
     )
 
-    const pets = await fetchDesktopPets({ fetchFn: stub.fn })
+    const result = await fetchDesktopPets({ fetchFn: stub.fn })
 
     expect(stub.calls).toHaveLength(1)
     expect(stub.calls[0]?.url).toBe(`${DESKTOP_BASE_URL}/pets`)
     expect(stub.calls[0]?.init?.signal).toBeInstanceOf(AbortSignal)
-    expect(pets).toHaveLength(1)
-    expect(pets?.[0]?.id).toBe('ai-sleepy-silver-wolf')
+    expect(result?.pets).toHaveLength(1)
+    expect(result?.pets[0]?.id).toBe('ai-sleepy-silver-wolf')
+    expect(result?.eventsUrl).toBeNull()
     for (const mood of MOODS) {
-      expect(pets?.[0]?.moods[mood]).toEqual({
+      expect(result?.pets[0]?.moods[mood]).toEqual({
         frames: 6,
         frameDurationMs: 1100,
         url: `${DESKTOP_BASE_URL}/sprites/ai-sleepy-silver-wolf/${mood}.png`,
       })
     }
+  })
+
+  test('an advertised events stream resolves against the bridge origin', async () => {
+    const stub = fetchStub(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ eventsUrl: '/events', pets: [desktopPetFixture()] }), {
+          status: 200,
+        }),
+      ),
+    )
+
+    const result = await fetchDesktopPets({ fetchFn: stub.fn })
+
+    expect(result?.eventsUrl).toBe(`${DESKTOP_BASE_URL}/events`)
+  })
+
+  test.each([
+    ['an absolute URL', 'https://evil.example/events'],
+    ['an empty string', ''],
+    ['a non-string', 42],
+  ])('a malformed eventsUrl (%s) parses as absent', async (_label, eventsUrl) => {
+    const stub = fetchStub(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ eventsUrl, pets: [desktopPetFixture()] }), { status: 200 }),
+      ),
+    )
+
+    const result = await fetchDesktopPets({ fetchFn: stub.fn })
+
+    expect(result?.eventsUrl).toBeNull()
+    expect(result?.pets).toHaveLength(1)
   })
 
   test('an injected base URL anchors both the request and the resolved sprites', async () => {
@@ -316,10 +348,10 @@ describe('fetchDesktopPets', () => {
       ),
     )
 
-    const pets = await fetchDesktopPets({ fetchFn: stub.fn, baseUrl: 'http://127.0.0.1:9' })
+    const result = await fetchDesktopPets({ fetchFn: stub.fn, baseUrl: 'http://127.0.0.1:9' })
 
     expect(stub.calls[0]?.url).toBe('http://127.0.0.1:9/pets')
-    expect(pets?.[0]?.moods.idle.url).toBe(
+    expect(result?.pets[0]?.moods.idle.url).toBe(
       'http://127.0.0.1:9/sprites/ai-sleepy-silver-wolf/idle.png',
     )
   })
@@ -362,14 +394,17 @@ describe('fetchDesktopPets', () => {
     }
     const stub = fetchStub(() => Promise.resolve(new Response(JSON.stringify(body))))
 
-    const pets = await fetchDesktopPets({ fetchFn: stub.fn })
+    const result = await fetchDesktopPets({ fetchFn: stub.fn })
 
-    expect(pets?.map((pet) => pet.id)).toEqual(['healthy'])
+    expect(result?.pets.map((pet) => pet.id)).toEqual(['healthy'])
   })
 
   test('an online desktop with no imports answers with an empty roster, not null', async () => {
     const stub = fetchStub(() => Promise.resolve(new Response(JSON.stringify({ pets: [] }))))
-    await expect(fetchDesktopPets({ fetchFn: stub.fn })).resolves.toEqual([])
+    await expect(fetchDesktopPets({ fetchFn: stub.fn })).resolves.toEqual({
+      pets: [],
+      eventsUrl: null,
+    })
   })
 
   test('a fetch that never answers loses the race to the timeout', async () => {
