@@ -133,50 +133,6 @@
           "frameDurationMs": 83.333
         }
       }
-    },
-    "deepseek-chan": {
-      "moods": {
-        "idle": {
-          "file": "deepseek-chan/idle.png",
-          "frames": 24,
-          "frameDurationMs": 250
-        },
-        "thinking": {
-          "file": "deepseek-chan/thinking.png",
-          "frames": 24,
-          "frameDurationMs": 100
-        },
-        "working": {
-          "file": "deepseek-chan/working.png",
-          "frames": 4,
-          "frameDurationMs": 87.5
-        },
-        "waiting": {
-          "file": "deepseek-chan/waiting.png",
-          "frames": 18,
-          "frameDurationMs": 88.889
-        },
-        "sad": {
-          "file": "deepseek-chan/sad.png",
-          "frames": 4,
-          "frameDurationMs": 90
-        },
-        "sleeping": {
-          "file": "deepseek-chan/sleeping.png",
-          "frames": 24,
-          "frameDurationMs": 200
-        },
-        "celebrating": {
-          "file": "deepseek-chan/celebrating.png",
-          "frames": 7,
-          "frameDurationMs": 85.714
-        },
-        "pet": {
-          "file": "deepseek-chan/pet.png",
-          "frames": 6,
-          "frameDurationMs": 83.333
-        }
-      }
     }
   }
 }

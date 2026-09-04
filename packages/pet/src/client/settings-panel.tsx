@@ -62,9 +62,8 @@ const RETRY_COUNT = 2
 const RETRY_DELAY_MS = 2000
 
 /**
- * The picker's display name for a pet id: the four built-ins keep their
- * localized names (deepseek-chan is「DeepSeek 酱」, not "Deepseek Chan");
- * anything else is an import, humanized from its id.
+ * The picker's display name for a pet id: the three built-ins keep their
+ * localized names; anything else is an import, humanized from its id.
  */
 function displayName(petId: string, locale: Locale): string {
   const known = PETS.find((pet) => pet.id === petId)

@@ -36,8 +36,8 @@ the plugin starts feeding the desktop app immediately.
 The pet itself appears on your desktop, courtesy of the companion app. What
 you get in the web UI is **Settings → Pet**:
 
-- Which pet shows on the desktop: four built-in sprites (blob, cat, robot,
-  DeepSeek-chan「DeepSeek 酱」), plus any pets imported into the desktop app.
+- Which pet shows on the desktop: three built-in sprites (blob, cat, robot),
+  plus any pets imported into the desktop app.
 - The pet's name.
 - The desktop-companion switch — on by default, because driving the desktop
   pet is this plugin's whole job. When the desktop app isn't running the
@@ -53,7 +53,7 @@ The picker's single source of truth is the desktop app: when it answers
 `GET http://127.0.0.1:45731/pets`, that roster — built-ins included — is the
 whole list, and every preview is a sprite strip off the bridge server played
 with stepped CSS background animation. Known built-in ids keep their
-localized names (deepseek-chan stays「DeepSeek 酱」); anything else is an
+localized names; anything else is an
 import, humanized from its id and marked with an *Imported* badge. If the
 desktop app is unreachable the picker falls back to the built-in SVG roster
 with a "not connected" hint, retries quietly a couple of times while the

@@ -24,7 +24,7 @@ const state = @import("state.zig");
 pub const Mood = state.Mood;
 pub const mood_count = @typeInfo(Mood).@"enum".fields.len;
 
-/// Capacity for the manifest's pet table. blob/cat/robot/deepseek-chan ship
+/// Capacity for the manifest's pet table. blob/cat/robot ship
 /// today; the rest is headroom for imported pets (see scripts/import-codex-pet.mjs).
 pub const max_pets = 8;
 
