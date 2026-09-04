@@ -27,6 +27,10 @@ dsh plugin --profile web add @seaveyon/dsh-pet
 
 有 settings 服务时配置写入 DSH settings，否则回退 `localStorage`——远端浏览器（settings RPC 不出服务器）也走本地存储。
 
+### 导入的桌面宠物
+
+当 [pet 桌面伴侣](../pet-desktop) 正在运行时，导入到桌面 App 里的位图宠物（例如 Codex 宠物包 `ai-sleepy-silver-wolf`）也会出现在 **设置 → 宠物** 的形象选择器里，并带有"桌面"角标。插件通过伴侣的本地回环服务（`GET http://127.0.0.1:45731/pets`）发现它们，并用步进式 CSS 背景动画在悬浮窗里播放精灵条带——每个心情一张条带，显示尺寸与内置形象一致。发现是尽力而为的：桌面 App 不在线时选择器只显示内置形象；已选中的导入宠物在桌面 App 不可达时回退显示果冻团，不会留空。
+
 ## 原理
 
 本包是双面 DSH 插件：宿主面是空操作的 Cordis 插件（见 [`src/index.ts`](src/index.ts)），客户端面（[`src/client/`](src/client)）由 shell 的 client 模块系统伺服于 `/plugins/@seaveyon/dsh-pet/client.js`。客户端从 `sessions.currentProvideInfo` provide 通道读取实时 agent 状态，从会话快照推导宠物心情——零 LLM 调用、零网络、零遥测。

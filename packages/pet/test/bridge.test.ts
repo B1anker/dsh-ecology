@@ -5,10 +5,17 @@
  */
 
 import { describe, expect, test } from '@rstest/core'
-import { DEFAULT_ENDPOINT, DESKTOP_COMPANION_PORT, DesktopBridge } from '../src/client/bridge.js'
+import {
+  DEFAULT_ENDPOINT,
+  DESKTOP_BASE_URL,
+  DESKTOP_COMPANION_PORT,
+  DesktopBridge,
+  fetchDesktopPets,
+} from '../src/client/bridge.js'
 import type { ConversationSnapshotSlice } from '../src/client/host-types.js'
 import { PetStateMachine } from '../src/client/mood.js'
 import { PetSettingsStore } from '../src/client/settings.js'
+import { MOODS } from '../src/desktop.js'
 
 interface FetchCall {
   url: unknown
@@ -199,5 +206,111 @@ describe('fire-and-forget', () => {
     expect(() => settings.update({ companionEnabled: true })).not.toThrow()
     expect(stub.calls).toHaveLength(1)
     bridge.dispose()
+  })
+})
+
+/** A wire-format imported pet with every mood covered. */
+function desktopPetFixture(id = 'ai-sleepy-silver-wolf', frames = 6, frameDurationMs = 1100) {
+  return {
+    id,
+    moods: Object.fromEntries(
+      MOODS.map((mood) => [mood, { frames, frameDurationMs, url: `/sprites/${id}/${mood}.png` }]),
+    ),
+  }
+}
+
+describe('fetchDesktopPets', () => {
+  test('returns the roster with sprite URLs resolved against the bridge origin', async () => {
+    const stub = fetchStub(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ pets: [desktopPetFixture()] }), { status: 200 }),
+      ),
+    )
+
+    const pets = await fetchDesktopPets({ fetchFn: stub.fn })
+
+    expect(stub.calls).toHaveLength(1)
+    expect(stub.calls[0]?.url).toBe(`${DESKTOP_BASE_URL}/pets`)
+    expect(stub.calls[0]?.init?.signal).toBeInstanceOf(AbortSignal)
+    expect(pets).toHaveLength(1)
+    expect(pets?.[0]?.id).toBe('ai-sleepy-silver-wolf')
+    for (const mood of MOODS) {
+      expect(pets?.[0]?.moods[mood]).toEqual({
+        frames: 6,
+        frameDurationMs: 1100,
+        url: `${DESKTOP_BASE_URL}/sprites/ai-sleepy-silver-wolf/${mood}.png`,
+      })
+    }
+  })
+
+  test('an injected base URL anchors both the request and the resolved sprites', async () => {
+    const stub = fetchStub(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ pets: [desktopPetFixture()] }), { status: 200 }),
+      ),
+    )
+
+    const pets = await fetchDesktopPets({ fetchFn: stub.fn, baseUrl: 'http://127.0.0.1:9' })
+
+    expect(stub.calls[0]?.url).toBe('http://127.0.0.1:9/pets')
+    expect(pets?.[0]?.moods.idle.url).toBe(
+      'http://127.0.0.1:9/sprites/ai-sleepy-silver-wolf/idle.png',
+    )
+  })
+
+  test('the desktop app not running (rejected fetch) resolves to null', async () => {
+    const stub = fetchStub(() => Promise.reject(new Error('connection refused')))
+    await expect(fetchDesktopPets({ fetchFn: stub.fn })).resolves.toBeNull()
+  })
+
+  test('a non-200 response resolves to null', async () => {
+    const stub = fetchStub(() => Promise.resolve(new Response('nope', { status: 500 })))
+    await expect(fetchDesktopPets({ fetchFn: stub.fn })).resolves.toBeNull()
+  })
+
+  test('unparseable JSON resolves to null', async () => {
+    const stub = fetchStub(() => Promise.resolve(new Response('not json', { status: 200 })))
+    await expect(fetchDesktopPets({ fetchFn: stub.fn })).resolves.toBeNull()
+  })
+
+  test.each([
+    ['a non-object body', 42],
+    ['a body without a pets array', { pets: 'nope' }],
+  ])('a well-formed but off-contract body (%s) resolves to null', async (_label, body) => {
+    const stub = fetchStub(() => Promise.resolve(new Response(JSON.stringify(body))))
+    await expect(fetchDesktopPets({ fetchFn: stub.fn })).resolves.toBeNull()
+  })
+
+  test('broken pets are dropped one by one; healthy ones survive', async () => {
+    const healthy = desktopPetFixture('healthy')
+    const badFrames = desktopPetFixture('bad-frames')
+    badFrames.moods['idle'] = { frames: 0, frameDurationMs: 100, url: '/x.png' }
+    const badDuration = desktopPetFixture('bad-duration')
+    badDuration.moods['pet'] = { frames: 2, frameDurationMs: 0, url: '/x.png' }
+    const badUrl = desktopPetFixture('bad-url')
+    badUrl.moods['sad'] = { frames: 2, frameDurationMs: 100, url: 'https://evil.example/x.png' }
+    const missingMood = desktopPetFixture('missing-mood')
+    delete missingMood.moods['celebrating']
+    const body = {
+      pets: [healthy, badFrames, badDuration, badUrl, missingMood, 'junk', { id: 7 }],
+    }
+    const stub = fetchStub(() => Promise.resolve(new Response(JSON.stringify(body))))
+
+    const pets = await fetchDesktopPets({ fetchFn: stub.fn })
+
+    expect(pets?.map((pet) => pet.id)).toEqual(['healthy'])
+  })
+
+  test('an online desktop with no imports answers with an empty roster, not null', async () => {
+    const stub = fetchStub(() => Promise.resolve(new Response(JSON.stringify({ pets: [] }))))
+    await expect(fetchDesktopPets({ fetchFn: stub.fn })).resolves.toEqual([])
+  })
+
+  test('a fetch that never answers loses the race to the timeout', async () => {
+    const stub = fetchStub(() => new Promise<Response>(() => {}))
+    const started = Date.now()
+    const result = await fetchDesktopPets({ fetchFn: stub.fn, timeoutMs: 25 })
+    expect(result).toBeNull()
+    expect(Date.now() - started).toBeLessThan(1000)
   })
 })

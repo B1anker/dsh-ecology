@@ -25,6 +25,8 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
+import type { DesktopPet } from './bridge.js'
+import type { DesktopPetsStore } from './desktop-pets.js'
 import { clampPosition, type Position } from './geometry.js'
 import type {
   ConversationSnapshotSlice,
@@ -33,7 +35,7 @@ import type {
   SessionsService,
 } from './host-types.js'
 import { getStrings } from './i18n.js'
-import type { PetStateMachine } from './mood.js'
+import type { Mood, PetStateMachine } from './mood.js'
 import { getPet, PET_STYLE_CSS } from './pets.js'
 import type { PetSettingsStore } from './settings.js'
 
@@ -60,12 +62,21 @@ export interface PetOverlayProps {
   machine: PetStateMachine
   /** Absent when the shell predates the sessions service: the pet stays idle. */
   sessions?: SessionsService
+  /**
+   * Imported-pet discovery. Absent in tests and minimal mounts: the roster is
+   * then empty and no fetch is ever attempted.
+   */
+  desktopPets?: DesktopPetsStore
 }
 
 const NOOP_SUBSCRIBE = () => () => {}
+const NO_DESKTOP_PETS: readonly DesktopPet[] = []
 
 /** Subscribe to an observable that may not exist, React-style. */
-function useOptionalObservable<T>(observable: Observable<T> | undefined | null, fallback: T): T {
+export function useOptionalObservable<T>(
+  observable: Observable<T> | undefined | null,
+  fallback: T,
+): T {
   const subscribe = useCallback(
     (listener: () => void) => observable?.subscribe(listener) ?? NOOP_SUBSCRIBE(),
     [observable],
@@ -128,10 +139,74 @@ function PawIcon() {
   )
 }
 
-export function PetOverlay({ settings, machine, sessions }: PetOverlayProps) {
+/**
+ * An imported bitmap pet: one horizontal strip of square frames per mood,
+ * played with the classic CSS sprite trick. The strip is sized `frames` times
+ * the box width; keyframes then sweep `background-position-x` from 0 to a full
+ * strip width while `steps(frames)` jumps one frame per step — the final
+ * offset is the loop point and is never held, so exactly frames 0..n-1 show.
+ *
+ * The keyframes carry pixel offsets, which depend on the display size, so the
+ * rule is generated per (pet, mood, size) and injected next to the element —
+ * same pattern as the overlay's own stylesheet. Like every other animation
+ * here, playback sits behind `prefers-reduced-motion`: a user who asked for
+ * stillness gets the strip's first frame.
+ */
+export interface RasterPetProps {
+  pet: DesktopPet
+  mood: Mood
+  /** Display edge length in pixels; frames are square, so height matches. */
+  size: number
+}
+
+export function rasterAnimationName(petId: string, mood: Mood, frames: number, size: number) {
+  const safePet = petId.replace(/[^a-zA-Z0-9_-]/g, '_')
+  return `dsh-pet-raster-${safePet}-${mood}-${frames}f-${Math.round(size * 10)}`
+}
+
+export function RasterPet({ pet, mood, size }: RasterPetProps) {
+  const sprite = pet.moods[mood]
+  const name = rasterAnimationName(pet.id, mood, sprite.frames, size)
+  const durationMs = sprite.frames * sprite.frameDurationMs
+  const css =
+    `@keyframes ${name} { from { background-position-x: 0; } ` +
+    `to { background-position-x: -${sprite.frames * size}px; } }\n` +
+    `@media (prefers-reduced-motion: no-preference) {\n` +
+    `  .${name} { animation: ${name} ${durationMs}ms steps(${sprite.frames}) infinite; }\n` +
+    `}`
+  return (
+    <div
+      data-dsh-pet-raster=""
+      data-pet-id={pet.id}
+      data-mood={mood}
+      role="img"
+      aria-hidden="true"
+      className={name}
+      style={{
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+        backgroundImage: `url("${sprite.url}")`,
+        backgroundSize: `${sprite.frames * 100}% 100%`,
+        backgroundRepeat: 'no-repeat',
+      }}
+    >
+      <style>{css}</style>
+    </div>
+  )
+}
+
+export function PetOverlay({ settings, machine, sessions, desktopPets }: PetOverlayProps) {
   const strings = getStrings()
   const config = useSyncExternalStore(settings.subscribe, settings.getSnapshot)
   const mood = useSyncExternalStore(machine.subscribe, machine.getSnapshot)
+  const importedPets = useOptionalObservable(desktopPets, NO_DESKTOP_PETS)
+
+  // Discover imported pets once per mount. The desktop app being absent is
+  // the normal case; the store swallows that and the roster simply stays empty.
+  useEffect(() => {
+    void desktopPets?.refresh()
+  }, [desktopPets])
 
   // Two-level provide channel: session swap changes the outer value, which
   // re-keys the inner subscription through the useCallback dependency.
@@ -256,6 +331,7 @@ export function PetOverlay({ settings, machine, sessions }: PetOverlayProps) {
 
   const toolName = mood === 'working' ? snapshot?.runningCalls[0]?.name : undefined
   const bubble = toolName ?? (mood === 'waiting' ? strings.waitingHint : null)
+  const importedPet = importedPets.find((imported) => imported.id === config.petId)
 
   return (
     <div
@@ -303,12 +379,21 @@ export function PetOverlay({ settings, machine, sessions }: PetOverlayProps) {
           {bubble}
         </div>
       )}
-      {/* The sprite is a hand-built SVG string; nothing in it is user input. */}
-      {/* biome-ignore lint/security/noDangerouslySetInnerHtml: sprite markup is generated by pets.ts, never from user data */}
-      <div
-        style={{ width: '100%', height: '100%', pointerEvents: 'none' }}
-        dangerouslySetInnerHTML={{ __html: getPet(config.petId).svg(mood) }}
-      />
+      {/*
+        An imported pet whose roster entry is missing — desktop app offline,
+        import deleted — falls through to getPet's built-in fallback (blob)
+        rather than rendering an empty box.
+      */}
+      {importedPet === undefined ? (
+        // The sprite is a hand-built SVG string; nothing in it is user input.
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: sprite markup is generated by pets.ts, never from user data
+        <div
+          style={{ width: '100%', height: '100%', pointerEvents: 'none' }}
+          dangerouslySetInnerHTML={{ __html: getPet(config.petId).svg(mood) }}
+        />
+      ) : (
+        <RasterPet pet={importedPet} mood={mood} size={size} />
+      )}
       {hearts.map((id) => (
         <span key={id} className="dsh-pet-heart" aria-hidden="true">
           ❤️

@@ -130,8 +130,17 @@ The app runs a loopback-only HTTP server (`src/server.zig`) on
   back to `blob` (logged); `name` is accepted but not displayed in v1.
   Unknown mood → 400, invalid JSON → 400, body over 4 KiB → 413, any other
   path/method → 404.
+- `GET /pets` → `200 application/json`: every pet the loaded manifest
+  declares (built-ins and imports like Codex-imported bitmap pets), each
+  with all 8 moods carrying `frames`, `frameDurationMs`, and `url`, e.g.
+  `{"pets":[{"id":"blob","moods":{"idle":{"frames":24,"frameDurationMs":250,"url":"/sprites/blob/idle.png"},…}}]}`.
+  → `503` when the manifest failed to load at boot.
+- `GET /sprites/<pet>/<mood>.png` → `200 image/png`: the strip file itself.
+  Only manifest-declared `file` names are served (exact match — no path
+  traversal surface); unknown or undeclared paths → `404`.
 - `OPTIONS` preflight → 204; every response carries
-  `access-control-allow-origin: *` so the plugin can POST from the shell page.
+  `access-control-allow-origin: *` so the plugin can fetch/POST from the
+  shell page's origin.
 
 Enable the "桌面伴侣" (desktop companion) toggle in the pet plugin's settings
 panel and the plugin starts POSTing mood updates.
@@ -161,6 +170,6 @@ src/model.zig    TEA model/update: strip slot management, frame timer, state bri
 src/view.zig     atlas-cropped sprite in the root container (press/drag/context menu)
 src/manifest.zig manifest.json parser, image-id mapping, animation arithmetic
 src/state.zig    Mood enum, /state JSON and channel-line codecs
-src/server.zig   loopback HTTP state server thread
+src/server.zig   loopback HTTP bridge thread (/state POST, /pets + /sprites GETs)
 src/appkit.zig   dlsym'd Objective-C bridge (window placement, drag follow)
 ```
