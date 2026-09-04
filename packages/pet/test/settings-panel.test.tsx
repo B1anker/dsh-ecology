@@ -368,4 +368,40 @@ describe('desktop launch (loopback page, offline companion)', () => {
     expect(launchButton()).toBeUndefined()
     expect(container.querySelector('section')?.textContent).toContain('Desktop pet connected')
   })
+
+  test('quitting the desktop app flips the panel back to the summon state', async () => {
+    let running = true
+    const fetchFn = () =>
+      running
+        ? Promise.resolve(
+            new Response(JSON.stringify({ pets: DESKTOP_ROSTER.map(desktopPetFixture) })),
+          )
+        : Promise.reject(new Error('connection refused'))
+    const desktopPets = new DesktopPetsStore({ fetchFn: fetchFn as unknown as typeof fetch })
+    const settings = new PetSettingsStore({})
+    root = createRoot(container)
+    act(() => {
+      root?.render(
+        createElement(PetSettingsPanel, {
+          settings,
+          desktopPets,
+          requestLaunch: () => Promise.resolve('launched' as const),
+          retryDelayMs: 10,
+          pollIntervalMs: 10,
+        }),
+      )
+    })
+    await flushRefresh(desktopPets)
+    expect(container.querySelector('section')?.textContent).toContain('Desktop pet connected')
+
+    // The user quits the app; the next poll tick must notice.
+    running = false
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    })
+
+    expect(desktopPets.getSnapshot().status).toBe('offline')
+    expect(container.querySelector('section')?.textContent).not.toContain('Desktop pet connected')
+    expect(launchButton()).toBeDefined()
+  })
 })

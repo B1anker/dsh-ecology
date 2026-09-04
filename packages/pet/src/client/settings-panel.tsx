@@ -58,6 +58,12 @@ export interface PetSettingsPanelProps {
    */
   retryDelayMs?: number
   /**
+   * How often the open panel re-checks the connection, so quitting the
+   * desktop app flips the panel back to the summon state. Defaults to
+   * {@link POLL_INTERVAL_MS}; injectable for tests.
+   */
+  pollIntervalMs?: number
+  /**
    * Asks the host to launch the desktop app. Defaults to
    * {@link requestDesktopLaunch}; injectable for tests.
    */
@@ -172,6 +178,13 @@ const RETRY_COUNT = 2
 const RETRY_DELAY_MS = 2000
 
 /**
+ * How often an open panel re-checks the connection: the desktop app can be
+ * quit at any moment, and a stale snapshot would keep claiming "connected"
+ * for a pet that is gone. Cheap — one small fetch per tick.
+ */
+const POLL_INTERVAL_MS = 5000
+
+/**
  * After a successful launch request, nudge discovery at these delays: the
  * desktop app needs a moment to boot and bind the bridge port. If the last
  * nudge still finds it offline, the launch is reported as failed.
@@ -211,6 +224,7 @@ export function PetSettingsPanel({
   settings,
   desktopPets,
   retryDelayMs = RETRY_DELAY_MS,
+  pollIntervalMs = POLL_INTERVAL_MS,
   requestLaunch = requestDesktopLaunch,
   launchRefreshDelaysMs = LAUNCH_REFRESH_DELAYS_MS,
 }: PetSettingsPanelProps) {
@@ -247,6 +261,15 @@ export function PetSettingsPanel({
       if (timer !== undefined) clearTimeout(timer)
     }
   }, [desktopPets, retryDelayMs])
+
+  // Keep the status honest while the panel is open: the desktop app can be
+  // quit at any moment, and only a fresh fetch tells "connected" apart from
+  // a ghost — the store alone holds the last answer forever.
+  useEffect(() => {
+    if (desktopPets === undefined) return
+    const timer = setInterval(() => void desktopPets.refresh(), pollIntervalMs)
+    return () => clearInterval(timer)
+  }, [desktopPets, pollIntervalMs])
 
   const online = discovery.status === 'online'
 

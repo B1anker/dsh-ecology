@@ -13,10 +13,11 @@
  * picker renders nothing, because a page-side stand-in roster would promise
  * a choice the desktop cannot honor.
  *
- * Discovery is pull-based and lazy: nothing fetches until the panel calls
- * {@link DesktopPetsStore.refresh} on mount (and its light retry after a
- * failure). A failed refresh keeps the previous roster — a desktop app that
- * just quit must not make an already-listed pet vanish mid-render.
+ * Discovery is pull-based: the panel fetches on mount (with a couple of
+ * quiet retries after a failure) and re-checks on a slow poll while open, so
+ * a desktop app that was quit stops being "connected". A failed refresh
+ * keeps the previous roster — a desktop app that just quit must not make an
+ * already-listed pet vanish mid-render.
  *
  * @module @seaveyon/dsh-pet/client/desktop-pets
  */
