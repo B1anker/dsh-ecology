@@ -46,7 +46,8 @@ dsh plugin --profile web add @seaveyon/dsh-pet
 
 宿主按以下顺序决定启动什么：
 
-1. 本 npm 包内置的伴侣二进制（`desktop/dsh-pet-desktop`，连同 `desktop/assets/`
+1. 本 npm 包内置的伴侣二进制（`desktop/dsh-pet-desktop-<arch>`——每种 Mac 架构
+   各一份，启动器按 `process.arch` 选取——连同 `desktop/assets/`
    里的精灵素材，由发布流水线在打包时放入）。它与插件版本锁定，桥接协议绝不会错配；
    npm 安装的文件不带 quarantine 属性，所以未签名也能直接启动，不会触发 Gatekeeper。
 2. 已安装的 `DSH Pet.app`——先按 bundle id 解析，再查标准 Applications 目录

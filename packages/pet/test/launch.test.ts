@@ -9,6 +9,7 @@ import { describe, expect, test } from '@rstest/core'
 import { createMockContext, fakeRequest, fakeResponse } from '@seaveyon/dsh-plugin-testkit'
 import { apply, inject } from '../src/index.js'
 import {
+  bundledDesktopBinary,
   createLaunchHandler,
   DESKTOP_BUNDLE_ID,
   LAUNCH_ROUTE_PATH,
@@ -84,6 +85,36 @@ describe('launchDesktopApp', () => {
     })
     expect(outcome).toBe('launch-failed')
     expect(calls).toHaveLength(0)
+  })
+
+  test('the default bundled path follows the host architecture', async () => {
+    const spawned: string[] = []
+    const outcome = await launchDesktopApp({
+      platform: 'darwin',
+      arch: 'x64',
+      exists: () => true,
+      spawnDetached: (path) => {
+        spawned.push(path)
+        return Promise.resolve()
+      },
+    })
+    expect(outcome).toBe('launched')
+    expect(spawned).toEqual([bundledDesktopBinary('x64')])
+    expect(spawned[0]).toContain('dsh-pet-desktop-x64')
+  })
+
+  test('an architecture with no bundled build falls through to the installed copies', async () => {
+    const { calls, run } = runStub(['ok'])
+    const outcome = await launchDesktopApp({
+      platform: 'darwin',
+      arch: 'arm64',
+      run,
+      // The bundled arm64 path misses (source checkout layout): the
+      // Launch Services chain still gets its turn.
+      exists: () => false,
+    })
+    expect(outcome).toBe('launched')
+    expect(calls).toEqual([{ command: 'open', args: ['-b', DESKTOP_BUNDLE_ID] }])
   })
 
   test('the bundle id is tried first among the installed copies', async () => {

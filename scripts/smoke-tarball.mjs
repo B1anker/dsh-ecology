@@ -18,7 +18,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { argv, execPath, exit, version } from 'node:process'
@@ -193,7 +193,31 @@ const PACKAGES = {
       const pet = inserted.find((row) => row?.id === 'dsh-pet')
       if (pet?.name !== '@seaveyon/dsh-pet') throw new Error('bundle plugin row')
 
-      return 'public export, client bundle envelope, dsh.client manifest, discovery patch row'
+      // The companion binaries ship inside the tarball — one per Mac
+      // architecture, named for the `process.arch` template the launcher
+      // (src/launch.ts) selects with. Source-checkout packs (engines-floor
+      // on ubuntu) legitimately lack desktop/ — the publish workflow stages
+      // it — but when the directory is present, both builds must be too,
+      // with the executable bit npm pack preserves only when it was set
+      // before packing.
+      let desktopNote = 'no desktop/ staged'
+      const desktopDir = join(root, 'desktop')
+      const hasDesktop = await stat(desktopDir).then(
+        (s) => s.isDirectory(),
+        () => false,
+      )
+      if (hasDesktop) {
+        for (const arch of ['arm64', 'x64']) {
+          const name = `dsh-pet-desktop-${arch}`
+          const info = await stat(join(desktopDir, name)).catch(() => null)
+          if (info === null)
+            throw new Error(`desktop/${name} missing from a desktop-carrying tarball`)
+          if ((info.mode & 0o111) === 0) throw new Error(`desktop/${name} lost its executable bit`)
+        }
+        desktopNote = 'both desktop binaries executable'
+      }
+
+      return `public export, client bundle envelope, dsh.client manifest, discovery patch row, ${desktopNote}`
     },
   },
 

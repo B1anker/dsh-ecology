@@ -55,12 +55,20 @@ jobs:
           # dependency, fetched by zig itself.
           version: 0.16.0
 
-      - run: zig build -Doptimize=ReleaseSmall
+      # One build per Mac architecture, staged under the names the launcher's
+      # `process.arch` template selects (`dsh-pet-desktop-arm64`,
+      # `dsh-pet-desktop-x64`). The x86_64 build is a zig cross-compile off
+      # the same sysroot — macos-latest runners are Apple silicon, and zig
+      # needs no Intel host to target Intel.
+      - run: |
+          zig build -Doptimize=ReleaseSmall --prefix zig-out-arm64
+          zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-macos --prefix zig-out-x64
         working-directory: packages/pet-desktop
 
       - run: |
           mkdir -p packages/pet/desktop
-          install -m 755 packages/pet-desktop/zig-out/bin/dsh-pet-desktop packages/pet/desktop/dsh-pet-desktop
+          install -m 755 packages/pet-desktop/zig-out-arm64/bin/dsh-pet-desktop packages/pet/desktop/dsh-pet-desktop-arm64
+          install -m 755 packages/pet-desktop/zig-out-x64/bin/dsh-pet-desktop packages/pet/desktop/dsh-pet-desktop-x64
           cp -R packages/pet-desktop/assets packages/pet/desktop/assets
 
       - uses: actions/upload-artifact@v4
@@ -91,7 +99,7 @@ jobs:
         with:
           name: pet-desktop-binary
           path: packages/pet/desktop/
-      - run: chmod +x packages/pet/desktop/dsh-pet-desktop
+      - run: chmod +x packages/pet/desktop/dsh-pet-desktop-*
 
       - uses: oven-sh/setup-bun@v2
         with:

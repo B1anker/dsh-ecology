@@ -58,8 +58,9 @@ your desktop.
 What the host starts, in order:
 
 1. The companion binary bundled inside this npm package
-   (`desktop/dsh-pet-desktop`, plus its sprite assets in `desktop/assets/`,
-   staged by the release workflow). It is
+   (`desktop/dsh-pet-desktop-<arch>` — one build per Mac architecture, the
+   launcher picks by `process.arch` — plus its sprite assets in
+   `desktop/assets/`, staged by the release workflow). It is
    version-locked to the plugin, so the bridge protocol can never drift, and
    npm-installed files carry no quarantine attribute, so it spawns without a
    Gatekeeper prompt.

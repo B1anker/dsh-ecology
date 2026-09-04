@@ -4,7 +4,7 @@ dist/
 *.tgz
 coverage/
 .nyc_output/
-zig-out/
+zig-out*/
 .zig-cache/
 zig-pkg/
 # The desktop companion binary, staged into the pet package at pack time

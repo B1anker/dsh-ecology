@@ -8,12 +8,13 @@
  *
  * Two ways to find the app, in order:
  *
- * 1. The binary bundled inside this npm package (`desktop/dsh-pet-desktop`,
- *    packed by the release workflow). It wins over any installed copy because
- *    it is version-locked to this plugin — the /state contract (MOODS order,
- *    bridge port) can never drift between the two sides. It is also the path
- *    with no Gatekeeper friction: npm-installed files carry no quarantine
- *    attribute, so an unsigned binary spawns cleanly.
+ * 1. The binaries bundled inside this npm package (`desktop/dsh-pet-desktop-*`,
+ *    one per Mac architecture, packed by the release workflow). The bundled
+ *    build wins over any installed copy because it is version-locked to this
+ *    plugin — the /state contract (MOODS order, bridge port) can never drift
+ *    between the two sides. It is also the path with no Gatekeeper friction:
+ *    npm-installed files carry no quarantine attribute, so an unsigned binary
+ *    spawns cleanly.
  * 2. macOS Launch Services (`open -b` the bundle id, then the standard
  *    Applications folders) — development installs and pre-bundle packages.
  *
@@ -52,15 +53,19 @@ export const LAUNCH_ROUTE_PATH = '/dsh-pet/launch-desktop'
 export const LAUNCH_HEADER = 'x-dsh-pet-launch'
 
 /**
- * The desktop binary bundled into this npm package. Resolved from this
- * module's own URL so the same layout holds from src/ (tests) and dist/
- * (an installed package): both sit one level below the package root. A
- * source checkout has no desktop/ directory — the release workflow adds it
- * at pack time — so the lookup simply misses and the .app chain runs.
+ * The desktop binary bundled into this npm package for one architecture:
+ * `desktop/dsh-pet-desktop-<arch>` where `<arch>` is the Node
+ * `process.arch` spelling (arm64, x64), so selection is a template with no
+ * mapping table to drift. Resolved from this module's own URL so the same
+ * layout holds from src/ (tests) and dist/ (an installed package): both sit
+ * one level below the package root. A source checkout has no desktop/
+ * directory — the release workflow adds it at pack time — so the lookup
+ * simply misses and the .app chain runs; an architecture with no bundled
+ * build misses the same way.
  */
-export const BUNDLED_DESKTOP_BINARY = fileURLToPath(
-  new URL('../desktop/dsh-pet-desktop', import.meta.url),
-)
+export function bundledDesktopBinary(arch: NodeJS.Process['arch'] = process.arch): string {
+  return fileURLToPath(new URL(`../desktop/dsh-pet-desktop-${arch}`, import.meta.url))
+}
 
 /**
  * Bundle id the packaged desktop app registers
@@ -74,6 +79,8 @@ export type LaunchOutcome = 'launched' | 'not-installed' | 'unsupported-platform
 /** Every effectful seam, injectable so tests never touch Launch Services. */
 export interface LaunchDeps {
   platform?: NodeJS.Platform
+  /** Defaults to `process.arch`; selects which bundled binary runs. */
+  arch?: NodeJS.Process['arch']
   env?: NodeJS.ProcessEnv
   home?: string
   exists?: (path: string) => boolean
@@ -81,7 +88,7 @@ export interface LaunchDeps {
   run?: (command: string, args: string[]) => Promise<void>
   /**
    * The package-bundled binary to try before Launch Services; null disables
-   * the lookup. Defaults to {@link BUNDLED_DESKTOP_BINARY}.
+   * the lookup. Defaults to {@link bundledDesktopBinary} for the host arch.
    */
   bundledBinary?: string | null
   /**
@@ -132,7 +139,8 @@ export async function launchDesktopApp(deps: LaunchDeps = {}): Promise<LaunchOut
   const exists = deps.exists ?? existsSync
   const run = deps.run ?? defaultRun
 
-  const bundled = deps.bundledBinary === undefined ? BUNDLED_DESKTOP_BINARY : deps.bundledBinary
+  const bundled =
+    deps.bundledBinary === undefined ? bundledDesktopBinary(deps.arch) : deps.bundledBinary
   if (bundled !== null && exists(bundled)) {
     const spawnDetached = deps.spawnDetached ?? defaultSpawnDetached
     try {
