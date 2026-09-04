@@ -143,7 +143,11 @@ The app runs a loopback-only HTTP server (`src/server.zig`) on
   shell page's origin.
 
 Enable the "桌面伴侣" (desktop companion) toggle in the pet plugin's settings
-panel and the plugin starts POSTing mood updates.
+panel and the plugin starts POSTing mood updates. On a loopback page the panel
+can also start this app for you: the pet plugin's host face serves
+`POST /dsh-pet/launch-desktop`, which asks Launch Services to open the bundle
+id `dev.seaveyon.dsh-pet-desktop` (falling back to `/Applications/DSH Pet.app` and
+`~/Applications/DSH Pet.app`; `DSH_PET_DESKTOP_APP` overrides the search).
 
 The server thread feeds the UI loop through the framework's external-source
 channel (`fx.openChannel` → thread-safe `ChannelHandle.post`, the
@@ -152,7 +156,10 @@ channel (`fx.openChannel` → thread-safe `ChannelHandle.post`, the
 ## Interactions
 
 - **Drag** anywhere to move the window (app-owned drag: `on_drag` starts the
-  gesture, a 60 Hz poll follows `NSEvent.mouseLocation` until button-up).
+  gesture, a 60 Hz poll follows `NSEvent.mouseLocation` until button-up). The
+  pet plays its working (run) strip while carried — a display-layer override
+  (`Model.effectiveMood`), so bridge state keeps landing underneath and the
+  pet returns to the latest mood on release.
 - **Click** toggles a 1.25× zoom (stays inside the window's transparent
   safety margin).
 - **Right-click** → Quit DSH Pet.

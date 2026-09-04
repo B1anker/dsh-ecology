@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, test } from '@rstest/core'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { DesktopPetsStore } from '../src/client/desktop-pets.js'
+import { DESKTOP_DOWNLOAD_URL, type LaunchRequestResult } from '../src/client/launch.js'
 import { PetSettingsStore } from '../src/client/settings.js'
 import { PetSettingsPanel } from '../src/client/settings-panel.js'
 import { MOODS } from '../src/desktop.js'
@@ -262,5 +263,136 @@ describe('the rest of the panel', () => {
     expect(container.querySelectorAll('input[type="text"]')).toHaveLength(1)
     expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(1)
     expect(container.querySelector('section p')?.textContent).toContain('desktop app')
+  })
+})
+
+describe('desktop launch (loopback page, offline companion)', () => {
+  /** Mount with the launcher seams injected: fast nudges, stubbed request. */
+  function mountWithLaunch(
+    desktopPets: DesktopPetsStore,
+    requestLaunch: () => Promise<LaunchRequestResult>,
+  ) {
+    const settings = new PetSettingsStore({})
+    root = createRoot(container)
+    act(() => {
+      root?.render(
+        createElement(PetSettingsPanel, {
+          settings,
+          desktopPets,
+          requestLaunch,
+          launchRefreshDelaysMs: [5, 10, 15],
+          retryDelayMs: 10,
+        }),
+      )
+    })
+    return { settings }
+  }
+
+  /** Let the mount-time discovery attempts settle into the offline state. */
+  async function settleOffline() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    })
+  }
+
+  function launchButton(): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Launch desktop app',
+    )
+  }
+
+  test('the offline companion state offers a launch button', async () => {
+    const desktopPets = new DesktopPetsStore({ fetchFn: offlineFetch })
+    mountWithLaunch(desktopPets, () => Promise.resolve('unavailable'))
+    await settleOffline()
+
+    expect(desktopPets.getSnapshot().status).toBe('offline')
+    expect(launchButton()).toBeDefined()
+  })
+
+  test('a successful launch nudges discovery and the desktop roster comes up', async () => {
+    let online = false
+    const fetchFn = () =>
+      online
+        ? Promise.resolve(
+            new Response(JSON.stringify({ pets: DESKTOP_ROSTER.map(desktopPetFixture) })),
+          )
+        : Promise.reject(new Error('connection refused'))
+    const desktopPets = new DesktopPetsStore({ fetchFn: fetchFn as unknown as typeof fetch })
+    let launchCalls = 0
+    mountWithLaunch(desktopPets, () => {
+      launchCalls += 1
+      online = true // the launched app binds the bridge port a moment later
+      return Promise.resolve('launched')
+    })
+    await settleOffline()
+
+    await act(async () => {
+      launchButton()?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    })
+
+    expect(launchCalls).toBe(1)
+    expect(pickerButtons()).toHaveLength(DESKTOP_ROSTER.length)
+  })
+
+  test('a not-installed answer points at the download page', async () => {
+    const desktopPets = new DesktopPetsStore({ fetchFn: offlineFetch })
+    mountWithLaunch(desktopPets, () => Promise.resolve('not-installed'))
+    await settleOffline()
+
+    await act(async () => {
+      launchButton()?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.querySelector('section')?.textContent).toContain(
+      'not installed on this machine',
+    )
+    const link = container.querySelector(`a[href="${DESKTOP_DOWNLOAD_URL}"]`)
+    expect(link).not.toBeNull()
+  })
+
+  test('turning the companion on against an offline desktop fires one launch attempt', async () => {
+    const desktopPets = new DesktopPetsStore({ fetchFn: offlineFetch })
+    let launchCalls = 0
+    const { settings } = mountWithLaunch(desktopPets, () => {
+      launchCalls += 1
+      return Promise.resolve('unavailable')
+    })
+    await settleOffline()
+
+    // Turn the companion off first, then click the checkbox to turn it on.
+    act(() => settings.update({ companionEnabled: false }))
+    const checkbox = container.querySelector('input[type="checkbox"]')
+    await act(async () => {
+      checkbox?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(settings.getSnapshot().companionEnabled).toBe(true)
+    expect(launchCalls).toBe(1)
+  })
+
+  test('a failed launch says so, and no attempt fires while the companion stays off', async () => {
+    const desktopPets = new DesktopPetsStore({ fetchFn: offlineFetch })
+    let launchCalls = 0
+    const { settings } = mountWithLaunch(desktopPets, () => {
+      launchCalls += 1
+      return Promise.resolve('unavailable')
+    })
+    await settleOffline()
+
+    // Companion off: no button, no attempt.
+    act(() => settings.update({ companionEnabled: false }))
+    expect(launchButton()).toBeUndefined()
+    expect(launchCalls).toBe(0)
+
+    // Turning it on fires the attempt; 'unavailable' shows the failure hint.
+    const checkbox = container.querySelector('input[type="checkbox"]')
+    await act(async () => {
+      checkbox?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(settings.getSnapshot().companionEnabled).toBe(true)
+    expect(launchCalls).toBe(1)
+    expect(container.querySelector('section')?.textContent).toContain('Launch failed')
   })
 })

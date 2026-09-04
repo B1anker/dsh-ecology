@@ -138,7 +138,8 @@ pub const Model = struct {
     pet_name_storage: [state.max_field_bytes]u8 = undefined,
     pet_name_len: usize = 0,
     /// App-owned window drag state (see appkit.zig's doc comment for why
-    /// the built-in window_drag channel cannot serve this app).
+    /// the built-in window_drag channel cannot serve this app). Also
+    /// drives the display-layer mood override (see effectiveMood).
     dragging: bool = false,
     drag_events: u32 = 0,
     poll_ticks: u32 = 0,
@@ -218,20 +219,31 @@ pub const Model = struct {
         src: ?geometry.RectF = null,
     };
 
+    /// The mood the sprite actually draws: while the window is being
+    /// dragged the pet runs (working strip), whatever the bridge last
+    /// said. Display-layer override only — `model.mood` keeps tracking
+    /// bridge state, so a /state update landing mid-drag is neither
+    /// lost nor clobbered when the drag ends; the next sprite() call
+    /// after endDrag reflects it.
+    pub fn effectiveMood(model: *const Model) Mood {
+        return if (model.dragging) .working else model.mood;
+    }
+
     pub fn sprite(model: *const Model) Sprite {
         const m = manifest.current() orelse return .{};
-        const mood_index = @intFromEnum(model.mood);
+        const mood = model.effectiveMood();
+        const mood_index = @intFromEnum(mood);
         if (model.strip_status[model.active_pet][mood_index] != .loaded) return .{};
         const height = model.strip_height[model.active_pet][mood_index];
         if (height == 0) return .{};
-        const frames = m.strip(model.active_pet, model.mood).frames;
+        const frames = m.strip(model.active_pet, mood).frames;
         if (frames == 0) return .{};
         // A mood change lands between ticks: clamp the index the new
         // (possibly shorter) strip hasn't caught up with yet.
         const frame = @min(model.frame_index, frames - 1);
         const frame_px = manifest.framePixels(height);
         return .{
-            .image = manifest.imageId(model.active_pet, model.mood),
+            .image = manifest.imageId(model.active_pet, mood),
             .src = geometry.RectF.init(manifest.frameOriginX(frame, height), 0, frame_px, frame_px),
         };
     }
@@ -251,7 +263,7 @@ pub const Msg = union(enum) {
 /// manifest never loaded.
 fn currentIntervalMs(model: *const Model) u32 {
     const m = manifest.current() orelse return fallback_interval_ms;
-    return manifest.timerIntervalMs(m.strip(model.active_pet, model.mood));
+    return manifest.timerIntervalMs(m.strip(model.active_pet, model.effectiveMood()));
 }
 
 /// Re-arm the frame timer at the current strip's cadence. startTimer on
@@ -354,7 +366,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .tick => |timer| {
             if (timer.outcome != .fired) return;
             const m = manifest.current() orelse return;
-            model.frame_index = manifest.nextFrame(model.frame_index, m.strip(model.active_pet, model.mood).frames);
+            model.frame_index = manifest.nextFrame(model.frame_index, m.strip(model.active_pet, model.effectiveMood()).frames);
         },
         .image_done => |result| {
             const decoded = manifest.decodeImageId(result.id) orelse {
@@ -460,6 +472,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     model.drag_start_ms = monotonicMs();
                     model.grab_offset_x = ml.x - o.x;
                     model.grab_offset_y = ml.y - o.y;
+                    // Run while carried: restart the strip on the
+                    // working cadence (display-layer override, see
+                    // effectiveMood — model.mood itself is untouched).
+                    model.frame_index = 0;
+                    startFrameTimer(fx, currentIntervalMs(model));
                     fx.startTimer(.{
                         .key = drag_poll_timer_key,
                         .interval_ms = drag_poll_interval_ms,
@@ -523,6 +540,12 @@ fn endDrag(model: *Model, fx: *Effects, reason: [*:0]const u8) void {
     model.dragging = false;
     fx.cancelTimer(drag_poll_timer_key);
     model.drag_end_ms = monotonicMs();
+    // Drop the run override: restart at frame 0 on the bridge mood's
+    // own cadence (dragging is already false, so currentIntervalMs
+    // reads model.mood again — including any /state update that
+    // arrived mid-drag).
+    model.frame_index = 0;
+    startFrameTimer(fx, currentIntervalMs(model));
     const elapsed_ms = model.drag_end_ms - model.drag_start_ms;
     std.debug.print("dsh-pet-desktop: drag end ({s}) events={d} polls={d} spurious_ends={d} elapsed_ms={d}\n", .{ reason, model.drag_events, model.poll_ticks, model.spurious_ends, elapsed_ms });
 }
@@ -549,6 +572,22 @@ test "drag origin mapping is absolute, unflipped, and jump-free" {
     const moved = dragOrigin(.{ .x = origin.x + grab.x + 10, .y = origin.y + grab.y - 7 }, grab.x, grab.y);
     try std.testing.expectEqual(origin.x + 10, moved.x);
     try std.testing.expectEqual(origin.y - 7, moved.y);
+}
+
+test "drag overrides the drawn mood with working without touching bridge state" {
+    var model: Model = .{};
+    try std.testing.expectEqual(Mood.idle, model.effectiveMood());
+    model.mood = .sleeping;
+    try std.testing.expectEqual(Mood.sleeping, model.effectiveMood());
+    model.dragging = true;
+    try std.testing.expectEqual(Mood.working, model.effectiveMood());
+    // A /state update arriving mid-drag still lands in model.mood...
+    _ = model.applyStateLine("thinking\tblob\t");
+    try std.testing.expectEqual(Mood.thinking, model.mood);
+    // ...while the drawn mood stays the run override until the drag ends.
+    try std.testing.expectEqual(Mood.working, model.effectiveMood());
+    model.dragging = false;
+    try std.testing.expectEqual(Mood.thinking, model.effectiveMood());
 }
 
 test "zoomed sprite stays inside the window's transparent safety margin" {

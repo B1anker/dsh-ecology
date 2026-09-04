@@ -27,6 +27,7 @@
         "@rstest/core": "^0.11.9",
         "@rstest/coverage-v8": "^0.11.9",
         "@seaveyon/dsh-plugin-testkit": "workspace:*",
+        "@types/node": "^24.0.0",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
         "jsdom": "^26.0.0",
@@ -41,7 +42,7 @@
     },
     "packages/plugin-testkit": {
       "name": "@seaveyon/dsh-plugin-testkit",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "devDependencies": {
         "@rslib/core": "^0.23.2",
         "@rstest/core": "^0.11.9",
@@ -58,7 +59,7 @@
     },
     "packages/web-login": {
       "name": "@seaveyon/dsh-web-login",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "bin": {
         "dsh-web-login-hash": "./dist/hash-password.js",
         "dsh-web-login-recovery": "./dist/create-recovery.js",

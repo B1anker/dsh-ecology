@@ -19,13 +19,19 @@
  * @module @seaveyon/dsh-pet/client/settings-panel
  */
 
-import { useCallback, useEffect, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   type DesktopPetsSnapshot,
   type DesktopPetsStore,
   prettifyImportedPetId,
 } from './desktop-pets.js'
 import { detectLocale, getStrings, type Locale } from './i18n.js'
+import {
+  DESKTOP_DOWNLOAD_URL,
+  isLoopbackHost,
+  type LaunchRequestResult,
+  requestDesktopLaunch,
+} from './launch.js'
 import { PET_STYLE_CSS, PETS } from './pets.js'
 import { RasterPet } from './raster-pet.js'
 import type { PetSettingsStore } from './settings.js'
@@ -42,6 +48,16 @@ export interface PetSettingsPanelProps {
    * stays open. Defaults to {@link RETRY_DELAY_MS}; injectable for tests.
    */
   retryDelayMs?: number
+  /**
+   * Asks the host to launch the desktop app. Defaults to
+   * {@link requestDesktopLaunch}; injectable for tests.
+   */
+  requestLaunch?: () => Promise<LaunchRequestResult>
+  /**
+   * Post-launch discovery nudges: the app needs a moment to boot and bind the
+   * bridge port. Injectable for tests.
+   */
+  launchRefreshDelaysMs?: readonly number[]
 }
 
 const rowStyle = {
@@ -60,6 +76,16 @@ const PREVIEW_SIZE = 52
 /** After a failed fetch, retry twice while the panel is open — then stop. */
 const RETRY_COUNT = 2
 const RETRY_DELAY_MS = 2000
+
+/**
+ * After a successful launch request, nudge discovery at these delays: the
+ * desktop app needs a moment to boot and bind the bridge port. If the last
+ * nudge still finds it offline, the launch is reported as failed.
+ */
+const LAUNCH_REFRESH_DELAYS_MS: readonly number[] = [400, 1200, 2500]
+
+/** The panel-side lifecycle of one launch attempt. */
+type LaunchState = 'idle' | 'busy' | 'not-installed' | 'failed'
 
 /**
  * The picker's display name for a pet id: the three built-ins keep their
@@ -89,6 +115,8 @@ export function PetSettingsPanel({
   settings,
   desktopPets,
   retryDelayMs = RETRY_DELAY_MS,
+  requestLaunch = requestDesktopLaunch,
+  launchRefreshDelaysMs = LAUNCH_REFRESH_DELAYS_MS,
 }: PetSettingsPanelProps) {
   const strings = getStrings()
   const locale = detectLocale(navigator.language)
@@ -126,6 +154,51 @@ export function PetSettingsPanel({
 
   const online = discovery.status === 'online'
 
+  // Launching a local process is possible only through the host face, and
+  // only makes sense when server and browser share the machine — see
+  // client/launch.ts. `canLaunch` is display logic; the server re-checks.
+  const canLaunch = desktopPets !== undefined && isLoopbackHost(window.location.hostname)
+  const [launchState, setLaunchState] = useState<LaunchState>('idle')
+  const launchTimers = useRef<ReturnType<typeof setTimeout>[]>([])
+  useEffect(
+    () => () => {
+      for (const timer of launchTimers.current) clearTimeout(timer)
+    },
+    [],
+  )
+
+  const onLaunch = useCallback(async () => {
+    if (desktopPets === undefined) return
+    setLaunchState('busy')
+    const result = await requestLaunch()
+    if (result !== 'launched') {
+      setLaunchState(result === 'not-installed' ? 'not-installed' : 'failed')
+      return
+    }
+    launchRefreshDelaysMs.forEach((delay, index) => {
+      launchTimers.current.push(
+        setTimeout(() => {
+          void desktopPets.refresh().then(() => {
+            const last = index === launchRefreshDelaysMs.length - 1
+            if (last && desktopPets.getSnapshot().status !== 'online') setLaunchState('failed')
+          })
+        }, delay),
+      )
+    })
+  }, [desktopPets, requestLaunch, launchRefreshDelaysMs])
+
+  // Turning the companion ON against a proven-offline desktop is the user's
+  // "make it work" gesture: fire one launch attempt alongside the setting.
+  const onCompanionChange = useCallback(
+    (enabled: boolean) => {
+      settings.update({ companionEnabled: enabled })
+      if (enabled && canLaunch && desktopPets?.getSnapshot().status === 'offline') {
+        void onLaunch()
+      }
+    },
+    [settings, canLaunch, desktopPets, onLaunch],
+  )
+
   return (
     <section aria-label={strings.settingsSection}>
       {/* The built-in previews' keyframes; the raster previews carry their own. */}
@@ -133,6 +206,24 @@ export function PetSettingsPanel({
       <p style={{ marginBlock: '8px', opacity: 0.75 }}>{strings.desktopHint}</p>
       {discovery.status === 'offline' && (
         <p style={{ marginBlock: '8px', opacity: 0.75 }}>{strings.desktopOfflineHint}</p>
+      )}
+      {discovery.status === 'offline' && config.companionEnabled && canLaunch && (
+        <div style={rowStyle}>
+          <button type="button" disabled={launchState === 'busy'} onClick={() => void onLaunch()}>
+            {launchState === 'busy' ? strings.launchStarting : strings.launchButton}
+          </button>
+          {launchState === 'not-installed' && (
+            <span style={{ opacity: 0.75 }}>
+              {strings.launchNotInstalled}{' '}
+              <a href={DESKTOP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
+                {strings.launchDownloadLabel}
+              </a>
+            </span>
+          )}
+          {launchState === 'failed' && (
+            <span style={{ opacity: 0.75 }}>{strings.launchFailed}</span>
+          )}
+        </div>
       )}
       <div
         role="group"
@@ -203,7 +294,7 @@ export function PetSettingsPanel({
         <input
           type="checkbox"
           checked={config.companionEnabled}
-          onChange={(event) => settings.update({ companionEnabled: event.target.checked })}
+          onChange={(event) => onCompanionChange(event.target.checked)}
         />
       </label>
     </section>

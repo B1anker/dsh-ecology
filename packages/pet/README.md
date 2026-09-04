@@ -28,8 +28,8 @@ the plugin starts feeding the desktop app immediately.
 
 > The row exists because the client module system discovers plugin bundles by
 > scanning the host Loader's active entries: a package installed as a plain
-> dependency is never served. The host plugin the row activates is a deliberate
-> no-op — every feature lives in the browser bundle.
+> dependency is never served. The host plugin the row activates owns exactly
+> one route — the desktop-app launcher below — and nothing else.
 
 ## Using the pet
 
@@ -42,6 +42,20 @@ you get in the web UI is **Settings → Pet**:
 - The desktop-companion switch — on by default, because driving the desktop
   pet is this plugin's whole job. When the desktop app isn't running the
   bridge fails silently, so leaving it on costs nothing.
+
+### Launching the desktop app from the panel
+
+On a loopback page (the DSH server on the same machine as the browser), a
+companion switch that is on but finds no desktop app offers a **Launch desktop
+app** button — and turning the switch on fires one launch attempt by itself.
+The button asks the plugin's host face, which runs inside the DSH server, to
+open the app via `POST /dsh-pet/launch-desktop`
+([`src/launch.ts`](src/launch.ts)): loopback peers only, a mandatory custom
+header so no cross-origin page can drive-by trigger it, and the login gate's
+session when the profile has one. If the host reports the app is not
+installed, the panel links to the download page instead. On a remote host the
+button never appears — launching would start the pet on the server, not on
+your desktop.
 
 Settings persist through the DSH settings service when it is available and
 fall back to `localStorage` — including for browsers on a remote host, whose
@@ -63,8 +77,9 @@ what happens to a selected-but-unavailable imported pet on its own surface.
 
 ## How it works
 
-The package is a dual-face DSH plugin whose host face is a no-op Cordis plugin
-(see [`src/index.ts`](src/index.ts)) and whose client face
+The package is a dual-face DSH plugin whose host face
+([`src/index.ts`](src/index.ts)) registers a single launcher route and whose
+client face
 ([`src/client/`](src/client)) is served by the shell's client module system at
 `/plugins/@seaveyon/dsh-pet/client.js`. The client reads live agent state from
 the `sessions.currentProvideInfo` provide channel, derives the pet's mood from
@@ -80,7 +95,7 @@ at the top of [`src/client/host-types.ts`](src/client/host-types.ts).
 
 ```sh
 bun install
-bun run build   # emits dist/index.js (host no-op) and dist/client.js (browser bundle)
+bun run build   # emits dist/index.js (host: the launch route) and dist/client.js (browser bundle)
 bun run test    # jsdom suite against the client doubles in @seaveyon/dsh-plugin-testkit
 ```
 

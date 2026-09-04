@@ -4,6 +4,17 @@
  * Copy comes from the shell `locale` service (`t`). Colors use `--dsw-alias-*`
  * tokens so light/dark/system themes apply without a local palette.
  *
+ * The controls are native elements carrying the host Button recipe — capsule
+ * geometry, variants, and hover states transcribed from
+ * `@deepseek-ai/dsh-client-ui-primitives`' Button stylesheet over the same
+ * tokens. Importing the atoms themselves is not viable for an external
+ * plugin: the published package is one flat browser artifact that statically
+ * imports its markdown/highlight stack (shiki, KaTeX, mdast), ships no
+ * per-component entries, and declares no client module row of its own, so
+ * bundling one Button would drag megabytes and unservable code-split chunks
+ * into this plugin's single-file client.js. Tokens plus the same recipe is
+ * the consumable equivalent.
+ *
  * @module @seaveyon/dsh-web-login/client/account-panel
  */
 
@@ -15,6 +26,52 @@ import {
   type SessionAuthStatus,
   type SessionInfo,
 } from './session.js'
+
+/**
+ * The host Button recipe over `--dsw-alias-*` tokens (see the module header).
+ * Geometry and variant colors track the primitives' compact (`sm`) form.
+ */
+const CONTROL_CSS = `
+.dsh-web-login-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 14px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 560;
+  cursor: pointer;
+  text-decoration: none;
+}
+.dsh-web-login-control.primary {
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+.dsh-web-login-control.primary:hover {
+  background: var(--dsw-alias-button-primary-hover);
+}
+.dsh-web-login-control.outline {
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+}
+.dsh-web-login-control.outline:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.dsh-web-login-control.danger {
+  border: 1px solid var(--dsw-alias-state-error-secondary);
+  background: transparent;
+  color: var(--dsw-alias-state-error-primary);
+}
+.dsh-web-login-control.danger:hover {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+}
+`
 
 const sectionStyle = {
   display: 'flex',
@@ -60,35 +117,6 @@ const linkStyle = {
   color: 'var(--dsw-alias-brand-primary)',
   textDecoration: 'underline',
   textUnderlineOffset: '2px',
-} as const
-
-const primaryButtonStyle = {
-  appearance: 'none',
-  display: 'inline-block',
-  border: '1px solid transparent',
-  borderRadius: '8px',
-  padding: '8px 12px',
-  font: 'inherit',
-  fontSize: '13px',
-  fontWeight: 560,
-  cursor: 'pointer',
-  textDecoration: 'none',
-  background: 'var(--dsw-alias-button-primary-fill)',
-  color: 'var(--dsw-alias-label-primary-inverted)',
-} as const
-
-const secondaryLinkStyle = {
-  ...primaryButtonStyle,
-  background: 'transparent',
-  color: 'var(--dsw-alias-brand-text)',
-  borderColor: 'var(--dsw-alias-border-l2)',
-} as const
-
-const dangerButtonStyle = {
-  ...primaryButtonStyle,
-  background: 'transparent',
-  color: 'var(--dsw-alias-state-error-primary)',
-  borderColor: 'var(--dsw-alias-state-error-secondary)',
 } as const
 
 const hintStyle = {
@@ -270,6 +298,8 @@ export function AccountPanel({ t, locale }: AccountPanelProps) {
 
   return (
     <section aria-label={t('nav')} style={sectionStyle}>
+      {/* The host Button recipe over --dsw-alias-* tokens; see the header. */}
+      <style>{CONTROL_CSS}</style>
       {info === undefined ? (
         <p style={hintStyle}>{t('loading')}</p>
       ) : info === null ? (
@@ -318,7 +348,7 @@ export function AccountPanel({ t, locale }: AccountPanelProps) {
           ) : null}
           <div style={actionsStyle}>
             {info.canBindGitHub ? (
-              <a href="/auth/github/enroll" style={primaryButtonStyle}>
+              <a href="/auth/github/enroll" className="dsh-web-login-control primary">
                 {t('bindGitHub')}
               </a>
             ) : null}
@@ -327,7 +357,7 @@ export function AccountPanel({ t, locale }: AccountPanelProps) {
                 href={githubOAuthAppUrl(info.githubOAuthAppId)}
                 target="_blank"
                 rel="noopener noreferrer"
-                style={secondaryLinkStyle}
+                className="dsh-web-login-control outline"
               >
                 {t('oauthApp')}
               </a>
@@ -338,7 +368,7 @@ export function AccountPanel({ t, locale }: AccountPanelProps) {
           <div style={footerStyle}>
             <p style={footStyle}>{t('sessionFoot')}</p>
             <form method="post" action="/logout" style={{ margin: 0, flex: '0 0 auto' }}>
-              <button type="submit" style={dangerButtonStyle}>
+              <button type="submit" className="dsh-web-login-control danger">
                 {t('signOut')}
               </button>
             </form>
