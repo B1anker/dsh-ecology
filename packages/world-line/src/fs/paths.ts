@@ -105,6 +105,21 @@ export function reportsDir(home: string): string {
   return join(worldLineDir(home), 'reports')
 }
 
+/** `world-line/vault/secrets` (encrypted bundles, Phase 4). */
+export function secretsDir(home: string): string {
+  return join(vaultDir(home), 'secrets')
+}
+
+/** `world-line/vault/secrets/<snapshot-id>.bin`. */
+export function secretBundlePath(home: string, snapshotId: string): string {
+  return join(secretsDir(home), `${snapshotId}.bin`)
+}
+
+/** `world-line/reports/<report-id>.json`. */
+export function reportPath(home: string, reportId: string): string {
+  return join(reportsDir(home), `${reportId}.json`)
+}
+
 /** Normalise a user-supplied relative path against the invocation cwd. */
 export function absoluteFrom(cwd: string, value: string): string {
   return isAbsolute(value) ? resolve(value) : resolve(cwd, value)

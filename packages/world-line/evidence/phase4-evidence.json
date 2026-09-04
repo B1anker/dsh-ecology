@@ -1,0 +1,127 @@
+{
+  "milestone": "phase-4",
+  "generatedAt": "2026-09-04T19:36:38.360Z",
+  "prerequisites": {
+    "dsh": true,
+    "chrome": true,
+    "keychainReal": false
+  },
+  "ok": true,
+  "assertions": [
+    {
+      "name": "real dsh on PATH",
+      "ok": true,
+      "detail": "dsh=true"
+    },
+    {
+      "name": "Google Chrome available (restart step)",
+      "ok": true,
+      "detail": "/Applications/Google Chrome.app"
+    },
+    {
+      "name": "real dsh booted a fresh DSH home and profile web",
+      "ok": true,
+      "detail": "ready"
+    },
+    {
+      "name": "no key service: secret file skipped, no bundle, warning shown",
+      "ok": true,
+      "detail": "bundle=null bin=false"
+    },
+    {
+      "name": "env key: secret stored encrypted with manifest digest",
+      "ok": true,
+      "detail": "entryCount=1"
+    },
+    {
+      "name": "restore verify-only passes and reports a retained lab",
+      "ok": true,
+      "detail": "exit=0"
+    },
+    {
+      "name": "restore lab carries snapshot bytes (incl. the decrypted secret patch)",
+      "ok": true,
+      "detail": "secret bytes materialize only inside the 0600 lab profile files"
+    },
+    {
+      "name": "official profile untouched by restore verify (still broken)",
+      "ok": true,
+      "detail": "byte-identical patch; package.json still broken"
+    },
+    {
+      "name": "restore --promote commits and removes its lab; the verify lab stays",
+      "ok": true,
+      "detail": "exit=0"
+    },
+    {
+      "name": "official profile now carries the snapshot bytes (broken rows gone)",
+      "ok": true,
+      "detail": "patch restored incl. its decrypted secret entry (0600 lab/profile files)"
+    },
+    {
+      "name": "journal records kind restore with the snapshotId",
+      "ok": true,
+      "detail": "{\"id\":\"restore-20260904T193618Z-1536d004\",\"kind\":\"restore\",\"createdAt\":\"2026-09-04T19:36:18.977Z\",\"profileName\":\"web\",\"labId\":\"lab-20260904T193613Z-6962be38\",\"preSnapshot\":\"snap-20260904T193618Z-c4b8051e\",\"afterSnapshot\":\"snap-20260904T193618Z-549b2c40\",\"outcome\":\"committed\",\"receiptBefore\":\"d24b727c6d77fdb76e62152f1fbb9945beda05625d517c57f89404177188bc5d\",\"receiptAfter\":\"6c7ed504a8ce3306920f629e64c7b37310420979e26138a156d8c745131f28d7\",\"files\":[\"package.json\",\"pnpm-lock.yaml\",\"pnpm-workspace.yaml\",\"cordis.patch.yml\"],\"lastKnownGood\":false,\"snapshotId\":\"snap-20260904T193607Z-14bf21ef\"}"
+    },
+    {
+      "name": "restore --promote --restart re-verifies the official boot",
+      "ok": true,
+      "detail": "exit=0"
+    },
+    {
+      "name": "after-snapshot recorded as lastKnownGood",
+      "ok": true,
+      "detail": "snap-20260904T193624Z-3ad3211c"
+    },
+    {
+      "name": "restore --last-known-good resolves and verifies the LKG snapshot",
+      "ok": true,
+      "detail": "exit=0"
+    },
+    {
+      "name": "rescue start boots a temp safe profile with the allowed row",
+      "ok": true,
+      "detail": "exit=0 pid=17064"
+    },
+    {
+      "name": "rescue leaves the official patch byte-identical",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "rescue list reports the running rescue",
+      "ok": true,
+      "detail": "rescue    rescue-20260904T193634Z-4f435811  alive   web port 54752"
+    },
+    {
+      "name": "rescue stop removes the directory (process group terminated)",
+      "ok": true,
+      "detail": "exit=0"
+    },
+    {
+      "name": "report writes a redacted bundle for a snapshot target",
+      "ok": true,
+      "detail": "files=1"
+    },
+    {
+      "name": "prune dry run exits 0 with a plan",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "dry run removes nothing; prune honors protection",
+      "ok": true,
+      "detail": "6 → 6"
+    },
+    {
+      "name": "prune --yes exits 0",
+      "ok": true,
+      "detail": "exit=0"
+    },
+    {
+      "name": "real Keychain path covered by unit tests (env seam)",
+      "ok": true,
+      "detail": "adapter covered in test/unit/vault-crypto.test.ts"
+    }
+  ]
+}

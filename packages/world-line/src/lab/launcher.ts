@@ -67,6 +67,11 @@ export interface LaunchOptions {
   readyTimeoutMs?: number
   /** Grace after the ready line before resolving, so HTTP accepts. */
   settleGraceMs?: number
+  /**
+   * Keep the booted dsh running after this process returns (rescue): unref
+   * the child and its stdio so the CLI can exit while dsh serves on.
+   */
+  keepAlive?: boolean
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 120_000
@@ -103,6 +108,15 @@ export function launchDsh(options: LaunchOptions): Promise<LaunchResult> {
     }
     const succeed = (): void => {
       if (ready === null) return
+      if (options.keepAlive === true) {
+        // Node's Stream typings omit unref; it exists on pipe handles.
+        const unrefStream = (stream: unknown): void => {
+          ;(stream as { unref?: () => void } | undefined)?.unref?.()
+        }
+        unrefStream(child.stdout)
+        unrefStream(child.stderr)
+        child.unref?.()
+      }
       finish({
         kind: 'ready',
         detail: `dsh web ready on 127.0.0.1:${ready.port}`,

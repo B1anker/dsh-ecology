@@ -317,6 +317,7 @@ function sampleManifest(home: string, id: string, createdAt: string): SnapshotMa
     files: [],
     homePatch: null,
     derived: { rootConfigPresent: false, rootConfigClean: null },
+    secretsBundle: null,
     unmanaged: [],
   }
 }

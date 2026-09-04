@@ -44,6 +44,10 @@ export interface LabSource {
   profileName: string
   /** Adapter-relative profile home (label only; layout derives paths). */
   receipt: string
+  /** `profile` (default) or `restore` — provenance marker for journals. */
+  kind?: 'profile' | 'restore'
+  /** Set when `kind === 'restore'`: the vault snapshot that was materialized. */
+  snapshotId?: string
 }
 
 export interface LabRuntimeInfo {

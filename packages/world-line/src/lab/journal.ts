@@ -11,7 +11,8 @@ import { join } from 'node:path'
 
 export interface PromotionJournalEntry {
   id: string
-  kind: 'promotion'
+  /** `promotion` (lab promote) or `restore` (restore --promote). */
+  kind: 'promotion' | 'restore'
   createdAt: string
   profileName: string
   labId: string | null
@@ -24,6 +25,8 @@ export interface PromotionJournalEntry {
   files: string[]
   /** Set when a restart verification marked the after-snapshot lastKnownGood. */
   lastKnownGood: boolean
+  /** Restore provenance: the snapshot the profile was rolled back to. */
+  snapshotId?: string
   reason?: string
 }
 
@@ -31,12 +34,12 @@ export function journalPath(home: string): string {
   return join(home, 'world-line', 'journal.jsonl')
 }
 
-export function newJournalId(now: Date): string {
+export function newJournalId(now: Date, kind: 'promotion' | 'restore' = 'promotion'): string {
   const stamp = now
     .toISOString()
     .replace(/[-:]/g, '')
     .replace(/\.\d{3}Z$/, 'Z')
-  return `promote-${stamp}-${randomBytes(4).toString('hex')}`
+  return `${kind}-${stamp}-${randomBytes(4).toString('hex')}`
 }
 
 /** Append one line to the journal (best-effort, never throws on write). */

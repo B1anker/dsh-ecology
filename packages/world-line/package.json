@@ -70,6 +70,7 @@
     "test:real:phase2": "node scripts/evidence-phase2.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pack:check": "bun run build && npm pack --dry-run",
-    "test:real:phase2:cli": "bun scripts/evidence-phase2-cli.mjs"
+    "test:real:phase2:cli": "bun scripts/evidence-phase2-cli.mjs",
+    "test:real:phase4": "bun run build && node scripts/evidence-phase4.mjs"
   }
 }

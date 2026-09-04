@@ -29,17 +29,25 @@ import {
   runLabRemove,
   runLabUpdate,
 } from './commands/lab.js'
+import type { ReportResult } from './commands/report.js'
+import { runReport } from './commands/report.js'
+import type { RescueListItem, RescueStartResult, RescueStopResult } from './commands/rescue.js'
+import { runRescueList, runRescueStart, runRescueStop } from './commands/rescue.js'
+import type { RestoreCommandResult } from './commands/restore.js'
+import { runRestoreCommand } from './commands/restore.js'
 import type { SnapshotCreateResult } from './commands/snapshot.js'
 import { runSnapshotCreate } from './commands/snapshot.js'
 import type {
   TimelineDiffResult,
   TimelineListResult,
+  TimelinePruneResult,
   TimelineShowResult,
 } from './commands/timeline.js'
 import {
   latestSnapshotId,
   runTimelineDiff,
   runTimelineList,
+  runTimelinePrune,
   runTimelineShow,
 } from './commands/timeline.js'
 import type { CliContext } from './context.js'
@@ -48,12 +56,7 @@ import { redactText } from './domain/redaction.js'
 import { resolveDshHome } from './fs/paths.js'
 import { DEFAULT_PROFILE, ENVELOPE_SCHEMA_VERSION, WORLD_LINE_VERSION } from './identity.js'
 
-/** Commands delivered in later phases, rejected with a roadmap message. */
-const PHASE_GATED: Record<string, string> = {
-  restore: 'restore lands in Phase 4',
-  rescue: 'rescue lands in Phase 4',
-  report: 'diagnostic reports land in Phase 4',
-}
+// Phase-gated commands: none — restore/rescue/report shipped in Phase 4.
 
 const HELP = `dsh-world-line ${WORLD_LINE_VERSION} — safe change manager for DSH profiles
 
@@ -67,7 +70,7 @@ global options:
   -h, --help          show this help
   -V, --version       print the package version and exit
 
-commands (Phase 0-3 milestone):
+commands (Phase 0-4 milestone):
   doctor                          read-only diagnostics (exit 1 when a check fails)
   snapshot create [--label <t>]   capture the profile into the time machine
                                   [--break-stale-lock] confirm a stale writer lock
@@ -88,8 +91,19 @@ commands (Phase 0-3 milestone):
   lab list                        retained labs (expired failures reaped)
   lab inspect <lab-id>            one lab's manifest and probe records
   lab destroy <lab-id>            remove one lab
-
-later phases: restore · rescue · report (see WORLD-LINE-SPEC §11)
+  restore <snapshot-id>           verify a snapshot in a restore lab
+                                  (official profile untouched)
+  restore <snapshot-id> --promote verify then promote the snapshot state
+  restore --last-known-good       restore the recorded known-good snapshot
+                                  [--promote] [--restart] [--keep]
+  rescue start [--allow <row-id>]  boot a core-only temporary profile
+                                  (repeat --allow for explicit patch rows)
+  rescue list                     running/stale rescues under this home
+  rescue stop <rescue-id>         terminate the process group and clean up
+  timeline prune [--yes]         plan Time-Machine retention, then delete
+                                  (newest 20 / 14 per day / 12 per week)
+  report <lab-id | snap-id>       write a redacted diagnostics bundle
+                                  (world-line/reports/<report-id>.json)
 
 exit codes: 0 ok · 1 verification failed · 2 usage/file error · 3 internal error
 `
@@ -217,6 +231,14 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
         const resolvedId = id === undefined ? await latestSnapshotId(ctx) : id
         return { command: 'timeline show', data: await runTimelineShow(ctx, resolvedId) }
       }
+      if (sub === 'prune') {
+        const { rest, options } = consumeOptions(args.slice(1), { yes: 'boolean' })
+        expectNoArgs('timeline prune', rest)
+        return {
+          command: 'timeline prune',
+          data: await runTimelinePrune(ctx, { yes: options.yes === true }),
+        }
+      }
       if (sub === 'diff') {
         const [aId, bId] = args.slice(1)
         if (aId === undefined || bId === undefined) {
@@ -228,6 +250,59 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
       throw new UsageError(
         `unknown timeline subcommand ${JSON.stringify(sub)} (available: list, show, diff)`,
       )
+    }
+    case 'rescue': {
+      const verb = args[0]
+      const verbArgs = args.slice(1)
+      if (verb === 'start') {
+        const { rest, options } = consumeOptions(verbArgs, { allow: 'list' })
+        expectNoArgs('rescue start', rest)
+        const allow = (options.allow as string[] | undefined) ?? []
+        return {
+          command: 'rescue start',
+          data: await runRescueStart(ctx, allow),
+        }
+      }
+      if (verb === 'list') {
+        expectNoArgs('rescue list', verbArgs)
+        return { command: 'rescue list', data: await runRescueList(ctx) }
+      }
+      if (verb === 'stop') {
+        const [id, ...rest] = verbArgs
+        expectNoArgs('rescue stop', rest)
+        if (id === undefined) throw new UsageError('rescue stop needs a rescue id (rescue-…)')
+        return { command: 'rescue stop', data: await runRescueStop(ctx, id) }
+      }
+      throw new UsageError('rescue needs start | list | stop')
+    }
+    case 'restore': {
+      const { rest, options } = consumeOptions(args, {
+        promote: 'boolean',
+        restart: 'boolean',
+        'accept-inconclusive': 'boolean',
+        keep: 'boolean',
+        'last-known-good': 'boolean',
+      })
+      if (rest.length > 1) throw new UsageError('restore takes at most one snapshot id')
+      return {
+        command: 'restore',
+        data: await runRestoreCommand(ctx, {
+          snapshotId: rest[0],
+          lastKnownGood: options['last-known-good'] === true,
+          promote: options.promote === true,
+          restart: options.restart === true,
+          acceptInconclusive: options['accept-inconclusive'] === true,
+          keep: options.keep === true,
+        }),
+      }
+    }
+    case 'report': {
+      const [target, ...rest] = args
+      expectNoArgs('report', rest)
+      if (target === undefined) {
+        throw new UsageError('report needs a lab id (lab-…) or a snapshot id (snap-…)')
+      }
+      return { command: 'report', data: await runReport(ctx, target) }
     }
     case 'lab': {
       const sub = args[0]
@@ -327,22 +402,22 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
         `unknown lab subcommand ${JSON.stringify(sub)} (available: add, update, remove, config, list, inspect, destroy)`,
       )
     }
-    default: {
-      const gate = PHASE_GATED[command]
-      if (gate !== undefined) {
-        throw new UsageError(`${command} is not implemented yet — ${gate}`)
-      }
+    default:
       throw new UsageError(`unknown command ${JSON.stringify(command)} — run dsh-world-line --help`)
-    }
   }
 }
 
-/** Consume `--flag value` / `--flag=value` options from a positional list. */
+/** Consume `--flag value` / `--flag=value` options from a positional list.
+ * `list` kinds collect every occurrence (repeatable flags, e.g. rescue
+ * `--allow`). */
 function consumeOptions(
   args: string[],
-  kinds: Record<string, 'string' | 'boolean'>,
-): { rest: string[]; options: Record<string, string | boolean | undefined> } {
-  const options: Record<string, string | boolean | undefined> = {}
+  kinds: Record<string, 'string' | 'boolean' | 'list'>,
+): {
+  rest: string[]
+  options: Record<string, string | boolean | string[] | undefined>
+} {
+  const options: Record<string, string | boolean | string[] | undefined> = {}
   const rest: string[] = []
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index] ?? ''
@@ -359,14 +434,16 @@ function consumeOptions(
       continue
     }
     const inline = match[2]
-    if (inline !== undefined) {
-      options[flag] = inline
-      continue
-    }
-    const value = args[index + 1]
+    const value = inline !== undefined ? inline : args[index + 1]
     if (value === undefined) throw new UsageError(`--${flag} needs a value`)
-    options[flag] = value
-    index += 1
+    if (kind === 'list') {
+      const collected = (options[flag] as string[] | undefined) ?? []
+      collected.push(value)
+      options[flag] = collected
+    } else {
+      options[flag] = value
+    }
+    if (inline === undefined) index += 1
   }
   return { rest, options }
 }
@@ -404,6 +481,18 @@ function renderHuman(command: string, data: unknown): string {
       return renderLabDestroy(data as LabDestroyResult)
     case 'lab promote':
       return renderLabPromote(data as LabPromoteCommandResult)
+    case 'rescue start':
+      return renderRescueStart(data as RescueStartResult)
+    case 'rescue list':
+      return renderRescueList(data as { rescues: RescueListItem[] })
+    case 'rescue stop':
+      return renderRescueStop(data as RescueStopResult)
+    case 'restore':
+      return renderRestore(data as RestoreCommandResult)
+    case 'timeline prune':
+      return renderTimelinePrune(data as TimelinePruneResult)
+    case 'report':
+      return renderReport(data as ReportResult)
     default:
       return ''
   }
@@ -491,6 +580,109 @@ function renderLabInspect(result: LabInspectResult): string {
 
 function renderLabDestroy(result: LabDestroyResult): string {
   return `lab ${result.id} destroyed (lab dir removed)\n`
+}
+
+function renderRescueStart(result: RescueStartResult): string {
+  if (!result.ok) {
+    return `rescue    ${result.id} FAILED — ${result.note ?? 'unknown boot failure'}\n`
+  }
+  return (
+    [
+      `rescue    ${result.id} running`,
+      `profile   ${result.profileName} (core policy + explicit allow rows)`,
+      `host      dsh ${result.hostVersion} on 127.0.0.1:${result.port ?? '?'} (pid ${result.pid ?? '?'})`,
+      'official  profile and cordis.patch.yml untouched',
+    ].join('\n') + '\n'
+  )
+}
+
+function renderRescueList(data: { rescues: RescueListItem[] }): string {
+  if (data.rescues.length === 0) return 'no rescues under this home\n'
+  const lines = data.rescues.map((rescue) => {
+    const alive = rescue.alive ? 'alive' : rescue.state === 'running' ? 'stale' : rescue.state
+    return `rescue    ${rescue.id}  ${alive.padEnd(7)} ${rescue.profileName}${rescue.port === null ? '' : ` port ${rescue.port}`}`
+  })
+  return lines.join('\n') + '\n'
+}
+
+function renderRescueStop(result: RescueStopResult): string {
+  return (
+    [
+      `stopped   ${result.id}${result.pid === null ? '' : ` (pid ${result.pid} terminated)`}`,
+      'removed   rescue directory (temporary profile, logs, and probes)',
+    ].join('\n') + '\n'
+  )
+}
+
+function renderRestore(result: RestoreCommandResult): string {
+  const gateLabel =
+    result.clientGate === 'pass'
+      ? 'PASS (browser client probes recorded)'
+      : result.clientGate === 'fail'
+        ? 'FAIL (client probes refused)'
+        : result.clientGate === 'inconclusive'
+          ? 'inconclusive'
+          : 'skipped'
+  if (!result.ok) {
+    return (
+      [
+        `restore   verification FAILED for snapshot ${result.snapshotId}`,
+        `lab       ${result.labId} retained in state failed (inspect, destroy, re-run)`,
+        `client    ${gateLabel}`,
+        'official  profile untouched — no vault history was deleted',
+      ].join('\n') + '\n'
+    )
+  }
+  const lines = [
+    `restore   ${result.kind === 'promote' ? 'promoted' : 'verified'} snapshot ${result.snapshotId}`,
+    `profile   ${result.kind === 'promote' ? 'promoted onto' : 'verified against'} a restore lab`,
+    `lab       ${result.labId}${result.deleted === true ? ' (deleted after promote)' : ''}`,
+    `client    ${gateLabel}`,
+  ]
+  if (result.kind === 'promote') {
+    lines.push(`snapshots pre   ${result.preSnapshot ?? '(none)'}`)
+    lines.push(`          after ${result.afterSnapshot ?? '(none)'}`)
+    if (result.restartVerified === true) {
+      lines.push('restart   verified — after-snapshot marked lastKnownGood')
+    }
+  } else {
+    lines.push(
+      'promote   none — official profile untouched; promote the lab later with `lab promote`',
+    )
+  }
+  return lines.join('\n') + '\n'
+}
+
+function renderTimelinePrune(result: TimelinePruneResult): string {
+  const head = result.dryRun
+    ? [
+        `plan      profile ${result.profileName}: ${result.total} snapshot(s) scanned`,
+        `delete    ${result.delete.length} (policy: newest 20, newest 14/day, newest 12/week)`,
+      ]
+    : [`pruned    ${result.removed.length} snapshot(s) of profile ${result.profileName}`]
+  const lines = [...head]
+  if (result.delete.length === 0) lines.push('nothing to prune')
+  for (const id of result.delete) lines.push(`          would delete ${id}`)
+  for (const id of result.removed) lines.push(`          removed ${id}`)
+  if (result.protected.length > 0) {
+    lines.push(`protected ${result.protected.length} (lastKnownGood refs and parent chains)`)
+  }
+  if (result.dryRun) {
+    lines.push('re-run with --yes to delete the planned snapshot manifests')
+  }
+  return lines.join('\n') + '\n'
+}
+
+function renderReport(result: ReportResult): string {
+  const lines = [
+    `report    ${result.path}`,
+    `target    ${result.target.kind} ${result.target.id}` +
+      (result.target.profileName !== null ? ` (profile ${result.target.profileName})` : ''),
+    `sections  ${result.sections.length}`,
+  ]
+  if (result.notes.length > 0)
+    lines.push(`notes     ${result.notes.length} (recorded inside the bundle)`)
+  return `${lines.join('\n')}\n`
 }
 
 function renderLabPromote(result: LabPromoteCommandResult): string {
@@ -754,8 +946,10 @@ export async function runCli(
       (result.command === 'lab add' ||
         result.command === 'lab update' ||
         result.command === 'lab remove' ||
-        result.command === 'lab config apply') &&
-      (result.data as LabActionResult).ok === false
+        result.command === 'lab config apply' ||
+        result.command === 'rescue start' ||
+        result.command === 'restore') &&
+      (result.data as LabActionResult | RestoreCommandResult).ok === false
     ) {
       return 1
     }
