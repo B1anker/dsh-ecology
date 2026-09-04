@@ -1,22 +1,25 @@
 /**
  * The settings panel, mounted into the shell's `settings.section` slot.
  *
- * Every control writes straight into the {@link PetSettingsStore}, which
- * notifies subscribers — the overlay included — so changes take effect with
- * no "save" step, and the store's dual-backend write makes them stick. The
- * picker previews each pet in the affection pose (`pet`), because that is the
- * pose that best distinguishes the sprites at thumbnail size.
+ * The plugin renders nothing else on the page — the pet itself lives in the
+ * desktop app — so this panel is the plugin's only visible surface: which pet
+ * shows on the desktop, its name, and the companion bridge switch. Every
+ * control writes straight into the {@link PetSettingsStore}, which notifies
+ * subscribers (the bridge included) so changes take effect with no "save"
+ * step, and the store's dual-backend write makes them stick. The picker
+ * previews each pet in the affection pose (`pet`), because that is the pose
+ * that best distinguishes the sprites at thumbnail size.
  *
  * @module @seaveyon/dsh-pet/client/settings-panel
  */
 
-import { useEffect, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import type { DesktopPet } from './bridge.js'
 import { type DesktopPetsStore, prettifyImportedPetId } from './desktop-pets.js'
 import { detectLocale, getStrings } from './i18n.js'
-import { RasterPet, useOptionalObservable } from './overlay.js'
-import { PETS } from './pets.js'
-import { MAX_SCALE, MIN_SCALE, type PetSettingsStore } from './settings.js'
+import { PET_STYLE_CSS, PETS } from './pets.js'
+import { RasterPet } from './raster-pet.js'
+import type { PetSettingsStore } from './settings.js'
 
 export interface PetSettingsPanelProps {
   settings: PetSettingsStore
@@ -35,6 +38,7 @@ const rowStyle = {
 } as const
 
 const NO_IMPORTED_PETS: readonly DesktopPet[] = []
+const NOOP_SUBSCRIBE = () => () => {}
 
 /** The picker's tile is 56px with a 2px border; the preview gets the rest. */
 const PREVIEW_SIZE = 52
@@ -43,7 +47,15 @@ export function PetSettingsPanel({ settings, desktopPets }: PetSettingsPanelProp
   const strings = getStrings()
   const locale = detectLocale(navigator.language)
   const config = useSyncExternalStore(settings.subscribe, settings.getSnapshot)
-  const importedPets = useOptionalObservable(desktopPets, NO_IMPORTED_PETS)
+  const subscribeImported = useCallback(
+    (listener: () => void) => desktopPets?.subscribe(listener) ?? NOOP_SUBSCRIBE(),
+    [desktopPets],
+  )
+  const getImportedSnapshot = useCallback(
+    () => desktopPets?.getSnapshot() ?? NO_IMPORTED_PETS,
+    [desktopPets],
+  )
+  const importedPets = useSyncExternalStore(subscribeImported, getImportedSnapshot)
 
   // Opening the panel is the discovery moment: the desktop app is the kind of
   // thing users start right before importing a pet, so ask again every mount.
@@ -53,6 +65,9 @@ export function PetSettingsPanel({ settings, desktopPets }: PetSettingsPanelProp
 
   return (
     <section aria-label={strings.settingsSection}>
+      {/* The built-in previews' keyframes; the raster previews carry their own. */}
+      <style>{PET_STYLE_CSS}</style>
+      <p style={{ marginBlock: '8px', opacity: 0.75 }}>{strings.desktopHint}</p>
       <div
         role="group"
         aria-label={strings.appearanceLabel}
@@ -134,26 +149,6 @@ export function PetSettingsPanel({ settings, desktopPets }: PetSettingsPanelProp
           type="text"
           value={config.name}
           onChange={(event) => settings.update({ name: event.target.value })}
-        />
-      </label>
-      <label style={rowStyle}>
-        {strings.scaleLabel}
-        <input
-          type="range"
-          min={MIN_SCALE}
-          max={MAX_SCALE}
-          step={0.1}
-          value={config.scale}
-          onChange={(event) => settings.update({ scale: Number(event.target.value) })}
-        />
-        <span>{config.scale.toFixed(1)}×</span>
-      </label>
-      <label style={rowStyle}>
-        {strings.visibleLabel}
-        <input
-          type="checkbox"
-          checked={config.visible}
-          onChange={(event) => settings.update({ visible: event.target.checked })}
         />
       </label>
       <label style={rowStyle}>

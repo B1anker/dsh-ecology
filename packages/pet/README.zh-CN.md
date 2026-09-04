@@ -2,9 +2,15 @@
 
 [DSH](https://github.com/deepseek-ai) Web 界面的桌面宠物。[English](README.md)
 
-一只手工打磨的宠物住在 DSH Web GUI 的角落里，实时映射你的 agent 正在做什么：思考、调用工具、等待你确认、完成回合时蹦跳庆祝、和你一起安静太久时打瞌睡。
+本插件是桌面宠物的**心情源 + 设置面板**——它不在网页上渲染宠物本体。它实时监听你的
+agent 正在做什么（思考、调用工具、等待你确认、完成回合时庆祝、双双安静太久时打瞌睡），
+推导出心情，并把每次变化推送给[桌面伴侣 App](../pet-desktop)——宠物真正生活在你
+的桌面上。
 
 ![演示：Mochi 跟随 agent 状态切换——待机、思考、工作、庆祝、被抚摸](assets/demo.gif)
+
+> 演示里是宠物早期的页面形态（v1.2 及更早）；宠物现已搬到桌面上，本插件负责告诉它
+> 该是什么心情。
 
 ## 安装
 
@@ -12,30 +18,47 @@
 dsh plugin --profile web add @seaveyon/dsh-pet
 ```
 
-本包声明了 `dsh.bundle.patch`，`dsh plugin` 会同时安装 npm 依赖并把 [`cordis.patch.yml`](cordis.patch.yml) 的 loader 行并入 profile——无需手动改 YAML。重启 `dsh web` 并硬刷新页面，宠物出现在右下角。
+本包声明了 `dsh.bundle.patch`，`dsh plugin` 会同时安装 npm 依赖并把
+[`cordis.patch.yml`](cordis.patch.yml) 的 loader 行并入 profile——无需手动改 YAML。
+重启 `dsh web` 并硬刷新页面，插件立即开始为桌面 App 提供状态。
 
-> 这一行 loader 是必需的：client 模块系统通过扫描宿主 Loader 的活动条目来发现插件 bundle，仅作为普通依赖安装的包永远不会被伺服。该行激活的宿主插件是刻意的空实现——所有功能都在浏览器 bundle 里。
+> 这一行 loader 是必需的：client 模块系统通过扫描宿主 Loader 的活动条目来发现插件
+> bundle，仅作为普通依赖安装的包永远不会被伺服。该行激活的宿主插件是刻意的空实现——
+> 所有功能都在浏览器 bundle 里。
 
 ## 使用宠物
 
-- **拖动** 到任意位置，位置按浏览器记忆。
-- **单击**（或 Tab 聚焦后按 Enter/空格）抚摸它。
-- **双击** 隐藏它；点击爪印按钮唤回。
-- agent 工作时，气泡显示正在调用的工具名；agent 等你确认时，宠物陪你一起等；回合完成时它会庆祝。
+宠物本体由桌面伴侣 App 显示在你的桌面上。Web 界面里你看到的是 **设置 → 宠物**：
 
-配置入口在 **设置 → 宠物**：四只内置形象（blob、cat、robot、DeepSeek 酱）、改名、0.5×–2× 缩放、显示开关。
+- 桌面上显示哪只宠物：四只内置形象（blob、cat、robot、DeepSeek 酱），以及导入到
+  桌面 App 里的宠物。
+- 宠物的名字。
+- 桌面伴侣开关——默认开启，因为驱动桌宠就是本插件存在的意义；桌面 App 不在线时桥接
+  静默失败，开着没有任何副作用。
 
-有 settings 服务时配置写入 DSH settings，否则回退 `localStorage`——远端浏览器（settings RPC 不出服务器）也走本地存储。
+有 settings 服务时配置写入 DSH settings，否则回退 `localStorage`——远端浏览器
+（settings RPC 不出服务器）也走本地存储。
 
 ### 导入的桌面宠物
 
-当 [pet 桌面伴侣](../pet-desktop) 正在运行时，导入到桌面 App 里的位图宠物（例如 Codex 宠物包 `ai-sleepy-silver-wolf`）也会出现在 **设置 → 宠物** 的形象选择器里，并带有"桌面"角标。插件通过伴侣的本地回环服务（`GET http://127.0.0.1:45731/pets`）发现它们，并用步进式 CSS 背景动画在悬浮窗里播放精灵条带——每个心情一张条带，显示尺寸与内置形象一致。发现是尽力而为的：桌面 App 不在线时选择器只显示内置形象；已选中的导入宠物在桌面 App 不可达时回退显示果冻团，不会留空。
+导入到桌面 App 里的位图宠物（例如 Codex 宠物包 `ai-sleepy-silver-wolf`）会出现
+在 **设置 → 宠物** 的形象选择器里，并带有"桌面"角标。插件通过伴侣的本地回环服务
+（`GET http://127.0.0.1:45731/pets`）发现它们，并在选择器预览里用步进式 CSS 背景
+动画播放精灵条带。发现是尽力而为的：桌面 App 不在线时，选择器只显示内置形象；已选中
+但暂时不可达的导入宠物在桌面侧的表现由桌面 App 自己负责。
 
 ## 原理
 
-本包是双面 DSH 插件：宿主面是空操作的 Cordis 插件（见 [`src/index.ts`](src/index.ts)），客户端面（[`src/client/`](src/client)）由 shell 的 client 模块系统伺服于 `/plugins/@seaveyon/dsh-pet/client.js`。客户端从 `sessions.currentProvideInfo` provide 通道读取实时 agent 状态，从会话快照推导宠物心情——零 LLM 调用、零网络、零遥测。
+本包是双面 DSH 插件：宿主面是空操作的 Cordis 插件（见
+[`src/index.ts`](src/index.ts)），客户端面（[`src/client/`](src/client)）由 shell 的
+client 模块系统伺服于 `/plugins/@seaveyon/dsh-pet/client.js`。客户端从
+`sessions.currentProvideInfo` provide 通道读取实时 agent 状态，从会话快照推导宠物心情
+（[`src/client/mood.ts`](src/client/mood.ts)），并把每次变化 POST 到伴侣 App 的回环
+服务（[`src/client/bridge.ts`](src/client/bridge.ts)）——零 LLM 调用、零遥测，唯一的
+网络流量是 loopback。
 
-手写宿主契约类型及其依据记录在 [`src/client/host-types.ts`](src/client/host-types.ts) 顶部。
+手写宿主契约类型及其依据记录在 [`src/client/host-types.ts`](src/client/host-types.ts)
+顶部。
 
 ## 开发
 

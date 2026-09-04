@@ -4,15 +4,13 @@
  * The desktop app can serve imported bitmap pets (see `fetchDesktopPets` in
  * bridge.ts) that the built-in SVG roster knows nothing about. This store
  * holds the last successfully fetched list and exposes it in the shell's
- * observable shape (`getSnapshot`/`subscribe`), so the overlay and the
- * settings panel subscribe with `useSyncExternalStore` exactly like they do
- * for settings and mood.
+ * observable shape (`getSnapshot`/`subscribe`), so the settings panel
+ * subscribes with `useSyncExternalStore` exactly like it does for settings.
  *
- * Discovery is pull-based and lazy: nothing fetches until a mounted surface
- * calls {@link DesktopPetsStore.refresh} (the overlay on mount, the panel each
- * time it opens). A failed refresh keeps the previous list — a desktop app
- * that just quit must not make an already-displayed imported pet vanish
- * mid-render; the overlay's blob fallback owns that case.
+ * Discovery is pull-based and lazy: nothing fetches until the panel calls
+ * {@link DesktopPetsStore.refresh} on mount (i.e. each time it opens). A
+ * failed refresh keeps the previous list — a desktop app that just quit must
+ * not make an already-listed imported pet vanish mid-render.
  *
  * @module @seaveyon/dsh-pet/client/desktop-pets
  */

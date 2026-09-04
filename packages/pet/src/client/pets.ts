@@ -1,11 +1,12 @@
 /**
  * The four built-in pets: hand-drawn 64×64 SVG sprites parameterized by mood.
  *
- * Each pet is a string template rather than JSX because the overlay injects it
- * via `dangerouslySetInnerHTML` — one DOM subtree, no React reconciliation
- * cost per blink, and the sprites stay copy-pasteable into a design tool.
- * Eyes and mouths are shared generators (see `eyesFor`/`mouthFor`) so all
- * four pets read the same mood vocabulary; only the face geometry differs.
+ * Each pet is a string template rather than JSX because the settings panel
+ * injects previews via `dangerouslySetInnerHTML` — one DOM subtree, no React
+ * reconciliation cost per blink, and the sprites stay copy-pasteable into a
+ * design tool. Eyes and mouths are shared generators (see `eyesFor`/`mouthFor`)
+ * so all four pets read the same mood vocabulary; only the face geometry
+ * differs.
  *
  * All motion lives in {@link PET_STYLE_CSS} as CSS keyframes scoped to the
  * `dsh-pet-` prefix, and every animation sits behind
@@ -300,16 +301,8 @@ export const PETS: readonly PetDefinition[] = [
 ]
 
 /**
- * Resolve a configured id to a pet. Unknown ids — from a newer version's
- * roster, or hand-edited storage — fall back to the first pet rather than
- * breaking the overlay.
- */
-export function getPet(id: string): PetDefinition {
-  return PETS.find((pet) => pet.id === id) ?? PETS[0]!
-}
-
-/**
- * The stylesheet every animation lives in. Rendered once by the overlay.
+ * The stylesheet every sprite animation lives in. Rendered once by the
+ * settings panel so the picker's built-in previews move.
  *
  * `transform-box: fill-box` makes each group's own bounding box the transform
  * origin, so blink/ squash pivots sit at the face instead of the SVG corner.

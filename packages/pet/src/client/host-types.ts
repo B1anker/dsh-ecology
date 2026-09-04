@@ -69,7 +69,7 @@ export interface SlotRegistration {
   inject?: () => Record<string, unknown>
 }
 
-/** The shell slot registry: overlay and settings surfaces. */
+/** The shell slot registry (the pet contributes a `settings.section`). */
 export interface SlotsService {
   register(descriptor: SlotRegistration, component: unknown): () => void
   inject(slotName: string, register: () => unknown): void
