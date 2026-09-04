@@ -23,7 +23,7 @@ dsh plugin --profile web add @seaveyon/dsh-pet
 - **双击** 隐藏它；点击爪印按钮唤回。
 - agent 工作时，气泡显示正在调用的工具名；agent 等你确认时，宠物陪你一起等；回合完成时它会庆祝。
 
-配置入口在 **设置 → 宠物**：三只内置形象（blob、cat、robot）、改名、0.5×–2× 缩放、显示开关。
+配置入口在 **设置 → 宠物**：四只内置形象（blob、cat、robot、DeepSeek 酱）、改名、0.5×–2× 缩放、显示开关。
 
 有 settings 服务时配置写入 DSH settings，否则回退 `localStorage`——远端浏览器（settings RPC 不出服务器）也走本地存储。
 

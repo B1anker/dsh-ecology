@@ -16,6 +16,9 @@
   "scripts": {
     "build": "command -v zig >/dev/null 2>&1 && zig build || echo 'skip: zig not installed (see README)'",
     "run": "zig build run",
-    "test:unit": "command -v zig >/dev/null 2>&1 && zig build test || echo 'skip: zig not installed (see README)'"
+    "test:unit": "bun run test:zig && bun run test:js",
+    "test:zig": "command -v zig >/dev/null 2>&1 && zig build test || echo 'skip: zig not installed (see README)'",
+    "test:js": "bun test test/",
+    "import:codex-pet": "bun scripts/import-codex-pet.mjs"
   }
 }
