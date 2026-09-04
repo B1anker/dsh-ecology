@@ -1,3 +1,10 @@
+## [0.4.1](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.4.0...web-login-v0.4.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* **web-login:** dress account panel controls in the host button recipe ([eeb8e3d](https://github.com/B1anker/dsh-ecology/commit/eeb8e3d9457693dbfd2741210137aff8160fb5db))
+
 # [0.4.0](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.3.0...web-login-v0.4.0) (2026-09-03)
 
 
