@@ -84,7 +84,7 @@
     },
     "packages/web-login": {
       "name": "@seaveyon/dsh-web-login",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "bin": {
         "dsh-web-login-hash": "./dist/hash-password.js",
         "dsh-web-login-recovery": "./dist/create-recovery.js",
@@ -111,6 +111,24 @@
         "@deepseek-ai/cordis",
         "@deepseek-ai/dsh-host-webserver",
       ],
+    },
+    "packages/world-line": {
+      "name": "@seaveyon/dsh-world-line",
+      "version": "0.1.0",
+      "bin": {
+        "dsh-world-line": "./bin/dsh-world-line.mjs",
+        "world-line": "./bin/dsh-world-line.mjs",
+      },
+      "dependencies": {
+        "js-yaml": "4.3.1",
+      },
+      "devDependencies": {
+        "@rstest/core": "^0.11.9",
+        "@rstest/coverage-v8": "^0.11.9",
+        "@types/js-yaml": "^4.0.9",
+        "@types/node": "^24.0.0",
+        "typescript": "^5.9.3",
+      },
     },
   },
   "packages": {
@@ -350,6 +368,8 @@
 
     "@seaveyon/dsh-web-login": ["@seaveyon/dsh-web-login@workspace:packages/web-login"],
 
+    "@seaveyon/dsh-world-line": ["@seaveyon/dsh-world-line@workspace:packages/world-line"],
+
     "@sec-ant/readable-stream": ["@sec-ant/readable-stream@0.4.1", "", {}, "sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg=="],
 
     "@semantic-release/changelog": ["@semantic-release/changelog@7.0.0", "", { "dependencies": { "@semantic-release/error": "^4.0.0", "aggregate-error": "^5.0.0", "lodash-es": "^4.17.21" }, "peerDependencies": { "semantic-release": ">=20.1.0" } }, "sha512-TNPyag5db24o7jWjre7UwKB4EcL8oJxbRhnDQ7hmZRAYqzreAc6PgdxQuU3pppp5xQinYtiumL0iG8SSKvnlzg=="],
@@ -403,6 +423,8 @@
     "@types/deep-eql": ["@types/deep-eql@4.0.2", "", {}, "sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw=="],
 
     "@types/hast": ["@types/hast@3.0.5", "", { "dependencies": { "@types/unist": "*" } }, "sha512-rp/ezSWaD1m44dPKICGhiskI13nVr7qTloFwDa/IYkhhf5nzwP+zIQcIJh3WIFSBOy/H1PzB40jPjMDksN4F+g=="],
+
+    "@types/js-yaml": ["@types/js-yaml@4.0.9", "", {}, "sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg=="],
 
     "@types/katex": ["@types/katex@0.16.8", "", {}, "sha512-trgaNyfU+Xh2Tc+ABIb44a5AYUpicB3uwirOioeOkNPPbmgRNtcWyDeeFRzjPZENO9Vq8gvVqfhaaXWLlevVwg=="],
 

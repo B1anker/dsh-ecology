@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Emit-targeting module settings: the published artifact is plain Node ESM
+    // compiled with tsc (this package is a standalone CLI, not a rslib bundle),
+    // so relative imports carry explicit .js extensions as NodeNext requires.
+    // The tsconfig.base bundler resolution is fine for rslib consumers but
+    // would emit extensionless imports that Node cannot load.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["src", "test", "rstest.config.ts"]
+}
