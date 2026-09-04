@@ -228,6 +228,7 @@ describe('vault objects and manifests', () => {
         createdAt: null,
         updatedAt: null,
         lastSnapshots: {},
+        lastKnownGood: {},
       })
       const state = await readState(home)
       expect(state.updatedAt).not.toBeNull()

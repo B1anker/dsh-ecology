@@ -1,0 +1,97 @@
+{
+  "milestone": "phase-3",
+  "generatedAt": "2026-09-04T15:42:54.499Z",
+  "prerequisites": {
+    "dsh": true,
+    "pnpm": true,
+    "chrome": true
+  },
+  "ok": true,
+  "assertions": [
+    {
+      "name": "real dsh + pnpm on PATH",
+      "ok": true,
+      "detail": "dsh=true pnpm=true"
+    },
+    {
+      "name": "Google Chrome available",
+      "ok": true,
+      "detail": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    },
+    {
+      "name": "real dsh booted a fresh DSH home and profile web",
+      "ok": true,
+      "detail": "listening on a loopback port"
+    },
+    {
+      "name": "empty lab list exits 0",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "lab add file: --promote passes (exit 0)",
+      "ok": true,
+      "detail": "exit=0 ok=true stderr= head=lab add file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/"
+    },
+    {
+      "name": "client gate shows real browser probes",
+      "ok": true,
+      "detail": "client    gate PASS (browser client probes recorded)"
+    },
+    {
+      "name": "whitelist managed files swapped onto the official profile",
+      "ok": true,
+      "detail": "files     package.json, pnpm-lock.yaml, pnpm-workspace.yaml, cordis.patch.yml"
+    },
+    {
+      "name": "official package.json now declares the candidate",
+      "ok": true,
+      "detail": "{\"@fixture/world-line-phase3-probe\":\"file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-p3-plugin-gMeDwZ\"}"
+    },
+    {
+      "name": "journal carries one committed promotion",
+      "ok": true,
+      "detail": "[\"committed\"]"
+    },
+    {
+      "name": "auto pre-promote + after snapshots recorded in the timeline",
+      "ok": true,
+      "detail": "post-promote: lab lab-20260904T154229Z-28acabc5 | pre-promote: lab lab-20260904T154229Z-28acabc5"
+    },
+    {
+      "name": "successful promote cleans the lab up by default",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "name": "no reliable browser signal refuses promotion (exit 1)",
+      "ok": true,
+      "detail": "exit=1 stdout-first=lab add file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-p3-plugin3-3Lqb5U stderr="
+    },
+    {
+      "name": "--accept-inconclusive lets the user accept the risk and commits",
+      "ok": true,
+      "detail": "exit=0 client    gate inconclusive (accepted with --accept-inconclusive)"
+    },
+    {
+      "name": "journal records the gate promotion so far",
+      "ok": true,
+      "detail": "2"
+    },
+    {
+      "name": "lab add --promote --restart passes with restart verification",
+      "ok": true,
+      "detail": "exit=0 stderr= lab add file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-p3-plugin2-QKYvlb | profile   web"
+    },
+    {
+      "name": "after-snapshot of the restarted promote is lastKnownGood",
+      "ok": true,
+      "detail": "lkg=snap-20260904T154248Z-ded0a7d4 latest=snap-20260904T154248Z-ded0a7d4"
+    },
+    {
+      "name": "journal now has a committed entry flagged lastKnownGood",
+      "ok": true,
+      "detail": "[false,false,true]"
+    }
+  ]
+}

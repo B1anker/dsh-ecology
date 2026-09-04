@@ -22,8 +22,10 @@ import type { LabManifest, LabPlanRecord } from '../lab/manifest.js'
 import { readLabManifest } from '../lab/manifest.js'
 import type { CandidateSpec } from '../lab/plans.js'
 import { buildPlan, parseCandidateSpec } from '../lab/plans.js'
+import type { LabPromoteResult } from '../lab/promote.js'
+import { runLabPromote } from '../lab/promote.js'
 import type { LabRunOutcome } from '../lab/run.js'
-import { runLabTransaction } from '../lab/run.js'
+import { rmLab, runLabTransaction } from '../lab/run.js'
 
 type LabVerb = 'add' | 'update' | 'remove' | 'config-apply'
 
@@ -33,6 +35,12 @@ export interface LabVerbOptions {
   keep?: boolean
   /** Explicitly allow package build scripts (default --ignore-scripts). */
   allowScripts?: boolean
+  /** Promote the verified lab onto the official profile (§7, Phase 3). */
+  promote?: boolean
+  /** Accept inconclusive client evidence during promotion (never a fail). */
+  acceptInconclusive?: boolean
+  /** Boot the official profile after promote and require a client probe. */
+  restart?: boolean
 }
 
 export interface LabActionResult {
@@ -48,6 +56,44 @@ export interface LabActionResult {
   /** Retained failed labs carry their 7-day expiry. */
   expiresAt: string | undefined
   dshVersion: string
+  /** Present when the run was promote-bound and the promote succeeded. */
+  promote?: Omit<LabPromoteResult, 'ok'>
+}
+
+export interface LabPromoteCommandResult {
+  profileName: string
+  labId: string
+  clientGate: LabPromoteResult['clientGate']
+  preSnapshot: string
+  afterSnapshot: string | null
+  appliedFiles: string[]
+  restartVerified: boolean
+  lastKnownGood: string | null
+  journalId: string
+}
+
+/** `lab promote <lab-id>`: promote a retained, passed lab (§7, Phase 3). */
+export async function runLabPromoteCommand(
+  ctx: CliContext,
+  labId: string,
+  options: { acceptInconclusive?: boolean; restart?: boolean },
+): Promise<LabPromoteCommandResult> {
+  const result = await runLabPromote(ctx, {
+    labId,
+    acceptInconclusive: options.acceptInconclusive,
+    restart: options.restart,
+  })
+  return {
+    profileName: ctx.profileName,
+    labId,
+    clientGate: result.clientGate,
+    preSnapshot: result.preSnapshot,
+    afterSnapshot: result.afterSnapshot,
+    appliedFiles: result.appliedFiles,
+    restartVerified: result.restartVerified,
+    lastKnownGood: result.lastKnownGood,
+    journalId: result.journalId,
+  }
 }
 
 export interface LabListEntry {
@@ -103,33 +149,66 @@ async function runVerb(
     spec,
     overlayPath,
   })
+  const promoteWanted = options.promote === true
+  // Promotion-bound runs keep the lab during verification (the promote reads
+  // its probe records) and enable the browser client probes (§6 steps 4-6).
   const outcome: LabRunOutcome = await runLabTransaction({
     ctx,
     host,
     labId,
     plan,
     allowScripts: options.allowScripts,
-    keep: options.keep,
+    keep: promoteWanted ? true : options.keep,
+    ...(promoteWanted ? { clientProbes: true } : {}),
+    ...(promoteWanted && options.acceptInconclusive === true
+      ? { acceptClientInconclusive: true }
+      : {}),
   })
   const summary = summarizeProbes(outcome.probes)
-  const kept = !outcome.deleted
+  let kept = !outcome.deleted
+  let deleted = outcome.deleted
   let expiresAt: string | undefined
   if (!outcome.ok && kept) {
     const manifest = await readLabManifest(ctx.home, labId).catch(() => null)
     expiresAt = manifest?.retention.expiresAt
   }
+  let promote: Omit<LabPromoteResult, 'ok'> | undefined
+  if (outcome.ok && promoteWanted) {
+    // Lab verified with real client evidence: promote onto the official
+    // profile. Refusals (gate/conflicts) throw and keep the lab for review.
+    const promoted = await runLabPromote(ctx, {
+      labId,
+      acceptInconclusive: options.acceptInconclusive,
+      restart: options.restart,
+    })
+    promote = {
+      clientGate: promoted.clientGate,
+      preSnapshot: promoted.preSnapshot,
+      afterSnapshot: promoted.afterSnapshot,
+      appliedFiles: promoted.appliedFiles,
+      restartVerified: promoted.restartVerified,
+      lastKnownGood: promoted.lastKnownGood,
+      journalId: promoted.journalId,
+    }
+    if (options.keep !== true) {
+      await rmLab(ctx.home, labId)
+      deleted = true
+      kept = false
+    }
+  }
   return {
     profileName: ctx.profileName,
-    labId: outcome.deleted ? null : labId,
+    labId: deleted ? null : labId,
     action: (plan[0]?.action ?? 'config-apply') as LabPlanRecord['action'],
     spec: specText,
     ok: outcome.ok,
-    deleted: outcome.deleted,
+    deleted,
     kept,
     probeSummary: summary,
     port: outcome.port,
     expiresAt,
     dshVersion: host.raw,
+    ...(promote !== undefined ? { promote } : {}),
   }
 }
 
@@ -256,6 +335,28 @@ export function renderLabVerb(result: LabActionResult): string {
     lines.push(
       `lab       ${result.labId} retained${result.expiresAt !== undefined ? ` until ${result.expiresAt}` : ''}`,
     )
+  }
+  const promote = result.promote
+  if (promote !== undefined) {
+    const gateText =
+      promote.clientGate === 'pass'
+        ? 'PASS (browser client probes recorded)'
+        : promote.clientGate === 'fail'
+          ? 'FAIL'
+          : 'inconclusive (accepted with --accept-inconclusive)'
+    lines.push(
+      `promoted  yes onto profile ${result.profileName}`,
+      `client    gate ${gateText}`,
+      `snapshots pre ${promote.preSnapshot}`,
+    )
+    if (promote.afterSnapshot !== null) lines.push(`          after ${promote.afterSnapshot}`)
+    if (promote.appliedFiles.length > 0) lines.push(`files     ${promote.appliedFiles.join(', ')}`)
+    lines.push(
+      promote.restartVerified
+        ? `restart   verified — after-snapshot marked lastKnownGood`
+        : `restart   skipped (default; --restart re-verifies the official boot)`,
+    )
+    lines.push(`journal   ${promote.journalId}`)
   }
   return `${lines.join('\n')}\n`
 }

@@ -8,7 +8,7 @@
     // would emit extensionless imports that Node cannot load.
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM"],
     "types": ["node"],
     "noEmit": true
   },

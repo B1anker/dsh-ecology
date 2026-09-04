@@ -4,16 +4,25 @@ A read-only time machine and doctor for DSH profiles: capture the exact
 composition state of a DSH profile (manifest, patch layer, workspace and
 lockfile, local-plugin receipts), keep it in an append-only content-addressed
 vault, diff any two captures — plus an isolated divergence **lab** that verifies a
-candidate against a throwaway clone — **Phases 0-2 of the WORLD-LINE-SPEC**.
+candidate against a throwaway clone — **Phases 0-3 of the WORLD-LINE-SPEC**.
 
-This milestone deliberately ships no mutation of the official profile and no
-promotion/browser probing: candidate add/update/remove/config-patch
-transactions run only inside `labs/<id>` (independent home + pnpm store +
-process group), successful labs clean up by default, and failures keep a 7-day
-diagnostic window. Read the spec for the roadmap and the exact acceptance
-evidence (`docs/compatibility.md`, `docs/threat-model.md`,
-`docs/phase2-design.md`, `evidence/live-evidence.json`,
-`evidence/phase2-evidence.json`, `evidence/phase2-cli-evidence.json`).
+Lab transactions (candidate add/update/remove/config-patch) run only inside
+`labs/<id>` (independent home + pnpm store + process group); successful labs
+clean up by default and failures keep a 7-day diagnostic window. Phase 3 adds
+the browser client probes (§6 steps 4-6: a fresh Playwright context must reach
+the client-ready shell with zero page/console/request errors) and **promotion**
+(§7): `lab add --promote` or `lab promote <id>` swaps only the verified
+whitelist files of a passed lab onto the official profile — same-filesystem
+fsynced staging, atomic rename dance, auto pre/post-promote snapshots, an
+append-only promotion journal at `<dsh-home>/world-line/journal.jsonl`, and an
+optional `--restart` that re-verifies the official boot and marks the
+after-snapshot lastKnownGood (rolling back atomically on failure). A client
+probe failure refuses promotion unconditionally; missing/inconclusive client
+evidence refuses it unless `--accept-inconclusive`. Read the spec for the
+roadmap and the exact acceptance evidence (`docs/compatibility.md`,
+`docs/threat-model.md`, `docs/phase2-design.md`, `docs/phase3-design.md`,
+`evidence/live-evidence.json`, `evidence/phase2-evidence.json`,
+`evidence/phase2-cli-evidence.json`).
 
 ## Install / run
 
@@ -45,14 +54,17 @@ dsh-world-line [--dsh-home <path>] [--profile <name>] <command> [--json]
 | `timeline list` | snapshots of the current profile, newest first |
 | `timeline show <id>` | one manifest (default: latest) |
 | `timeline diff <a> <b>` | semantic diff: files, bundles, dependencies, patch entries per layer, derived root, unmanaged files |
-| `lab add/update/remove <spec> [--keep] [--allow-scripts]` | apply a candidate inside a fresh isolated lab and verify it (compose → real host boot → HTTP ready) |
+| `lab add/update/remove <spec> [--keep] [--allow-scripts]` | apply a candidate inside a fresh isolated lab and verify it (compose → host boot → HTTP ready; `--promote` adds browser client probes + promotion) |
 | `lab config apply <patch.yml> [--keep]` | same transaction for a config patch overlay |
+| `lab promote <id> [--accept-inconclusive] [--restart]` | promote a retained passed lab (§7): client gate, receipt check, auto snapshots, atomic whitelist swap, journal |
 | `lab list` | retained labs, newest first (expired failed labs reaped) |
 | `lab inspect <id>` | one lab's manifest and probe records |
 | `lab destroy <id>` | remove one lab |
 
-`lab` verbs verify a **known dsh version only** (fail closed), never write the
-official profile, and exit 1 when any probe fails. Lab layout:
+`lab` verbs verify a **known dsh version only** (fail closed); everything but
+promotion never writes the official profile, and exit 1 fires when any probe
+fails. Promotion writes only the four whitelist files and never lab runtime,
+logs, cookies, tokens or the lab home. Lab layout:
 `<dsh-home>/world-line/labs/<id>/{home/,pnpm-store/,manifest.json,probe.json,logs/}`.
 `restore`, `rescue`, `report` are recognized and refused with their roadmap
 phase until the spec's later phases ship.

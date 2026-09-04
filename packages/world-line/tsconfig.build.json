@@ -5,7 +5,8 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "declarationMap": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "lib": ["ES2023", "DOM"]
   },
   "include": ["src"]
 }

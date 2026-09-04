@@ -15,6 +15,7 @@ import type {
   LabDestroyResult,
   LabInspectResult,
   LabListResult,
+  LabPromoteCommandResult,
   LabVerbOptions,
 } from './commands/lab.js'
 import {
@@ -24,6 +25,7 @@ import {
   runLabDestroy,
   runLabInspect,
   runLabList,
+  runLabPromoteCommand,
   runLabRemove,
   runLabUpdate,
 } from './commands/lab.js'
@@ -65,7 +67,7 @@ global options:
   -h, --help          show this help
   -V, --version       print the package version and exit
 
-commands (Phase 0-2 milestone):
+commands (Phase 0-3 milestone):
   doctor                          read-only diagnostics (exit 1 when a check fails)
   snapshot create [--label <t>]   capture the profile into the time machine
                                   [--break-stale-lock] confirm a stale writer lock
@@ -74,14 +76,20 @@ commands (Phase 0-2 milestone):
   timeline diff <a> <b>           semantic diff between two snapshots
   lab add <spec> [--keep]         verify a candidate plugin in an isolated lab
                                   [--allow-scripts] run package build scripts
-  lab update <pkg> [--keep] [--allow-scripts]
-  lab remove <pkg> [--keep] [--allow-scripts]
-  lab config apply <patch.yml> [--keep]   overlay a config patch in a lab
+  lab add <spec> --promote        verify with browser probes, then promote (§7)
+  lab update <pkg> [--keep] [--allow-scripts] [--promote]
+  lab remove <pkg> [--keep] [--allow-scripts] [--promote]
+  lab config apply <patch.yml> [--keep] [--promote]
+                                  --accept-inconclusive accept a skipped client probe
+                                  --restart boot the official profile and re-verify
+  lab promote <lab-id> [--accept-inconclusive] [--restart]
+                                  promote a retained passed lab (auto snapshots,
+                                  atomic same-fs swap, journal; rollback on restart fail)
   lab list                        retained labs (expired failures reaped)
   lab inspect <lab-id>            one lab's manifest and probe records
   lab destroy <lab-id>            remove one lab
 
-later phases: promote · restore · rescue · report (see WORLD-LINE-SPEC §11)
+later phases: restore · rescue · report (see WORLD-LINE-SPEC §11)
 
 exit codes: 0 ok · 1 verification failed · 2 usage/file error · 3 internal error
 `
@@ -244,6 +252,22 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
         if (labId === undefined) throw new UsageError('lab destroy needs a lab id')
         return { command: 'lab destroy', data: await runLabDestroy(ctx, labId) }
       }
+      if (sub === 'promote') {
+        const [labId, ...rest] = args.slice(1)
+        if (labId === undefined) throw new UsageError('lab promote needs a lab id')
+        const { rest: optionsRest, options } = consumeOptions(rest, {
+          'accept-inconclusive': 'boolean',
+          restart: 'boolean',
+        })
+        expectNoArgs('lab promote', optionsRest)
+        return {
+          command: 'lab promote',
+          data: await runLabPromoteCommand(ctx, labId, {
+            ...(options['accept-inconclusive'] === true ? { acceptInconclusive: true } : {}),
+            ...(options.restart === true ? { restart: true } : {}),
+          }),
+        }
+      }
       if (sub === 'config') {
         const [apply, patchFile, ...rest] = args.slice(1)
         if (apply !== 'apply') {
@@ -253,6 +277,9 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
         const { rest: optionsRest, options } = consumeOptions(rest, {
           keep: 'boolean',
           'allow-scripts': 'boolean',
+          promote: 'boolean',
+          'accept-inconclusive': 'boolean',
+          restart: 'boolean',
         })
         expectNoArgs('lab config apply', optionsRest)
         return {
@@ -260,16 +287,25 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
           data: await runLabConfigApply(ctx, patchFile, {
             ...(options.keep === true ? { keep: true } : {}),
             ...(options['allow-scripts'] === true ? { allowScripts: true } : {}),
+            ...(options.promote === true ? { promote: true } : {}),
+            ...(options['accept-inconclusive'] === true ? { acceptInconclusive: true } : {}),
+            ...(options.restart === true ? { restart: true } : {}),
           }),
         }
       }
       const { rest, options } = consumeOptions(args.slice(1), {
         keep: 'boolean',
         'allow-scripts': 'boolean',
+        promote: 'boolean',
+        'accept-inconclusive': 'boolean',
+        restart: 'boolean',
       })
       const verbOptions: LabVerbOptions = {
         ...(options.keep === true ? { keep: true } : {}),
         ...(options['allow-scripts'] === true ? { allowScripts: true } : {}),
+        ...(options.promote === true ? { promote: true } : {}),
+        ...(options['accept-inconclusive'] === true ? { acceptInconclusive: true } : {}),
+        ...(options.restart === true ? { restart: true } : {}),
       }
       const [spec, ...extra] = rest
       expectNoArgs(`lab ${sub}`, extra)
@@ -366,6 +402,8 @@ function renderHuman(command: string, data: unknown): string {
       return renderLabInspect(data as LabInspectResult)
     case 'lab destroy':
       return renderLabDestroy(data as LabDestroyResult)
+    case 'lab promote':
+      return renderLabPromote(data as LabPromoteCommandResult)
     default:
       return ''
   }
@@ -453,6 +491,32 @@ function renderLabInspect(result: LabInspectResult): string {
 
 function renderLabDestroy(result: LabDestroyResult): string {
   return `lab ${result.id} destroyed (lab dir removed)\n`
+}
+
+function renderLabPromote(result: LabPromoteCommandResult): string {
+  const gateLabel =
+    result.clientGate === 'pass'
+      ? 'PASS (browser client probes recorded)'
+      : result.clientGate === 'fail'
+        ? 'FAIL (client probes refused promotion)'
+        : 'inconclusive (accepted with --accept-inconclusive)'
+  const lines = [
+    `promoted  lab ${result.labId} onto profile ${result.profileName}`,
+    `client    ${gateLabel}`,
+    `snapshots pre   ${result.preSnapshot}`,
+  ]
+  if (result.afterSnapshot !== null) lines.push(`          after ${result.afterSnapshot}`)
+  if (result.appliedFiles.length > 0) {
+    lines.push(`files     ${result.appliedFiles.join(', ')}`)
+  }
+  lines.push(
+    result.restartVerified
+      ? `restart   verified — after-snapshot marked lastKnownGood`
+      : `restart   skipped (default; --restart re-verifies the official boot)`,
+  )
+  if (result.lastKnownGood !== null) lines.push(`last-known-good ${result.lastKnownGood}`)
+  lines.push(`journal   ${result.journalId}`)
+  return `${lines.join('\n')}\n`
 }
 
 function renderDoctor(result: DoctorResult): string {

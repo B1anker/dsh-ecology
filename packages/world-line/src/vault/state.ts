@@ -20,6 +20,8 @@ export interface StoreState {
   updatedAt: string | null
   /** Profile name → latest snapshot id in this store. */
   lastSnapshots: Record<string, string>
+  /** Profile name → lastKnownGood snapshot id (Phase 3, restart verification). */
+  lastKnownGood: Record<string, string>
 }
 
 /** A fresh state for a store that has never been written. */
@@ -29,6 +31,7 @@ export function emptyState(): StoreState {
     createdAt: null,
     updatedAt: null,
     lastSnapshots: {},
+    lastKnownGood: {},
   }
 }
 
@@ -58,6 +61,10 @@ export async function readState(home: string): Promise<StoreState> {
         parsed.lastSnapshots !== null && typeof parsed.lastSnapshots === 'object'
           ? (parsed.lastSnapshots as Record<string, string>)
           : {},
+      lastKnownGood:
+        parsed.lastKnownGood !== null && typeof parsed.lastKnownGood === 'object'
+          ? (parsed.lastKnownGood as Record<string, string>)
+          : {},
     }
   } catch (error) {
     if (error instanceof InvariantError) throw error
@@ -82,4 +89,21 @@ export async function noteSnapshot(home: string, profileName: string, id: string
   const state = await readState(home)
   state.lastSnapshots[profileName] = id
   await writeState(home, state)
+}
+
+/** Mark one snapshot as the profile's lastKnownGood and persist. */
+export async function noteLastKnownGood(
+  home: string,
+  profileName: string,
+  id: string,
+): Promise<void> {
+  const state = await readState(home)
+  state.lastKnownGood[profileName] = id
+  await writeState(home, state)
+}
+
+/** Read the profile's lastKnownGood snapshot id, if any. */
+export async function lastKnownGoodFor(home: string, profileName: string): Promise<string | null> {
+  const state = await readState(home)
+  return state.lastKnownGood[profileName] ?? null
 }
