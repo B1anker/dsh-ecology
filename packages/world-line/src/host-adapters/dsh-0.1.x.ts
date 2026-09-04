@@ -92,3 +92,37 @@ export const adapterDsh01x: HostAdapter = {
     }
   },
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2 launch / compose argv builders (WORLD-LINE-SPEC §8: version-sensitive
+// facts live in the adapter). Every shape below was exercised against a real
+// DSH 0.1.2-rc.1 in a temp home (see docs/phase2-design.md):
+//
+//   boot:  dsh --profile <name> --port 0 --no-open      → ready line on stdout:
+//          `dsh web: http://127.0.0.1:<port>/?token=…` (printed only after the
+//          loader settled and webServer/connection exist).
+//   dump:  dsh --profile <name> --dump-config [--patch <p>]  → composed YAML.
+//   plugin: dsh plugin --profile <name> <pnpm args…>    → real pnpm forwarder
+//          running in the profile dir; reconciles dsh.profile.bundles from
+//          installed state after a successful run.
+// ---------------------------------------------------------------------------
+
+/** Web-app boot argv: OS-picked loopback port, never auto-open a browser. */
+export function dshBootArgs(profileName: string, port: number): string[] {
+  return ['--profile', profileName, '--port', String(port), '--no-open']
+}
+
+/** First stdout line of a successful web boot starts with this prefix. */
+export const DSH_WEB_READY_PREFIX = 'dsh web: http'
+
+/** Compose argv; optional overlay is applied after the profile patch layer. */
+export function dshDumpArgs(profileName: string, overlayPath?: string | null): string[] {
+  const args = ['--profile', profileName, '--dump-config']
+  if (overlayPath !== undefined && overlayPath !== null) args.push('--patch', overlayPath)
+  return args
+}
+
+/** `dsh plugin` argv forwarding one pnpm invocation to a profile dir. */
+export function dshPluginArgs(profileName: string, pnpmArgs: readonly string[]): string[] {
+  return ['plugin', '--profile', profileName, ...pnpmArgs]
+}

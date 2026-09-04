@@ -10,6 +10,23 @@
 
 import type { DoctorResult } from './commands/doctor.js'
 import { runDoctor } from './commands/doctor.js'
+import type {
+  LabActionResult,
+  LabDestroyResult,
+  LabInspectResult,
+  LabListResult,
+  LabVerbOptions,
+} from './commands/lab.js'
+import {
+  renderLabVerb,
+  runLabAdd,
+  runLabConfigApply,
+  runLabDestroy,
+  runLabInspect,
+  runLabList,
+  runLabRemove,
+  runLabUpdate,
+} from './commands/lab.js'
 import type { SnapshotCreateResult } from './commands/snapshot.js'
 import { runSnapshotCreate } from './commands/snapshot.js'
 import type {
@@ -31,7 +48,6 @@ import { DEFAULT_PROFILE, ENVELOPE_SCHEMA_VERSION, WORLD_LINE_VERSION } from './
 
 /** Commands delivered in later phases, rejected with a roadmap message. */
 const PHASE_GATED: Record<string, string> = {
-  lab: 'the divergence lab lands in Phase 2 (WORLD-LINE-SPEC §11)',
   restore: 'restore lands in Phase 4',
   rescue: 'rescue lands in Phase 4',
   report: 'diagnostic reports land in Phase 4',
@@ -49,15 +65,23 @@ global options:
   -h, --help          show this help
   -V, --version       print the package version and exit
 
-commands (Phase 0/1 milestone):
+commands (Phase 0-2 milestone):
   doctor                          read-only diagnostics (exit 1 when a check fails)
   snapshot create [--label <t>]   capture the profile into the time machine
                                   [--break-stale-lock] confirm a stale writer lock
   timeline list                   list snapshots of the current profile
   timeline show <snapshot-id>     show one snapshot's manifest
   timeline diff <a> <b>           semantic diff between two snapshots
+  lab add <spec> [--keep]         verify a candidate plugin in an isolated lab
+                                  [--allow-scripts] run package build scripts
+  lab update <pkg> [--keep] [--allow-scripts]
+  lab remove <pkg> [--keep] [--allow-scripts]
+  lab config apply <patch.yml> [--keep]   overlay a config patch in a lab
+  lab list                        retained labs (expired failures reaped)
+  lab inspect <lab-id>            one lab's manifest and probe records
+  lab destroy <lab-id>            remove one lab
 
-later phases: lab · restore · rescue · report (see WORLD-LINE-SPEC §11)
+later phases: promote · restore · rescue · report (see WORLD-LINE-SPEC §11)
 
 exit codes: 0 ok · 1 verification failed · 2 usage/file error · 3 internal error
 `
@@ -197,6 +221,76 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
         `unknown timeline subcommand ${JSON.stringify(sub)} (available: list, show, diff)`,
       )
     }
+    case 'lab': {
+      const sub = args[0]
+      if (sub === undefined) {
+        throw new UsageError(
+          'lab needs a subcommand (add|update|remove|config|list|inspect|destroy)',
+        )
+      }
+      if (sub === 'list') {
+        expectNoArgs('lab list', args.slice(1))
+        return { command: 'lab list', data: await runLabList(ctx) }
+      }
+      if (sub === 'inspect') {
+        const [labId] = args.slice(1)
+        if (args.length > 2) throw new UsageError('lab inspect takes one lab id')
+        if (labId === undefined) throw new UsageError('lab inspect needs a lab id')
+        return { command: 'lab inspect', data: await runLabInspect(ctx, labId) }
+      }
+      if (sub === 'destroy') {
+        const [labId] = args.slice(1)
+        if (args.length > 2) throw new UsageError('lab destroy takes one lab id')
+        if (labId === undefined) throw new UsageError('lab destroy needs a lab id')
+        return { command: 'lab destroy', data: await runLabDestroy(ctx, labId) }
+      }
+      if (sub === 'config') {
+        const [apply, patchFile, ...rest] = args.slice(1)
+        if (apply !== 'apply') {
+          throw new UsageError('lab config only supports apply (lab config apply <patch.yml>)')
+        }
+        if (patchFile === undefined) throw new UsageError('lab config apply needs a patch file')
+        const { rest: optionsRest, options } = consumeOptions(rest, {
+          keep: 'boolean',
+          'allow-scripts': 'boolean',
+        })
+        expectNoArgs('lab config apply', optionsRest)
+        return {
+          command: 'lab config apply',
+          data: await runLabConfigApply(ctx, patchFile, {
+            ...(options.keep === true ? { keep: true } : {}),
+            ...(options['allow-scripts'] === true ? { allowScripts: true } : {}),
+          }),
+        }
+      }
+      const { rest, options } = consumeOptions(args.slice(1), {
+        keep: 'boolean',
+        'allow-scripts': 'boolean',
+      })
+      const verbOptions: LabVerbOptions = {
+        ...(options.keep === true ? { keep: true } : {}),
+        ...(options['allow-scripts'] === true ? { allowScripts: true } : {}),
+      }
+      const [spec, ...extra] = rest
+      expectNoArgs(`lab ${sub}`, extra)
+      if (spec === undefined) {
+        throw new UsageError(
+          `lab ${sub} needs ${sub === 'remove' ? 'a package name' : 'a candidate spec'}`,
+        )
+      }
+      if (sub === 'add') {
+        return { command: 'lab add', data: await runLabAdd(ctx, spec, verbOptions) }
+      }
+      if (sub === 'update') {
+        return { command: 'lab update', data: await runLabUpdate(ctx, spec, verbOptions) }
+      }
+      if (sub === 'remove') {
+        return { command: 'lab remove', data: await runLabRemove(ctx, spec, verbOptions) }
+      }
+      throw new UsageError(
+        `unknown lab subcommand ${JSON.stringify(sub)} (available: add, update, remove, config, list, inspect, destroy)`,
+      )
+    }
     default: {
       const gate = PHASE_GATED[command]
       if (gate !== undefined) {
@@ -261,9 +355,104 @@ function renderHuman(command: string, data: unknown): string {
       return renderTimelineShow(data as TimelineShowResult)
     case 'timeline diff':
       return renderTimelineDiff(data as TimelineDiffResult)
+    case 'lab add':
+    case 'lab update':
+    case 'lab remove':
+    case 'lab config apply':
+      return renderLabVerb(data as LabActionResult)
+    case 'lab list':
+      return renderLabList(data as LabListResult)
+    case 'lab inspect':
+      return renderLabInspect(data as LabInspectResult)
+    case 'lab destroy':
+      return renderLabDestroy(data as LabDestroyResult)
     default:
       return ''
   }
+}
+
+function renderLabList(result: LabListResult): string {
+  if (result.labs.length === 0) {
+    const line =
+      `no labs for profile ${result.profileName} yet — ` +
+      `run \`dsh-world-line lab add <spec>\` to verify a candidate`
+    return result.reaped.length > 0
+      ? `${line}
+reaped    ${result.reaped.length} expired lab(s)
+`
+      : `${line}
+`
+  }
+  const rows = result.labs.map((lab) => [
+    lab.id,
+    lab.profileName,
+    lab.state,
+    `${lab.runCount} runs`,
+    lab.lastOk === null ? '-' : lab.lastOk ? 'ok' : 'failed',
+    lab.port !== undefined ? String(lab.port) : '-',
+  ])
+  const widths = [0, 1, 2, 3, 4, 5].map((column) =>
+    Math.max(...rows.map((row) => (row[column] ?? '').length), 'profile'.length),
+  )
+  const render = (cells: string[]): string =>
+    cells
+      .map((cell, column) => cell.padEnd(widths[column] ?? 0))
+      .join('  ')
+      .trimEnd()
+  const lines = [
+    render(['id', 'profile', 'state', 'runs', 'verdict', 'port']),
+    ...rows.map((row) => render(row)),
+  ]
+  if (result.reaped.length > 0) {
+    lines.push(
+      `reaped    ${result.reaped.length} expired failed lab(s): ${result.reaped.join(', ')}`,
+    )
+  }
+  return `${lines.join('\n')}\n`
+}
+
+function renderLabInspect(result: LabInspectResult): string {
+  const m = result.manifest
+  const lines = [
+    `lab       ${m.id}`,
+    `state     ${m.state}`,
+    `profile   ${m.source.profileName}`,
+    `created   ${m.createdAt}`,
+    `source    ${m.source.receipt}`,
+    `dsh       ${m.dshVersion} (adapter ${m.adapterId})`,
+    `runtime   ${m.runtime.nodeVersion} · ${m.runtime.os} · ${m.runtime.arch}`,
+    `runs      ${m.runCount}`,
+  ]
+  if (m.lockfileHash !== undefined) lines.push(`lockfile  ${m.lockfileHash}`)
+  if (m.lastRun !== undefined) {
+    lines.push(
+      `last run  ${m.lastRun.finishedAt} ${m.lastRun.ok ? 'PASS' : 'FAIL'}` +
+        (m.lastRun.port !== undefined ? ` (loopback port ${m.lastRun.port})` : ''),
+    )
+  }
+  if (m.plan.length > 0) {
+    lines.push(
+      `plan      ${m.plan.map((step) => `${step.action}${step.id !== undefined ? ` ${step.id}` : ''}`).join(' | ')}`,
+    )
+  }
+  if (m.retention.expiresAt !== undefined) {
+    lines.push(`retention expires ${m.retention.expiresAt} (failed-lab diagnostics window)`)
+  } else {
+    lines.push(
+      `retention ${m.retention.cleanupMode === 'delete-on-success' ? 'clean up on success (default)' : 'retained by --keep'}`,
+    )
+  }
+  lines.push(`probes    ${result.probes.length} recorded`)
+  for (const entry of result.probes) {
+    const tag = entry.status.toUpperCase().padEnd(4)
+    lines.push(`  [${tag}] ${entry.label}`)
+    if (entry.detail !== undefined) lines.push(`         ${redactText(entry.detail)}`)
+  }
+  return `${lines.join('\n')}\n`
+}
+
+function renderLabDestroy(result: LabDestroyResult): string {
+  return `lab ${result.id} destroyed (lab dir removed)\n`
 }
 
 function renderDoctor(result: DoctorResult): string {
@@ -492,10 +681,19 @@ export async function runCli(
       const rendered = renderHuman(result.command, result.data)
       if (rendered !== '') out(rendered)
     }
-    // Verification semantics: doctor exits 1 when any check failed.
+    // Verification semantics: doctor and lab verbs exit 1 on failure.
     if (command === 'doctor') {
       const doctorData = result.data as DoctorResult
       return doctorData.summary.failed > 0 ? 1 : 0
+    }
+    if (
+      (result.command === 'lab add' ||
+        result.command === 'lab update' ||
+        result.command === 'lab remove' ||
+        result.command === 'lab config apply') &&
+      (result.data as LabActionResult).ok === false
+    ) {
+      return 1
     }
     return 0
   } catch (error) {

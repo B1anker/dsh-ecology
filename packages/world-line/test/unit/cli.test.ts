@@ -31,12 +31,12 @@ describe('CLI surface', () => {
   })
 
   test('phase-gated commands explain their roadmap', async () => {
-    const lab = await runCliIn({ argv: ['lab', 'add', 'x@1'] })
-    expect(lab.exitCode).toBe(2)
-    expect(lab.stderr).toContain('Phase 2')
     const restore = await runCliIn({ argv: ['restore', 'snap-x'] })
     expect(restore.exitCode).toBe(2)
     expect(restore.stderr).toContain('Phase 4')
+    const rescue = await runCliIn({ argv: ['rescue', 'start'] })
+    expect(rescue.exitCode).toBe(2)
+    expect(rescue.stderr).toContain('Phase 4')
   })
 
   test('--version and -V print the package version and exit 0', async () => {

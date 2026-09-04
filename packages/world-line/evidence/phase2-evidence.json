@@ -1,0 +1,91 @@
+{
+  "dshVersion": "0.1.2-rc.1",
+  "pnpmVersion": "",
+  "runAt": "2026-09-04T10:08:51.881Z",
+  "labHome": "/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-phase2-y7in1M",
+  "transcript": [
+    {
+      "name": "boot-fresh",
+      "stderr": "",
+      "pid": 27239
+    },
+    {
+      "name": "plugin-add",
+      "exit": 0,
+      "stderr": ""
+    },
+    {
+      "name": "manifest-after-add",
+      "manifest": {
+        "name": "dsh-profile-web",
+        "private": true,
+        "dependencies": {
+          "@fixture/world-line-probe": "file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-plugin-XjEGGO"
+        },
+        "dsh": {
+          "profile": {
+            "bundles": [
+              "@deepseek-ai/dsh-base",
+              "@deepseek-ai/dsh-web-app",
+              "@fixture/world-line-probe"
+            ],
+            "patchReload": "live"
+          }
+        }
+      }
+    },
+    {
+      "name": "boot-with-candidate",
+      "stderr": "",
+      "pid": 27372
+    }
+  ],
+  "assertions": [
+    {
+      "name": "a fresh profile boots with a ready URL carrying host and token",
+      "ok": true,
+      "detail": "http://127.0.0.1:49525/?token=tIf71bI3jqvHkzIuRBZYcDVPw4qtBD0tAxzy3DDoplY"
+    },
+    {
+      "name": "the ready URL carries a valid port",
+      "ok": true,
+      "detail": "49525"
+    },
+    {
+      "name": "the ready URL answers HTTP",
+      "ok": true,
+      "detail": "{\"status\":401}"
+    },
+    {
+      "name": "dsh plugin add succeeds offline for a file: bundle",
+      "ok": true,
+      "detail": "exit 0"
+    },
+    {
+      "name": "pnpm reconciliation appends the bundle to dsh.profile.bundles",
+      "ok": true,
+      "detail": "[\"@deepseek-ai/dsh-base\",\"@deepseek-ai/dsh-web-app\",\"@fixture/world-line-probe\"]"
+    },
+    {
+      "name": "the lab store directory was used",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "dump-config composes with the candidate patch layer",
+      "ok": true,
+      "detail": "section present"
+    },
+    {
+      "name": "the lab profile boots with the candidate plugin loaded",
+      "ok": true,
+      "detail": "http://127.0.0.1:49532/?token=o6w3yqGS_qxfdakoKyTD47CTO_MKwkwDzCvOkFXwVP8"
+    },
+    {
+      "name": "the lab ready URL answers HTTP",
+      "ok": true,
+      "detail": "{\"status\":401}"
+    }
+  ],
+  "allPassed": true
+}

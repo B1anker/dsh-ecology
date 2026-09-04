@@ -66,7 +66,9 @@
     "test:unit": "rstest run",
     "test:coverage": "rstest run --coverage",
     "test:real": "bun run build && node scripts/evidence.mjs",
+    "test:real:phase2": "node scripts/evidence-phase2.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "pack:check": "bun run build && npm pack --dry-run"
+    "pack:check": "bun run build && npm pack --dry-run",
+    "test:real:phase2:cli": "bun scripts/evidence-phase2-cli.mjs"
   }
 }

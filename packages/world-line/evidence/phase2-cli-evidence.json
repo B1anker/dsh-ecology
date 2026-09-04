@@ -1,0 +1,79 @@
+{
+  "kind": "world-line-phase2-cli-evidence",
+  "tool": "dsh-world-line (dist) + real dsh 0.1.x",
+  "runAt": "2026-09-04T10:09:00.526Z",
+  "keptLab": "lab-20260904T100854Z-48f5bf8b",
+  "assertions": [
+    {
+      "name": "real dsh booted a fresh DSH home and profile web",
+      "ok": true,
+      "detail": "http://127.0.0.1:49552/?token=Hqqi3wSBM4GywKOggqol4A_biVeCnqC3NJxwE8zrswg"
+    },
+    {
+      "name": "lab list on an empty home exits 0 and reports no labs",
+      "ok": true,
+      "detail": "no labs for profile web yet — run `dsh-world-line lab add <spec>` to verify a candidate\n"
+    },
+    {
+      "name": "lab add file: --keep passes",
+      "ok": true,
+      "detail": "lab add file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-plugin-qlkn72"
+    },
+    {
+      "name": "kept passed lab shows up in lab list",
+      "ok": true,
+      "detail": "{\n  \"schemaVersion\": 1,\n  \"command\": \"lab list\",\n  \"ok\": true,\n  \"data\": {\n    \"labs\": [\n      {\n        \"id\": \"lab-20260904T100854Z-48f5bf8b\",\n        \"profileName\": \"web\",\n        \"state\": \"passed\",\n        \"runCount\": 1,\n        \"createdAt\": \"2026-09-04T10:08:54.733Z\",\n        \"lastOk\": true,\n        \"port\": 49589\n      }\n    ],\n    \"reaped\": [],\n    \"profileName\": \"web\"\n  }\n}\n"
+    },
+    {
+      "name": "kept lab has manifest + probe.json + logs",
+      "ok": true,
+      "detail": "/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-phase2-cli-S4n5ph/world-line/labs/lab-20260904T100854Z-48f5bf8b"
+    },
+    {
+      "name": "probe.json records all five acceptance probes (compose, plugin, boot, http)",
+      "ok": true,
+      "detail": "{\"total\":5,\"passed\":5,\"failed\":0,\"warned\":0,\"skipped\":0,\"inconclusive\":0,\"ok\":true}"
+    },
+    {
+      "name": "lab add default (no --keep) passes",
+      "ok": true,
+      "detail": "lab add file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-plugin-qlkn72\nprofile   web\ndsh       0.1.2-rc.1 (lab gate: exact known version)\nprobes    5 passed, 0 failed, 0 warned, 0 skipped\nverdict   PASS (host ready on loopback port 49605)\ncleanup   deleted (default: successful labs clean up; use --keep to retain)\n"
+    },
+    {
+      "name": "default cleanup deletes the successful lab",
+      "ok": true,
+      "detail": "before=1 after=1"
+    },
+    {
+      "name": "lab config apply with a missing package fails the compose probe (exit 1)",
+      "ok": true,
+      "detail": "exit=1 lab config-apply /var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-plugin-qlkn72/bad.patch.yml"
+    },
+    {
+      "name": "failed labs keep a 7-day retention window",
+      "ok": true,
+      "detail": "{\"cleanupMode\":\"keep-on-failure\",\"expiresAt\":\"2026-09-11T10:08:59.511Z\"}"
+    },
+    {
+      "name": "lab remove of an absent package fails conservatively (exit 1)",
+      "ok": true,
+      "detail": "lab remove @fixture/world-line-probe"
+    },
+    {
+      "name": "lab inspect renders the manifest and probe records",
+      "ok": true,
+      "detail": "lab       lab-20260904T100854Z-48f5bf8b\nstate     passed\nprofile   web\ncreated   2026-09-04T10:08:54.733Z\nsource    72d9e530779f0f89347a0e3e41196e7ab26f0d617b14e6bb89507bfff9dbb7b9\ndsh       0.1.2-rc.1 (adapter dsh-0.1.x)\nruntime   v24.20.0 · darwin 25.6.0 · arm64\nruns      1\nlast run  2026-09-04T10:08:56.896Z PASS (loopback port 49589)\nplan      add world-line-plugin-qlkn72\nretention retained by --keep\nprobes    5 recorded\n  [PASS] candidate file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-plugin-qlkn72 is installed into the lab\n  [PASS] compose dump is accepted by the host\n         the host accepted the composed tree\n  [PASS] static checks find no duplicate ids, invalid rows, missing packages, or inject-external cycles\n  [PASS] the lab ready URL answers HTTP (hostReady)\n  [PASS] the lab dsh boots to the ready line\n         listening on loopback port 49589\n"
+    },
+    {
+      "name": "lab destroy removes the lab",
+      "ok": true,
+      "detail": "lab lab-20260904T100854Z-48f5bf8b destroyed (lab dir removed)\n"
+    },
+    {
+      "name": "lab list --json carries the schemaVersion envelope",
+      "ok": true,
+      "detail": "{\n  \"schemaVersion\": 1,\n  \"command\": \"lab list\",\n  \"ok\": true,\n  \"data\": {\n    \"labs\": [\n      {\n        \"id\": \"lab-20260904T100859Z-c4d1a73c\",\n        \"profileName\": \"web\",\n        \"state\": \"failed\",\n        \"runCount\": 1,\n        \"createdAt\": \"2026-09-04T10:08:59.453Z\",\n        \"lastOk\": false,\n        \"expiresAt\": \"2026-09-11T10:08:59.511Z\"\n      },\n      {\n        \"id\": \"lab-20260904T100859Z-155f387b\",\n        \"profileName\": \"web\",\n        \"state\": \"failed\",\n        \"runCount\": 1,\n        \"createdAt\": \"2026-09-04T10:08:59.801Z\",\n        \"lastOk\": false,\n        \"expiresAt\": \"2026-09-11T10:08:59.852Z\"\n      }\n    ],\n    \"reaped\": [],\n    \"profileName\": \"web\"\n  }\n}\n"
+    }
+  ],
+  "allPassed": true
+}
