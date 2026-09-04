@@ -21,6 +21,8 @@ import { summarizeProbes } from '../domain/probe.js'
 import { redactText } from '../domain/redaction.js'
 import { writeFileAtomic } from '../fs/atomic.js'
 import { dshBootArgs, dshPluginArgs } from '../host-adapters/dsh-0.1.x.js'
+import type { BrowserProbeDeps } from './browser.js'
+import { runClientProbe } from './browser.js'
 import type { ComposeProbeInput, CompositionProblem } from './compose.js'
 import { runComposeProbe } from './compose.js'
 import type { KnownHost } from './gate.js'
@@ -37,6 +39,8 @@ export const FAILED_LAB_RETENTION_DAYS = 7
 
 /** Dependencies injected for tests. */
 export interface LabRunDeps {
+  /** Browser launcher for the client probes (tests inject a fake). */
+  browserLaunch?: BrowserProbeDeps['launch']
   capture: typeof runCaptured
   launch: typeof launchDsh
   httpGet(url: string): Promise<{ status: number } | { error: string }>
@@ -51,8 +55,22 @@ export interface LabRunInput {
   allowScripts?: boolean
   /** Keep the lab after success (default deletes the whole lab). */
   keep?: boolean
+  /**
+   * Run the browser client probes (§6 steps 4-6). Plain lab verification is
+   * offline-friendly and skips them; promotion-bound runs enable this so the
+   * client gate has real evidence.
+   */
+  clientProbes?: boolean
+  /**
+   * With --accept-inconclusive: a browser probe without a reliable signal is
+   * demoted to a warning so the run can proceed to the promotion gate, which
+   * then accepts it explicitly. Client failures are never demoted.
+   */
+  acceptClientInconclusive?: boolean
   deps?: Partial<LabRunDeps>
 }
+
+export type ClientReadyState = 'pass' | 'fail' | 'inconclusive' | 'skipped'
 
 export interface LabRunOutcome {
   ok: boolean
@@ -62,6 +80,8 @@ export interface LabRunOutcome {
   deleted: boolean
   /** Recorded host port of the successful boot, if any. */
   port?: number
+  /** Client probes verdict when they ran (§6 steps 4-6). */
+  clientReady?: ClientReadyState
 }
 
 /** Status-only HTTP probe; the token URL never leaves this function. */
@@ -322,6 +342,82 @@ export async function runLabTransaction(input: LabRunInput): Promise<LabRunOutco
         })
       }
     }
+
+    // ---- 3b. Browser boot + client probes (§6 steps 4-6, Phase 3). Plain
+    // runs skip these unless the caller opts in (promotion-bound runs do);
+    // no browser executable yields skip probes — never fabricated readiness.
+    if (input.clientProbes === true && booted !== null && !hasFailures()) {
+      const clientStartedAt = new Date().toISOString()
+      const clientOutcome = await runClientProbe({
+        url: booted.url,
+        readyTimeoutMs: 90_000,
+        ...(input.deps?.browserLaunch !== undefined
+          ? { deps: { launch: input.deps.browserLaunch } }
+          : {}),
+      })
+      const signal = clientOutcome.signal
+      const finishedAt = new Date().toISOString()
+      const detailOf = (): string => {
+        switch (signal.kind) {
+          case 'ready':
+            return `shell settled after ${signal.settledMs} ms (${signal.state.bootEntries} boot entries)`
+          case 'fail':
+            return redactText(
+              `${signal.errors.length} client error(s): ${signal.errors.slice(0, 3).join(' | ')}`,
+            )
+          case 'no-browser':
+            return signal.reason
+          case 'inconclusive':
+            return redactText(signal.reason)
+        }
+      }
+      const detail = detailOf()
+      if (signal.kind === 'fail') {
+        await log(`client probe failed: ${detail}`)
+      }
+      for (const check of ['browser-boot', 'core-contract', 'candidate-contract']) {
+        const status =
+          signal.kind === 'ready'
+            ? 'pass'
+            : signal.kind === 'fail'
+              ? 'fail'
+              : signal.kind === 'no-browser'
+                ? 'skip'
+                : 'inconclusive'
+        emit({
+          check,
+          label:
+            check === 'browser-boot'
+              ? 'the lab page boots in a fresh browser context (clientReady)'
+              : check === 'core-contract'
+                ? 'core UI contract is ready (workspace/conversation/settings shell)'
+                : 'candidate contract: no client entry declared — core not degraded',
+          required: true,
+          startedAt: clientStartedAt,
+          finishedAt,
+          status,
+          detail,
+        })
+      }
+      if (clientOutcome.events.length > 0) {
+        const sample = clientOutcome.events.slice(0, 12).join(String.fromCharCode(10))
+        await log(`client events:` + String.fromCharCode(10) + sample)
+      }
+      if (input.acceptClientInconclusive === true) {
+        for (const entry of probes) {
+          if (
+            entry.check.startsWith('browser-') ||
+            entry.check === 'core-contract' ||
+            entry.check === 'candidate-contract'
+          ) {
+            if (entry.status === 'inconclusive') {
+              entry.status = 'warn'
+              entry.detail = `${entry.detail ?? 'no reliable client signal'} (inconclusive accepted with --accept-inconclusive)`
+            }
+          }
+        }
+      }
+    }
   } finally {
     if (booted !== null) {
       const transcript = await booted.stop().catch(() => null)
@@ -336,6 +432,19 @@ export async function runLabTransaction(input: LabRunInput): Promise<LabRunOutco
   // failures keep diagnostics 7 days; --keep retains a successful lab).
   const summary = summarizeProbes(probes)
   const ok = summary.ok
+  const clientProbeEntries = probes.filter((entry) =>
+    ['browser-boot', 'core-contract', 'candidate-contract'].includes(entry.check),
+  )
+  const clientReady: ClientReadyState | undefined =
+    clientProbeEntries.length === 0
+      ? undefined
+      : clientProbeEntries.some((entry) => entry.status === 'fail')
+        ? 'fail'
+        : clientProbeEntries.some((entry) => entry.status === 'skip')
+          ? 'skipped'
+          : clientProbeEntries.some((entry) => entry.status === 'inconclusive')
+            ? 'inconclusive'
+            : 'pass'
   const finishedAt = new Date().toISOString()
   const keep = input.keep ?? false
   const survives = !ok || keep
@@ -375,6 +484,7 @@ export async function runLabTransaction(input: LabRunInput): Promise<LabRunOutco
     problems,
     deleted,
     ...(booted !== null && booted.port > 0 ? { port: booted.port } : {}),
+    ...(clientReady !== undefined ? { clientReady } : {}),
   }
   return outcome
 }
