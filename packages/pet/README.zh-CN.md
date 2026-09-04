@@ -23,8 +23,8 @@ dsh plugin --profile web add @seaveyon/dsh-pet
 重启 `dsh web` 并硬刷新页面，插件立即开始为桌面 App 提供状态。
 
 > 这一行 loader 是必需的：client 模块系统通过扫描宿主 Loader 的活动条目来发现插件
-> bundle，仅作为普通依赖安装的包永远不会被伺服。该行激活的宿主插件是刻意的空实现——
-> 所有功能都在浏览器 bundle 里。
+> bundle，仅作为普通依赖安装的包永远不会被伺服。该行激活的宿主插件只拥有一个路由——
+> 下文说的桌面 App 启动器——别无他物。
 
 ## 使用宠物
 
@@ -35,6 +35,15 @@ dsh plugin --profile web add @seaveyon/dsh-pet
 - 宠物的名字。
 - 桌面伴侣开关——默认开启，因为驱动桌宠就是本插件存在的意义；桌面 App 不在线时桥接
   静默失败，开着没有任何副作用。
+
+### 从面板启动桌面 App
+
+在回环页面（DSH server 与浏览器同机）上，如果伴侣开关已开但探测不到桌面 App，面板会
+提供「启动桌面 App」按钮——而且打开开关本身就会自动发起一次启动尝试。按钮会把请求
+发给运行在 DSH server 里的宿主面（`POST /dsh-pet/launch-desktop`，见
+[`src/launch.ts`](src/launch.ts)）：只接受回环来源，强制自定义请求头使跨站页面无法
+偷触，profile 有登录门时还要求带会话。宿主报告未安装时，面板改为给出下载链接。远端
+宿主场景下面板从不显示该按钮——否则会把宠物启动到服务器上，而不是你的桌面。
 
 有 settings 服务时配置写入 DSH settings，否则回退 `localStorage`——远端浏览器
 （settings RPC 不出服务器）也走本地存储。
@@ -51,8 +60,8 @@ App 不可达时选择器回退到内置 SVG 形象并显示"未连接"提示，
 
 ## 原理
 
-本包是双面 DSH 插件：宿主面是空操作的 Cordis 插件（见
-[`src/index.ts`](src/index.ts)），客户端面（[`src/client/`](src/client)）由 shell 的
+本包是双面 DSH 插件：宿主面（[`src/index.ts`](src/index.ts)）注册唯一一个启动路由，
+客户端面（[`src/client/`](src/client)）由 shell 的
 client 模块系统伺服于 `/plugins/@seaveyon/dsh-pet/client.js`。客户端从
 `sessions.currentProvideInfo` provide 通道读取实时 agent 状态，从会话快照推导宠物心情
 （[`src/client/mood.ts`](src/client/mood.ts)），并把每次变化 POST 到伴侣 App 的回环
@@ -66,7 +75,7 @@ client 模块系统伺服于 `/plugins/@seaveyon/dsh-pet/client.js`。客户端�
 
 ```sh
 bun install
-bun run build   # 产出 dist/index.js（宿主空操作）与 dist/client.js（浏览器 bundle）
+bun run build   # 产出 dist/index.js（宿主：启动路由）与 dist/client.js（浏览器 bundle）
 bun run test    # 基于 @seaveyon/dsh-plugin-testkit 客户端替身的 jsdom 套件
 ```
 

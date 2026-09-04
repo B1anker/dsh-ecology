@@ -10,7 +10,8 @@
  * desktop app may be absent, the port closed, the request blocked — every
  * failure is swallowed silently. Nothing here throws, logs, or otherwise
  * touches the plugin's own behavior, and not one request is made while the
- * `companionEnabled` setting is off (the default).
+ * `companionEnabled` setting is off (it is on by default: driving the desktop
+ * pet is the plugin's whole job).
  *
  * @module @seaveyon/dsh-pet/client/bridge
  */

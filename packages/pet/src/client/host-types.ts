@@ -13,7 +13,7 @@
  *   Loader's ACTIVE entries for packages declaring `dsh.client` — a plain
  *   profile dependency is never served. The bundle's `cordis.patch.yml` insert
  *   row is therefore load-bearing, and the host entry (`src/index.ts`) must be
- *   a loadable (here: no-op) Cordis plugin.
+ *   a loadable Cordis plugin.
  * - Serving: the bundle is read from the package's `exports["./client"]` and
  *   served at `/plugins/<entry-name>/client.js?rev=<sha1-12>`, where the entry
  *   name is the scoped package name (`@seaveyon/dsh-pet`), slashes included.

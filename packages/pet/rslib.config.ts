@@ -17,9 +17,9 @@ import { defineConfig } from '@rslib/core'
 export default defineConfig({
   lib: [
     {
-      // The host face: a no-op Cordis plugin the Loader row resolves to. ESM
-      // like every other package here, with declarations so `exports["."]`
-      // types resolve.
+      // The host face: the single launch-desktop route the Loader row
+      // resolves to. ESM like every other package here, with declarations so
+      // `exports["."]` types resolve.
       format: 'esm',
       bundle: false,
       dts: true,
@@ -28,6 +28,10 @@ export default defineConfig({
         entry: {
           index: './src/index.ts',
           desktop: './src/desktop.ts',
+          // bundle:false emits entry files ONLY — index.js imports this at
+          // runtime, so the launcher must be an entry or the published
+          // package dangles (the trap desktop.ts's header documents).
+          launch: './src/launch.ts',
         },
         tsconfigPath: './tsconfig.build.json',
       },

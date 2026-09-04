@@ -28,6 +28,16 @@ export interface Strings {
   desktopPetBadge: string
   /** Settings panel: the desktop app is unreachable, showing the fallback roster. */
   desktopOfflineHint: string
+  /** Settings panel: button that asks the host to launch the desktop app. */
+  launchButton: string
+  /** Settings panel: launch requested, waiting for the app to come up. */
+  launchStarting: string
+  /** Settings panel: the host reports the desktop app is not installed. */
+  launchNotInstalled: string
+  /** Settings panel: the launch request itself failed. */
+  launchFailed: string
+  /** Settings panel: link to the desktop app's download page. */
+  launchDownloadLabel: string
 }
 
 const DICTIONARIES: Record<Locale, Strings> = {
@@ -39,6 +49,11 @@ const DICTIONARIES: Record<Locale, Strings> = {
     companionLabel: '桌面伴侣',
     desktopPetBadge: '导入',
     desktopOfflineHint: '桌面 App 未连接，暂时只显示内置形象。',
+    launchButton: '启动桌面 App',
+    launchStarting: '正在启动桌面 App…',
+    launchNotInstalled: '这台机器上还没安装桌面 App。',
+    launchFailed: '启动失败，请手动打开桌面 App。',
+    launchDownloadLabel: '去下载',
   },
   en: {
     settingsSection: 'Pet',
@@ -48,6 +63,11 @@ const DICTIONARIES: Record<Locale, Strings> = {
     companionLabel: 'Desktop companion',
     desktopPetBadge: 'Imported',
     desktopOfflineHint: 'Desktop app not connected — showing the built-in pets for now.',
+    launchButton: 'Launch desktop app',
+    launchStarting: 'Starting the desktop app…',
+    launchNotInstalled: 'The desktop app is not installed on this machine.',
+    launchFailed: 'Launch failed — open the desktop app manually.',
+    launchDownloadLabel: 'Download it',
   },
 }
 
