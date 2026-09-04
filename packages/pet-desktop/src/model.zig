@@ -383,6 +383,7 @@ pub fn boot(model: *Model, fx: *Effects) void {
             fx.closeChannel(state_channel_key);
         };
     }
+    appkit.hideFromDock();
     appkit.placeBottomRight(screen_margin, window_size);
     appkit.logFrame("boot");
 }
