@@ -29,3 +29,8 @@ sessions/
 *.swp
 *~
 .DS_Store
+
+# Local install scratch (sandboxed installs)
+.bun-cache/
+.bun-tmp/
+.npm-cache/

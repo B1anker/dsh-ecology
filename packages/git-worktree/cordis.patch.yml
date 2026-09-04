@@ -1,0 +1,6 @@
+# This plugin intentionally changes no host or Web client service. Its only
+# integration point is the stable server-side `tools` service.
+- insert:
+    - id: dsh-git-worktree
+      name: '@seaveyon/dsh-git-worktree'
+      inject: [tools, webServer]
