@@ -19,13 +19,15 @@ import { join } from 'node:path'
 
 import type { CliContext } from '../context.js'
 import { runtimeEnvironment } from '../context.js'
-import { FileError } from '../domain/errors.js'
+import { FileError, VerificationError } from '../domain/errors.js'
 import { ensureProfileDir } from '../domain/profile.js'
+import type { SnapshotManifest } from '../domain/snapshot.js'
 import { analyzeProfile } from '../domain/snapshot.js'
 import { writeFileAtomic } from '../fs/atomic.js'
 import { acquireLock } from '../fs/lock.js'
 import { profileDir, profileLockPath } from '../fs/paths.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
+import { readObject } from '../vault/objects.js'
 import type { KnownHost } from './gate.js'
 import { labDir, labLogDir, labProfileDir, labStoreDir, newLabId } from './layout.js'
 import type { LabManifest } from './manifest.js'
@@ -37,6 +39,23 @@ export interface CreatedLab {
   labProfileDir: string
   /** Copied whitelisted file names (the clone set). */
   copied: string[]
+}
+
+/**
+ * Restore-lab source: materialize the lab profile from a vault snapshot
+ * instead of cloning the live profile. Secret-bundle plaintext (decrypted
+ * once, upstream) arrives by file name; `null` means the snapshot carries no
+ * secret bundle at all.
+ */
+export interface RestoreLabSource {
+  snapshotId: string
+  manifest: SnapshotManifest
+  secrets: Map<string, Buffer> | null
+}
+
+export interface CreateLabOptions {
+  /** When set, the lab profile is rebuilt from snapshot vault bytes. */
+  source?: RestoreLabSource
 }
 
 /** Whitelisted composition roles cloned from the source profile (§5). */
@@ -57,6 +76,7 @@ export async function createLab(
   ctx: CliContext,
   host: KnownHost,
   profileName: string,
+  options: CreateLabOptions = {},
 ): Promise<CreatedLab> {
   const now = ctx.now()
   const sourceDir = profileDir(ctx.home, profileName)
@@ -77,17 +97,51 @@ export async function createLab(
 
     const id = newLabId(now)
     const targetDir = labProfileDir(ctx.home, id, profileName)
+    const restore = options.source
+
+    // Restore-lab materialization plan: bytes come from the vault (content
+    // objects, or the decrypted secret bundle). Completeness is checked
+    // BEFORE the lab skeleton exists — an incomplete lab could never
+    // certify the snapshot state, so the refusal leaves nothing behind.
+    const materialized: Array<{ name: string; bytes: Buffer }> | null =
+      restore === undefined ? null : []
+    if (restore !== undefined && materialized !== null) {
+      for (const record of restore.manifest.files) {
+        if (!(WHITELIST_FILE_NAMES as readonly string[]).includes(record.name)) continue
+        let bytes: Buffer | null = null
+        if (record.object !== null) {
+          bytes = await readObject(ctx.home, record.object)
+        } else if (record.secretStored === true && restore.secrets !== null) {
+          bytes = restore.secrets.get(record.name) ?? null
+        }
+        if (bytes === null) {
+          throw new VerificationError(
+            `snapshot ${restore.snapshotId} cannot be restored: ${record.name} has no ` +
+              `stored bytes (secret content was skipped without an encrypted bundle)`,
+          )
+        }
+        materialized.push({ name: record.name, bytes })
+      }
+    }
+
     await mkdir(labDir(ctx.home, id), { recursive: true })
     await mkdir(targetDir, { recursive: true })
     await mkdir(labStoreDir(ctx.home, id), { recursive: true })
     await mkdir(labLogDir(ctx.home, id), { recursive: true })
 
     const copied: string[] = []
-    for (const record of analysis.files) {
-      if (!(WHITELIST_FILE_NAMES as readonly string[]).includes(record.name)) continue
-      const bytes = await readFile(join(sourceDir, record.name))
-      await writeFileAtomic(join(targetDir, record.name), bytes)
-      copied.push(record.name)
+    if (restore === undefined) {
+      for (const record of analysis.files) {
+        if (!(WHITELIST_FILE_NAMES as readonly string[]).includes(record.name)) continue
+        const bytes = await readFile(join(sourceDir, record.name))
+        await writeFileAtomic(join(targetDir, record.name), bytes)
+        copied.push(record.name)
+      }
+    } else if (materialized !== null) {
+      for (const entry of materialized) {
+        await writeFileAtomic(join(targetDir, entry.name), entry.bytes)
+        copied.push(entry.name)
+      }
     }
     if (!copied.includes('package.json')) {
       throw new FileError(
@@ -104,7 +158,15 @@ export async function createLab(
       adapterId: host.adapterId,
       dshVersion: host.raw,
       runtime: runtimeEnvironment(),
-      source: { profileName, receipt: analysis.receipt.tree },
+      source:
+        restore === undefined
+          ? { profileName, receipt: analysis.receipt.tree }
+          : {
+              profileName,
+              receipt: analysis.receipt.tree,
+              kind: 'restore',
+              snapshotId: restore.snapshotId,
+            },
       ...(lockfileRecord !== undefined ? { lockfileHash: lockfileRecord.sha256 } : {}),
       state: 'created',
       runCount: 0,

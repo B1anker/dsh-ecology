@@ -51,6 +51,8 @@ export interface FileRecord {
   object: string | null
   /** Secret-skip policy outcome. */
   secretSkipped: boolean
+  /** True when the bytes were stored encrypted in the snapshot's bundle. */
+  secretStored?: boolean
   secretKinds: string[]
   /** Patch-role parse summary (redacted), when the file parses. */
   entries?: PatchEntrySummary[]
@@ -121,6 +123,19 @@ export interface SnapshotManifest {
   homePatch: HomePatchRecord | null
   derived: { rootConfigPresent: boolean; rootConfigClean: boolean | null }
   unmanaged: string[]
+  /**
+   * Encrypted secret bundle (Phase 4): present only when a secure key
+   * service was available and at least one whitelist file carried secret
+   * shapes. `null` means "no encrypted bundle" — either nothing was secret,
+   * or the platform had no key service and secret-shaped files were skipped
+   * (records carry `secretSkipped: true` and are not byte-restorable).
+   */
+  secretsBundle: {
+    format: string
+    sha256: string
+    size: number
+    entryCount: number
+  } | null
 }
 
 /** The full read-pass result before persistence. */
@@ -154,6 +169,17 @@ export async function analyzeProfile(options: {
   adapter: HostAdapter
   /** Called once per persisted file with its bytes (the vault hook). */
   store?: (name: string, bytes: Buffer) => Promise<void>
+  /**
+   * Phase 4: called for secret-bearing files when an encrypted secret
+   * bundle is being captured. Return false to fall back to the plain
+   * secret-skip policy (e.g. the key service disappeared mid-run).
+   */
+  secretBytes?: (entry: {
+    name: string
+    role: string
+    sha256: string
+    bytes: Buffer
+  }) => Promise<boolean>
 }): Promise<ProfileAnalysis> {
   const { home, profileName, adapter } = options
   const store = options.store ?? (async () => {})
@@ -188,16 +214,26 @@ export async function analyzeProfile(options: {
     const text = bytes.toString('utf8')
     const secretKinds = scanFileText(text)
     const secretSkipped = secretKinds.length > 0
+    let secretStored = false
+    if (secretKinds.length > 0 && options.secretBytes !== undefined) {
+      secretStored = await options.secretBytes({
+        name,
+        role,
+        sha256,
+        bytes,
+      })
+    }
     const record: FileRecord = {
       name,
       role,
       size: bytes.byteLength,
       sha256,
-      object: secretSkipped ? null : sha256,
-      secretSkipped,
+      object: secretSkipped || secretStored ? null : sha256,
+      secretSkipped: secretSkipped && !secretStored,
+      ...(secretStored ? { secretStored: true } : {}),
       secretKinds,
     }
-    if (!secretSkipped) {
+    if (!record.secretSkipped && !secretStored) {
       await store(name, bytes)
     }
     if (role === 'manifest') {
@@ -226,7 +262,7 @@ export async function analyzeProfile(options: {
     }
   }
 
-  const homePatch = await analyzeHomePatch(home, store)
+  const homePatch = await analyzeHomePatch(home, store, options.secretBytes)
 
   let rootConfigClean: boolean | null = null
   if (layout.rootConfigPresent) {
@@ -270,6 +306,12 @@ async function readProfileText(file: string): Promise<string | null> {
 async function analyzeHomePatch(
   home: string,
   store: (name: string, bytes: Buffer) => Promise<void>,
+  secretBytes?: (entry: {
+    name: string
+    role: string
+    sha256: string
+    bytes: Buffer
+  }) => Promise<boolean>,
 ): Promise<HomePatchRecord | null> {
   const filePath = join(home, 'cordis.patch.yml')
   let bytes: Buffer
@@ -282,15 +324,27 @@ async function analyzeHomePatch(
   const text = bytes.toString('utf8')
   const secretKinds = scanFileText(text)
   const secretSkipped = secretKinds.length > 0
+  let secretStored = false
+  if (secretSkipped && secretBytes !== undefined) {
+    secretStored = await secretBytes({
+      name: 'cordis.patch.yml (home)',
+      role: 'profile-patch',
+      sha256,
+      bytes,
+    })
+  }
   const record: HomePatchRecord = {
     present: true,
     size: bytes.byteLength,
     sha256,
-    object: secretSkipped ? null : sha256,
-    secretSkipped,
+    object: secretSkipped || secretStored ? null : sha256,
+    secretSkipped: secretSkipped && !secretStored,
+    ...(secretStored ? { secretStored: true } : {}),
     secretKinds,
   }
-  if (!secretSkipped) await store('cordis.patch.yml (home)', bytes)
+  if (!secretSkipped || secretStored) {
+    if (!secretStored) await store('cordis.patch.yml (home)', bytes)
+  }
   try {
     record.entries = summarizePatchEntries(parsePatchListText(text, 'home cordis.patch.yml'))
   } catch (error) {
@@ -342,6 +396,7 @@ export function buildManifest(options: {
   nodeVersion: string
   os: string
   arch: string
+  secretsBundle?: SnapshotManifest['secretsBundle']
 }): SnapshotManifest {
   const { analysis, home } = options
   return {
@@ -379,6 +434,7 @@ export function buildManifest(options: {
       rootConfigClean: analysis.derivedRoot.clean,
     },
     unmanaged: analysis.unmanaged,
+    secretsBundle: options.secretsBundle ?? null,
   }
 }
 

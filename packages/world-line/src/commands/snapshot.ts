@@ -15,12 +15,15 @@ import { ensureProfileDir } from '../domain/profile.js'
 import { redactText } from '../domain/redaction.js'
 import type { SnapshotManifest } from '../domain/snapshot.js'
 import { analyzeProfile, buildManifest, newSnapshotId } from '../domain/snapshot.js'
+import { writeFileAtomic } from '../fs/atomic.js'
 import { acquireLock } from '../fs/lock.js'
-import { profileDir, profileLockPath } from '../fs/paths.js'
+import { profileDir, profileLockPath, secretBundlePath } from '../fs/paths.js'
 import { findDshBinary, readDshVersion } from '../host-adapters/detect.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
+import { createKeyProvider } from '../vault/crypto.js'
 import { latestSnapshotFor, writeSnapshotManifest } from '../vault/manifests.js'
 import { putObject } from '../vault/objects.js'
+import { buildSecretBundle, secretBundleFacts } from '../vault/secrets.js'
 import { noteSnapshot } from '../vault/state.js'
 
 /** Options for one snapshot create run. */
@@ -91,6 +94,11 @@ export async function runSnapshotCreate(
   })
   try {
     const storedObjects = new Set<string>()
+    // Phase 4: encrypt secret-bearing files into one bundle when a key
+    // service exists; otherwise the Phase 1-3 skip policy stays (explicitly).
+    const keyProvider = createKeyProvider({ env: ctx.env, home })
+    const vaultKey = await keyProvider.getOrCreateKey()
+    const secretSources: Array<{ name: string; bytes: Buffer }> = []
     const analysis = await analyzeProfile({
       home,
       profileName,
@@ -99,7 +107,20 @@ export async function runSnapshotCreate(
         const outcome = await putObject(home, bytes)
         storedObjects.add(outcome.sha256)
       },
+      secretBytes:
+        vaultKey === null
+          ? undefined
+          : async (entry) => {
+              secretSources.push({ name: entry.name, bytes: entry.bytes })
+              return true
+            },
     })
+    let secretsFacts: SnapshotManifest['secretsBundle'] = null
+    if (vaultKey !== null && secretSources.length > 0) {
+      const { bundle, entryCount } = buildSecretBundle(vaultKey, secretSources)
+      await writeFileAtomic(secretBundlePath(home, id), bundle, { mode: 0o600 })
+      secretsFacts = secretBundleFacts(bundle, entryCount)
+    }
 
     const parentId = await latestSnapshotFor(home, profileName)
     const manifest: SnapshotManifest = buildManifest({
@@ -111,6 +132,7 @@ export async function runSnapshotCreate(
       parentId,
       dsh: dshFacts,
       ...runtimeEnvironment(),
+      secretsBundle: secretsFacts,
     })
 
     await writeSnapshotManifest(home, manifest)
@@ -133,7 +155,15 @@ export async function runSnapshotCreate(
     }
     if (skippedSecrets.length > 0) {
       warnings.push(
-        `secret-shaped content in ${skippedSecrets.join(', ')} was not stored (Phase 4 crypto vault pending)`,
+        `secret-shaped content in ${skippedSecrets.join(', ')} was not stored: ` +
+          `no secure key service available ` +
+          `(macOS Keychain or $WORLD_LINE_SECRET_KEY); hashes recorded, bytes skipped`,
+      )
+    }
+    if (secretsFacts !== null) {
+      warnings.push(
+        `secret-shaped content of ${secretsFacts.entryCount} file(s) stored encrypted ` +
+          `(${keyProvider.id === 'env' ? 'environment key' : 'Keychain'} vault, AES-256-GCM)`,
       )
     }
     if (analysis.lockfileParseError !== null) {

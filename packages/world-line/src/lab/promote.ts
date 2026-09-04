@@ -93,8 +93,22 @@ async function readLabProbeProbes(home: string, labId: string): Promise<ProbeRes
 }
 
 /** Buffer source for one managed file of a lab (read-only copy). */
+/**
+ * Source of the swap: read one managed file from the lab profile. A lab may
+ * legitimately lack a whitelisted file — a restore lab materializes only the
+ * files the snapshot holds (e.g. a fresh profile has no pnpm-lock.yaml yet)
+ * — and `null` makes the swap *delete* that managed file from the official
+ * profile, keeping both sides byte-faithful to the verified state.
+ */
 function labSourceOf(labProfileDirPath: string) {
-  return async (name: string): Promise<Buffer> => readFile(`${labProfileDirPath}/${name}`)
+  return async (name: string): Promise<Buffer | null> => {
+    try {
+      return await readFile(`${labProfileDirPath}/${name}`)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
+  }
 }
 
 /**
@@ -148,6 +162,7 @@ export async function runLabPromote(
 
   const manifest: LabManifest = await readLabManifest(ctx.home, labId)
   const labProfileName = manifest.source.profileName
+  const journalKind = manifest.source.kind === 'restore' ? 'restore' : 'promotion'
   if (labProfileName !== ctx.profileName) {
     throw new UsageError(
       `lab ${labId} cloned profile ${JSON.stringify(labProfileName)}; ` +
@@ -177,7 +192,7 @@ export async function runLabPromote(
 
   const officialDir = profileDir(ctx.home, ctx.profileName)
   const labProfileDirPath = labProfileDir(ctx.home, labId, labProfileName)
-  const journalId = newJournalId(ctx.now())
+  const journalId = newJournalId(ctx.now(), journalKind)
 
   // Receipt conflict check #1 under the writer lock.
   const lock = await acquireLock({
@@ -305,7 +320,7 @@ export async function runLabPromote(
 
     await appendJournal(ctx.home, {
       id: journalId,
-      kind: 'promotion',
+      kind: journalKind,
       createdAt: ctx.now().toISOString(),
       profileName: ctx.profileName,
       labId,
@@ -316,6 +331,9 @@ export async function runLabPromote(
       receiptAfter,
       files: applied,
       lastKnownGood: restartVerified,
+      ...(journalKind === 'restore' && manifest.source.kind === 'restore'
+        ? { snapshotId: manifest.source.snapshotId }
+        : {}),
     })
     return {
       ok: true,
@@ -347,7 +365,7 @@ export async function runLabPromote(
     const receiptAfter = (await analyzeProfileNow(ctx).catch(() => null))?.receipt.tree ?? ''
     await appendJournal(ctx.home, {
       id: journalId,
-      kind: 'promotion',
+      kind: journalKind,
       createdAt: ctx.now().toISOString(),
       profileName: ctx.profileName,
       labId,

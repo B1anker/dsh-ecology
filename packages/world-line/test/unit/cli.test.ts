@@ -10,6 +10,7 @@ import { delimiter, join } from 'node:path'
 import { describe, expect, test } from '@rstest/core'
 
 import {
+  destroyTempHome,
   installFakeDsh,
   makeTempHome,
   profilePackageJson,
@@ -36,13 +37,28 @@ describe('CLI surface', () => {
     expect(unknown.stderr).toContain('unknown command')
   })
 
-  test('phase-gated commands explain their roadmap', async () => {
-    const restore = await runCliIn({ argv: ['restore', 'snap-x'] })
-    expect(restore.exitCode).toBe(2)
-    expect(restore.stderr).toContain('Phase 4')
-    const rescue = await runCliIn({ argv: ['rescue', 'start'] })
-    expect(rescue.exitCode).toBe(2)
-    expect(rescue.stderr).toContain('Phase 4')
+  test('Phase 4 commands answer misuse with exit 2 on a temp home', async () => {
+    const home = await makeTempHome()
+    try {
+      // restore is live: an unknown snapshot is a plain usage error, and no
+      // command is ever gated by a roadmap message again.
+      const restore = await runCliIn({ argv: ['restore', 'snap-x'], home })
+      expect(restore.exitCode).toBe(2)
+      expect(restore.stderr).not.toContain('not implemented')
+      expect(restore.stderr).toMatch(/no snapshot|no manifest/)
+      const rescue = await runCliIn({ argv: ['rescue', 'nonsense'], home })
+      expect(rescue.exitCode).toBe(2)
+      expect(rescue.stderr).toContain('rescue needs start | list | stop')
+      const report = await runCliIn({ argv: ['report'], home })
+      expect(report.exitCode).toBe(2)
+      expect(report.stderr).toMatch(/lab id/)
+      // No world-line state was created by any of these failures.
+      const { readdir } = await import('node:fs/promises')
+      const entries = await readdir(join(home, 'world-line')).catch(() => [])
+      expect(entries).toEqual([])
+    } finally {
+      await destroyTempHome(home)
+    }
   })
 
   test('--version and -V print the package version and exit 0', async () => {
@@ -133,6 +149,7 @@ describe('snapshot → timeline round trip', () => {
         argv: ['snapshot', 'create', '--label', 'after'],
         home,
         now: clock,
+        env: { WORLD_LINE_DISABLE_KEYCHAIN: '1' },
       })
       expect(after.exitCode).toBe(0)
 
@@ -142,6 +159,7 @@ describe('snapshot → timeline round trip', () => {
         argv: ['snapshot', 'create', '--label', 'after-json', '--json'],
         home,
         now: clock,
+        env: { WORLD_LINE_DISABLE_KEYCHAIN: '1' },
       })
       expect(jsonRun.exitCode).toBe(0)
       expect(jsonRun.stdout).not.toContain(secret)

@@ -303,7 +303,8 @@ export async function runDoctor(ctx: CliContext): Promise<DoctorResult> {
         status: 'info',
         detail:
           `${flagged.map((record) => record.name).join(', ')} carry secret-shaped values — ` +
-          `snapshots record their hashes but do not store their content (Phase 4 crypto vault pending)`,
+          `snapshot create stores them encrypted when a key service is available ` +
+          `(macOS Keychain or $WORLD_LINE_SECRET_KEY); otherwise only their hashes are recorded`,
       }
     })
 
