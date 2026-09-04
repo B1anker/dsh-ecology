@@ -168,3 +168,41 @@ describe('lab list/inspect/destroy over an empty home', () => {
     }
   })
 })
+
+describe('lab promote CLI grammar', () => {
+  test('promote without a lab id is a usage error (exit 2)', async () => {
+    const home = await makeTempHome()
+    try {
+      const run = await runCliIn({ argv: ['lab', 'promote'], home })
+      expect(run.exitCode).toBe(2)
+      expect(run.stderr).toContain('lab id')
+    } finally {
+      await destroyTempHome(home)
+    }
+  })
+
+  test('promote of an unknown lab id is a usage error (exit 2)', async () => {
+    const home = await makeTempHome()
+    try {
+      const run = await runCliIn({ argv: ['lab', 'promote', 'lab-no-such'], home })
+      expect(run.exitCode).toBe(2)
+      expect(run.stderr).toMatch(/no such lab|unknown lab|does not exist/i)
+    } finally {
+      await destroyTempHome(home)
+    }
+  })
+
+  test('promote accepts --accept-inconclusive and --restart flags', async () => {
+    const home = await makeTempHome()
+    try {
+      const run = await runCliIn({
+        argv: ['lab', 'promote', 'lab-no-such', '--accept-inconclusive', '--restart'],
+        home,
+      })
+      expect(run.exitCode).toBe(2)
+      expect(run.stderr).toMatch(/no such lab|unknown lab|does not exist/i)
+    } finally {
+      await destroyTempHome(home)
+    }
+  })
+})
