@@ -2,135 +2,91 @@
   "scale": 2,
   "frameSize": 128,
   "pets": {
-    "blob": {
+    "deepseek-chan": {
       "moods": {
         "idle": {
-          "file": "blob/idle.png",
-          "frames": 24,
-          "frameDurationMs": 250
+          "file": "deepseek-chan/idle.png",
+          "frames": 6,
+          "frameDurationMs": 1100
         },
         "thinking": {
-          "file": "blob/thinking.png",
-          "frames": 24,
-          "frameDurationMs": 100
+          "file": "deepseek-chan/thinking.png",
+          "frames": 6,
+          "frameDurationMs": 150
         },
         "working": {
-          "file": "blob/working.png",
-          "frames": 4,
-          "frameDurationMs": 87.5
+          "file": "deepseek-chan/working.png",
+          "frames": 6,
+          "frameDurationMs": 120
         },
         "waiting": {
-          "file": "blob/waiting.png",
-          "frames": 18,
-          "frameDurationMs": 88.889
+          "file": "deepseek-chan/waiting.png",
+          "frames": 6,
+          "frameDurationMs": 150
         },
         "sad": {
-          "file": "blob/sad.png",
-          "frames": 4,
-          "frameDurationMs": 90
+          "file": "deepseek-chan/sad.png",
+          "frames": 8,
+          "frameDurationMs": 140
         },
         "sleeping": {
-          "file": "blob/sleeping.png",
-          "frames": 24,
-          "frameDurationMs": 200
+          "file": "deepseek-chan/sleeping.png",
+          "frames": 6,
+          "frameDurationMs": 1650
         },
         "celebrating": {
-          "file": "blob/celebrating.png",
-          "frames": 7,
-          "frameDurationMs": 85.714
+          "file": "deepseek-chan/celebrating.png",
+          "frames": 5,
+          "frameDurationMs": 140
         },
         "pet": {
-          "file": "blob/pet.png",
-          "frames": 6,
-          "frameDurationMs": 83.333
+          "file": "deepseek-chan/pet.png",
+          "frames": 4,
+          "frameDurationMs": 140
         }
       }
     },
-    "cat": {
+    "ai-sleepy-silver-wolf": {
       "moods": {
         "idle": {
-          "file": "cat/idle.png",
-          "frames": 24,
-          "frameDurationMs": 250
+          "file": "ai-sleepy-silver-wolf/idle.png",
+          "frames": 6,
+          "frameDurationMs": 1100
         },
         "thinking": {
-          "file": "cat/thinking.png",
-          "frames": 24,
-          "frameDurationMs": 100
+          "file": "ai-sleepy-silver-wolf/thinking.png",
+          "frames": 6,
+          "frameDurationMs": 150
         },
         "working": {
-          "file": "cat/working.png",
-          "frames": 4,
-          "frameDurationMs": 87.5
+          "file": "ai-sleepy-silver-wolf/working.png",
+          "frames": 6,
+          "frameDurationMs": 120
         },
         "waiting": {
-          "file": "cat/waiting.png",
-          "frames": 18,
-          "frameDurationMs": 88.889
+          "file": "ai-sleepy-silver-wolf/waiting.png",
+          "frames": 6,
+          "frameDurationMs": 150
         },
         "sad": {
-          "file": "cat/sad.png",
-          "frames": 4,
-          "frameDurationMs": 90
+          "file": "ai-sleepy-silver-wolf/sad.png",
+          "frames": 8,
+          "frameDurationMs": 140
         },
         "sleeping": {
-          "file": "cat/sleeping.png",
-          "frames": 24,
-          "frameDurationMs": 200
+          "file": "ai-sleepy-silver-wolf/sleeping.png",
+          "frames": 6,
+          "frameDurationMs": 1650
         },
         "celebrating": {
-          "file": "cat/celebrating.png",
-          "frames": 7,
-          "frameDurationMs": 85.714
+          "file": "ai-sleepy-silver-wolf/celebrating.png",
+          "frames": 5,
+          "frameDurationMs": 140
         },
         "pet": {
-          "file": "cat/pet.png",
-          "frames": 6,
-          "frameDurationMs": 83.333
-        }
-      }
-    },
-    "robot": {
-      "moods": {
-        "idle": {
-          "file": "robot/idle.png",
-          "frames": 24,
-          "frameDurationMs": 250
-        },
-        "thinking": {
-          "file": "robot/thinking.png",
-          "frames": 24,
-          "frameDurationMs": 100
-        },
-        "working": {
-          "file": "robot/working.png",
+          "file": "ai-sleepy-silver-wolf/pet.png",
           "frames": 4,
-          "frameDurationMs": 87.5
-        },
-        "waiting": {
-          "file": "robot/waiting.png",
-          "frames": 18,
-          "frameDurationMs": 88.889
-        },
-        "sad": {
-          "file": "robot/sad.png",
-          "frames": 4,
-          "frameDurationMs": 90
-        },
-        "sleeping": {
-          "file": "robot/sleeping.png",
-          "frames": 24,
-          "frameDurationMs": 200
-        },
-        "celebrating": {
-          "file": "robot/celebrating.png",
-          "frames": 7,
-          "frameDurationMs": 85.714
-        },
-        "pet": {
-          "file": "robot/pet.png",
-          "frames": 6,
-          "frameDurationMs": 83.333
+          "frameDurationMs": 140
         }
       }
     }

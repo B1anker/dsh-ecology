@@ -24,6 +24,7 @@ const geometry = native_sdk.geometry;
 
 const model_mod = @import("model.zig");
 const view_mod = @import("view.zig");
+const assets = @import("assets.zig");
 
 pub const Model = model_mod.Model;
 pub const Msg = model_mod.Msg;
@@ -95,11 +96,15 @@ pub fn main(init: std.process.Init) !void {
     defer std.heap.page_allocator.destroy(app_state);
     app_state.* = PetApp.init(std.heap.page_allocator, .{}, petOptions());
     defer app_state.deinit();
+    // The icon lives under the resolved assets root too — this buffer
+    // stays alive because runWithOptions blocks for the app's lifetime.
+    var icon_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const icon_path = assets.assetPath(&icon_buffer, "icon.icns") orelse "assets/icon.icns";
     try runner.runWithOptions(app_state.app(), .{
         .app_name = "dsh-pet-desktop",
         .window_title = "DSH Pet",
         .bundle_id = "dev.seaveyon.dsh-pet-desktop",
-        .icon_path = "assets/icon.icns",
+        .icon_path = icon_path,
         .default_frame = geometry.RectF.init(0, 0, window_size, window_size),
         .js_window_api = false,
         .security = .{

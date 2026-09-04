@@ -37,6 +37,14 @@ const quit_menu = [_]Ui.ContextMenuItem{
 pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
     const size: f32 = if (model.zoomed) model_mod.sprite_zoomed_size else model_mod.sprite_size;
     const sprite = model.sprite();
+    // Rightward drags mirror the (natively left-facing) run strip. The
+    // sprite is always centered in the fixed-width window — zooming
+    // grows it symmetrically — so the mirror pivot is simply the
+    // window's own width: x' = window_size - x.
+    const flip: canvas.Affine = if (model.flipSprite())
+        .{ .a = -1, .tx = model_mod.window_size }
+    else
+        .{};
     return ui.column(.{
         .grow = 1,
         .main = .center,
@@ -52,6 +60,7 @@ pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
             .image_src = sprite.src,
             .width = size,
             .height = size,
+            .transform = flip,
             .semantics = .{ .label = "Pet sprite" },
         }),
     });

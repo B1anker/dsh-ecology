@@ -35,7 +35,7 @@ bundle resolves them against `Contents/Resources` instead). So run the
 ## Sprites
 
 `assets/sprites/` holds the baked strips — `sprites/<petId>/<mood>.png` for
-petId ∈ {blob, cat, robot} × the 8 moods — plus `manifest.json`, the **single
+petId ∈ {deepseek-chan, …imported} × the 8 moods — plus `manifest.json`, the **single
 source of truth** for strip geometry:
 
 ```json
@@ -123,11 +123,12 @@ Two framework limits shaped the wiring:
 The app runs a loopback-only HTTP server (`src/server.zig`) on
 `http://127.0.0.1:45731`:
 
-- `POST /state` with `{"mood": "working", "petId": "blob", "name": "Mochi"}`
+- `POST /state` with `{"mood": "working", "petId": "deepseek-chan", "name": "Mochi"}`
   → `200 {"ok":true}`; `mood` is one of `idle | thinking | working | waiting |
   sad | sleeping | celebrating | pet` (mirrors `@seaveyon/dsh-pet/desktop`'s
   `Mood` / `MOODS`). `petId` selects the sprite set — an unknown id falls
-  back to `blob` (logged); `name` is accepted but not displayed in v1.
+  back to the manifest's first pet (logged); `name` is accepted but not
+  displayed in v1.
   Unknown mood → 400, invalid JSON → 400, body over 4 KiB → 413, any other
   path/method → 404.
 - `GET /pets` → `200 application/json`: every pet the loaded manifest

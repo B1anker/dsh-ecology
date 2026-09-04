@@ -26,7 +26,9 @@
 const std = @import("std");
 const native_sdk = @import("native_sdk");
 const appkit = @import("appkit.zig");
+const assets = @import("assets.zig");
 const manifest = @import("manifest.zig");
+const persist = @import("persist.zig");
 const server = @import("server.zig");
 const state = @import("state.zig");
 
@@ -78,7 +80,7 @@ pub const sprite_zoomed_size = 160; // 1.25x cap: overhang 16pt < 32pt margin
 pub const screen_margin: f64 = 24;
 
 /// The pet the app draws when /state names an unknown petId (or none
-/// yet): manifest pet 0, which the baker writes as "blob".
+/// yet): manifest pet 0, the built-in the manifest lists first.
 pub const fallback_pet_index: usize = 0;
 
 /// Fallback flip cadence when the manifest failed to load: the pet
@@ -161,6 +163,13 @@ pub const Model = struct {
     /// no view-local feedback loop.
     grab_offset_x: f64 = 0,
     grab_offset_y: f64 = 0,
+    /// Facing while carried: every strip is drawn facing LEFT, so a
+    /// rightward drag mirrors the sprite horizontally (the view reads
+    /// flipSprite). Tracked from pointer x deltas with a dead zone so
+    /// sub-pixel jitter doesn't thrash the mirror, and kept across
+    /// drags — a carried pet keeps the heading it last ran with.
+    facing_right: bool = false,
+    last_drag_mouse_x: f64 = 0,
 
     pub fn petId(model: *const Model) []const u8 {
         return model.pet_id_storage[0..model.pet_id_len];
@@ -229,6 +238,13 @@ pub const Model = struct {
         return if (model.dragging) .working else model.mood;
     }
 
+    /// True while a rightward drag should mirror the sprite: the run
+    /// override is the only directional animation, and every strip is
+    /// drawn facing left natively.
+    pub fn flipSprite(model: *const Model) bool {
+        return model.dragging and model.facing_right;
+    }
+
     pub fn sprite(model: *const Model) Sprite {
         const m = manifest.current() orelse return .{};
         const mood = model.effectiveMood();
@@ -287,8 +303,8 @@ fn loadPetSet(model: *Model, fx: *Effects) void {
     for (0..manifest.mood_count) |mood_index| {
         if (model.strip_status[model.active_pet][mood_index] != .unloaded) continue;
         const entry = m.pets[model.active_pet].strips[mood_index];
-        var path_buffer: [160]u8 = undefined;
-        const path = std.fmt.bufPrint(&path_buffer, "assets/sprites/{s}", .{entry.file}) catch continue;
+        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const path = assets.spritePath(&path_buffer, entry.file) orelse continue;
         fx.loadImage(.{
             .id = manifest.imageId(model.active_pet, @enumFromInt(mood_index)),
             .path = path,
@@ -329,13 +345,23 @@ fn switchPet(model: *Model, fx: *Effects, new_pet: usize) void {
 /// WindowServer frame record (observed 2026-09-03 in the spike; do not
 /// reintroduce).
 pub fn boot(model: *Model, fx: *Effects) void {
-    manifest.load("assets/sprites/manifest.json") catch |err| {
+    // Resolving the assets root here (first assets.* call) also pins it
+    // for the HTTP server thread, which starts below and only reads the
+    // cached pointer afterwards.
+    var manifest_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const manifest_path = assets.assetPath(&manifest_buffer, "sprites/manifest.json") orelse "assets/sprites/manifest.json";
+    manifest.load(manifest_path) catch |err| {
         std.debug.print("dsh-pet-desktop: sprite manifest load failed: {s}\n", .{@errorName(err)});
     };
     model.manifest_ok = manifest.current() != null;
     if (manifest.current()) |m| {
         std.debug.print("dsh-pet-desktop: sprite manifest: {d} pet(s) scale={d} frame={d}pt\n", .{ m.pet_count, m.scale, m.frame_size });
     }
+    // Greet the user as the pet they last picked, not the fallback:
+    // restore BEFORE the first strip load so the restored pet's strips are
+    // the ones fetched, and the frame timer below arms at its mood's cadence.
+    var saved_buffer: [persist.max_line_bytes]u8 = undefined;
+    if (persist.loadStateLine(&saved_buffer)) |line| restoreSavedState(model, line);
     loadPetSet(model, fx);
     startFrameTimer(fx, currentIntervalMs(model));
 
@@ -401,7 +427,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     const new_pet = blk: {
                         const m = manifest.current() orelse break :blk fallback_pet_index;
                         break :blk m.petIndex(model.petId()) orelse {
-                            std.debug.print("dsh-pet-desktop: unknown petId \"{s}\", falling back to blob\n", .{model.petId()});
+                            std.debug.print("dsh-pet-desktop: unknown petId \"{s}\", falling back to the first manifest pet\n", .{model.petId()});
                             break :blk fallback_pet_index;
                         };
                     };
@@ -412,6 +438,15 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     model.frame_index = 0;
                     startFrameTimer(fx, currentIntervalMs(model));
                 }
+                // Persist the MERGED state (mood from the model, not the
+                // possibly-partial line): a mood-only update must not erase
+                // the saved pet id. The next boot greets this pet.
+                var save_buffer: [persist.max_line_bytes]u8 = undefined;
+                persist.saveStateLine(state.encodeStateLine(&save_buffer, .{
+                    .mood = @constCast(@tagName(model.mood)),
+                    .pet_id = @constCast(model.petId()),
+                    .name = @constCast(model.petName()),
+                }));
                 std.debug.print("dsh-pet-desktop: state #{d} mood={s} pet={s} name={s}\n", .{ model.state_updates, @tagName(model.mood), model.petId(), model.petName() });
             },
             .closed => {
@@ -472,6 +507,9 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     model.drag_start_ms = monotonicMs();
                     model.grab_offset_x = ml.x - o.x;
                     model.grab_offset_y = ml.y - o.y;
+                    // Heading baseline: the first sample anchors the x
+                    // delta series, it does not itself flip anything.
+                    model.last_drag_mouse_x = ml.x;
                     // Run while carried: restart the strip on the
                     // working cadence (display-layer override, see
                     // effectiveMood — model.mood itself is untouched).
@@ -491,6 +529,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 // poll timer owns following.
                 model.drag_events += 1;
                 const ml = appkit.mouseLocation() orelse return;
+                noteDragPointerX(model, ml.x);
                 appkit.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
             },
             else => {
@@ -522,6 +561,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 return;
             }
             const ml = appkit.mouseLocation() orelse return;
+            noteDragPointerX(model, ml.x);
             appkit.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
             model.poll_ticks += 1;
             if (model.poll_ticks % 60 == 0) {
@@ -531,6 +571,22 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .quit => fx.quitApp(),
     }
+}
+
+/// Re-apply one persisted bridge line (persist.zig) through the same decode
+/// the live bridge uses. Restored from disk, not heard from the plugin — so
+/// unlike applyStateLine's live use, the bridge lamp and the update counter
+/// go back to untouched afterwards.
+fn restoreSavedState(model: *Model, line: []const u8) void {
+    const applied = model.applyStateLine(line);
+    model.bridge_live = false;
+    model.state_updates = 0;
+    if (applied.pet_changed) {
+        if (manifest.current()) |m| {
+            model.active_pet = m.petIndex(model.petId()) orelse fallback_pet_index;
+        }
+    }
+    std.debug.print("dsh-pet-desktop: restored saved state mood={s} pet={s} name={s}\n", .{ @tagName(model.mood), model.petId(), model.petName() });
 }
 
 /// Drag teardown shared by the release/cancel event path and the poll
@@ -559,6 +615,46 @@ fn endDrag(model: *Model, fx: *Effects, reason: [*:0]const u8) void {
 /// accumulation and no view-local feedback.
 pub fn dragOrigin(ml: appkit.NSPoint, grab_x: f64, grab_y: f64) appkit.NSPoint {
     return .{ .x = ml.x - grab_x, .y = ml.y - grab_y };
+}
+
+/// Pointer jitter below this per sample keeps the previous heading
+/// instead of flickering the mirror on every 60Hz poll.
+const facing_dead_zone_px: f64 = 1.5;
+
+/// Fold one pointer x sample into the drag heading. Samples come from
+/// both the drag event stream and the 60Hz poll, whichever moved last.
+fn noteDragPointerX(model: *Model, mouse_x: f64) void {
+    const dx = mouse_x - model.last_drag_mouse_x;
+    model.last_drag_mouse_x = mouse_x;
+    if (@abs(dx) < facing_dead_zone_px) return;
+    model.facing_right = dx > 0;
+}
+
+test "drag heading follows the pointer x with a dead zone" {
+    var model: Model = .{};
+    // Not dragging: never mirrored, whatever the heading says.
+    try std.testing.expect(!model.flipSprite());
+    model.dragging = true;
+    model.last_drag_mouse_x = 100;
+    try std.testing.expect(!model.flipSprite());
+    // Sub-dead-zone jitter keeps the previous heading.
+    noteDragPointerX(&model, 100.9);
+    try std.testing.expect(!model.flipSprite());
+    // A real rightward move mirrors the run strip.
+    noteDragPointerX(&model, 108);
+    try std.testing.expect(model.facing_right);
+    try std.testing.expect(model.flipSprite());
+    // Jitter again: heading (and mirror) hold.
+    noteDragPointerX(&model, 107.2);
+    try std.testing.expect(model.flipSprite());
+    // A real leftward move flips back.
+    noteDragPointerX(&model, 96);
+    try std.testing.expect(!model.flipSprite());
+    // Drag over: the mirror drops with the run override even if the
+    // last heading was rightward.
+    noteDragPointerX(&model, 120);
+    model.dragging = false;
+    try std.testing.expect(!model.flipSprite());
 }
 
 test "drag origin mapping is absolute, unflipped, and jump-free" {
@@ -644,8 +740,32 @@ test "applyStateLine copies out of drain scratch and reports mood and pet change
     try std.testing.expectEqualStrings("cat", model.petId());
 }
 
+test "a saved state line restores the last pet and mood without lighting the bridge lamp" {
+    var model: Model = .{};
+    restoreSavedState(&model, "sleeping\tcat\tMochi");
+    try std.testing.expectEqual(Mood.sleeping, model.mood);
+    try std.testing.expectEqualStrings("cat", model.petId());
+    try std.testing.expectEqualStrings("Mochi", model.petName());
+    // Disk is not the bridge: the lamp and the counter stay untouched.
+    try std.testing.expect(!model.bridge_live);
+    try std.testing.expect(model.state_updates == 0);
+    // The effective mood follows the restore (no drag override involved).
+    try std.testing.expectEqual(Mood.sleeping, model.effectiveMood());
+}
+
+test "a saved line naming an unknown pet keeps the fallback index" {
+    var model: Model = .{};
+    // No manifest loaded in this test process: the pet index stays put,
+    // but the identity fields still restore for the run log.
+    restoreSavedState(&model, "idle\tno-such-pet\t");
+    try std.testing.expectEqual(fallback_pet_index, model.active_pet);
+    try std.testing.expectEqualStrings("no-such-pet", model.petId());
+}
+
 test {
+    _ = @import("assets.zig");
     _ = @import("state.zig");
     _ = @import("server.zig");
     _ = @import("manifest.zig");
+    _ = @import("persist.zig");
 }

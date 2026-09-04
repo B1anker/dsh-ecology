@@ -37,6 +37,7 @@
 
 const std = @import("std");
 const native_sdk = @import("native_sdk");
+const assets = @import("assets.zig");
 const manifest = @import("manifest.zig");
 const state = @import("state.zig");
 
@@ -242,12 +243,13 @@ pub fn declaredSpriteFile(m: *const manifest.Manifest, tail: []const u8) ?[]cons
     return null;
 }
 
-/// Read one declared strip: "assets/sprites/" ++ file, the same prefix
-/// model.zig prepends when registering images. `dir` is a parameter so
-/// tests serve out of a tmpDir instead of the real assets.
+/// Read one declared strip through the resolved assets root (assets.zig),
+/// the same path model.zig registers. `dir` is a parameter so tests serve
+/// out of a tmpDir instead of the real assets; tests force a null root so
+/// the cwd-relative fallback below stays tmpDir-relative.
 fn readSprite(io: std.Io, dir: std.Io.Dir, allocator: std.mem.Allocator, file: []const u8) ![]u8 {
-    var path_buffer: [256]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buffer, "assets/sprites/{s}", .{file}) catch return error.FileNotFound;
+    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const path = assets.spritePath(&path_buffer, file) orelse return error.FileNotFound;
     return dir.readFileAlloc(io, path, allocator, .limited(max_sprite_bytes));
 }
 
@@ -322,6 +324,9 @@ test "sprite route serves only manifest-declared files" {
 }
 
 test "sprite file reads through the assets/sprites prefix, bounded" {
+    // Keep the path resolution on the cwd-relative fallback so the read
+    // stays inside tmpDir even when the test cwd holds real assets.
+    assets.forceRootForTests(null);
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(std.testing.io, "assets/sprites/wolf");
