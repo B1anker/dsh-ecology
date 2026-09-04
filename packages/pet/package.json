@@ -1,6 +1,6 @@
 {
   "name": "@seaveyon/dsh-pet",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A virtual pet companion for the DSH Web surface: mood animations driven by live agent state, with hand-crafted built-in sprites",
   "keywords": [
     "dsh",
