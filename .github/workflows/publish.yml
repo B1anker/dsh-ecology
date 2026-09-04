@@ -37,12 +37,11 @@ permissions:
   pull-requests: write
 
 jobs:
-  # The pet's desktop companion is a macOS binary that ships INSIDE the
-  # @seaveyon/dsh-pet tarball (packages/pet/desktop/ is in its files), so the
-  # ubuntu publish job cannot build it. This job does, and hands the staged
-  # directory over as an artifact. It runs on every main push even while the
-  # pet release line below is commented out — cheap, and it keeps this lane
-  # proven for the day the line is enabled.
+  # The pet's desktop companion is a macOS binary (one build per
+  # architecture) that ships INSIDE the @seaveyon/dsh-pet tarball
+  # (packages/pet/desktop/ is in its files), so the ubuntu publish job cannot
+  # build it. This job does, and hands the staged directory over as an
+  # artifact.
   desktop-binary:
     runs-on: macos-latest
     steps:
@@ -209,11 +208,9 @@ jobs:
 
           release_package packages/plugin-testkit ./release/plugin-testkit.config.mjs
           release_package packages/web-login ./release/web-login.config.mjs
-          # dsh-pet is not in the loop yet: its first version must be published
-          # by hand and its trusted publisher registered before CI can release
-          # it (README → "Bootstrapping a new package on npm"). Until then this
-          # line stays commented out, because an unbootstrapped pet fails the
-          # whole job and blocks the other packages. The manual first publish
-          # must run `bun run build:desktop` in packages/pet first, so the
-          # tarball carries the companion binary this job's sibling builds.
-          # release_package packages/pet ./release/pet.config.mjs
+          # pet's first version (0.1.0, tag pet-v0.1.0) was published by hand
+          # per README → "Bootstrapping a new package on npm"; its trusted
+          # publisher names this workflow file. The companion binaries land in
+          # packages/pet/desktop/ from the desktop-binary job above, so the
+          # tarball this releases carries both architectures.
+          release_package packages/pet ./release/pet.config.mjs
