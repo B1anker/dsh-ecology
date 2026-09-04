@@ -360,6 +360,45 @@ describe('desktop launch (loopback page, offline companion)', () => {
     expect(container.querySelector('section')?.textContent).toContain('Launch failed')
   })
 
+  test('quitting after a successful launch re-arms the launch button', async () => {
+    let online = false
+    const fetchFn = () =>
+      online
+        ? Promise.resolve(
+            new Response(JSON.stringify({ pets: DESKTOP_ROSTER.map(desktopPetFixture) })),
+          )
+        : Promise.reject(new Error('connection refused'))
+    const desktopPets = new DesktopPetsStore({ fetchFn: fetchFn as unknown as typeof fetch })
+    let launchCalls = 0
+    mountWithLaunch(desktopPets, () => {
+      launchCalls += 1
+      online = true
+      return Promise.resolve('launched')
+    })
+    await settleOffline()
+
+    // Launch and let the desktop answer: the connected readout takes over.
+    await act(async () => {
+      launchButton()?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    })
+    expect(launchButton()).toBeUndefined()
+
+    // The user quits the app: the button comes back — armed, not stuck on
+    // "starting" — and launches again.
+    online = false
+    await act(async () => {
+      await desktopPets.refresh()
+    })
+    const rearmed = launchButton()
+    expect(rearmed).toBeDefined()
+    expect(rearmed?.disabled).toBe(false)
+    await act(async () => {
+      rearmed?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(launchCalls).toBe(2)
+  })
+
   test('a connected desktop replaces the button with a readout', async () => {
     const desktopPets = desktopPetsStore(DESKTOP_ROSTER)
     mountWithLaunch(desktopPets, () => Promise.resolve('launched'))

@@ -306,6 +306,18 @@ export function PetSettingsPanel({
     })
   }, [desktopPets, requestLaunch, launchRefreshDelaysMs])
 
+  // A successful launch ends when the desktop actually answers: the leftover
+  // nudges are done, and `busy` clears back to `idle`. Without this the state
+  // would stay `busy` forever (the connected readout hides the button, so
+  // nothing else resets it), and quitting the app later would resurrect a
+  // stuck, disabled "starting" button instead of a clickable launch button.
+  useEffect(() => {
+    if (discovery.status !== 'online' || launchState !== 'busy') return
+    for (const timer of launchTimers.current) clearTimeout(timer)
+    launchTimers.current = []
+    setLaunchState('idle')
+  }, [discovery.status, launchState])
+
   // The summon button is the companion's one control: it turns the bridge
   // on (if it ever was off) and asks the host to launch the desktop app.
   const onSummon = useCallback(() => {
