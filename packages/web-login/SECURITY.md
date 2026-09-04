@@ -39,9 +39,15 @@ control or TLS.
 - The hash generator stores a *verifier*, not a plaintext password, in the DSH
   environment file. Treat that file as credential material: it is written at
   mode `0600`, must not be committed, copied to support tickets, or logged.
-- Sessions are random opaque IDs stored only in process memory. Restarting DSH
-  invalidates every session. This deliberately avoids persistent signing keys
-  and a session database, but it is not a multi-instance/shared-session design.
+- Sessions are random opaque IDs persisted by default in a mode-0600 local
+  file. The file is credential material and is strictly parsed; it must never
+  be copied to logs or shared. Persisted sessions are bound to the configured
+  password verifier, so rotating that verifier invalidates them. This is not a
+  multi-instance session database.
+- Local security audit events are appended to a mode-0600 JSONL file and rotate
+  at 5 MiB with one retained file. They include outcome, provider, bounded
+  client network identity, and non-secret reason metadata, but never passwords,
+  verifiers, cookies, session IDs, OAuth codes, or access tokens.
 - Password attempts are throttled before scrypt runs, per network and again
   across all of them. By default the identity is the direct socket address,
   masked to a `/32` for IPv4 and a `/64` for IPv6 — an attacker who holds an

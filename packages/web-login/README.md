@@ -17,7 +17,7 @@ and WebSocket upgrades.
   plugin configuration;
 - optionally enables GitHub OAuth so a stable numeric GitHub user id becomes the
   authorized human identity, after a password bootstrap binds the first owner;
-- creates opaque, random in-memory sessions behind a host-only `HttpOnly`,
+- creates opaque, random sessions behind a host-only `HttpOnly`,
   `SameSite=Strict` cookie, named with the `__Host-` prefix wherever TLS makes
   that possible;
 - redirects browser document navigations to `/login`, while API, plugin, and
@@ -35,9 +35,9 @@ and WebSocket upgrades.
 - sends `Cache-Control: no-store`, CSP, anti-framing, no-sniff, and no-referrer
   headers on all pre-authentication responses.
 
-Sessions are intentionally process-local: restarting DSH signs every visitor
-out. That avoids persistent session keys and a session database, but this is
-not a shared-session solution for multiple DSH instances.
+Sessions persist by default in a private file under `${DSH_HOME}/auth/dsh-web-login`,
+so a normal DSH restart does not sign the browser out. This remains a
+single-instance store, not a shared-session solution for multiple DSH instances.
 
 ## Before you install
 
@@ -130,10 +130,20 @@ of silently selecting an unsafe default.
 | `passwordHashEnv` | `LOGIN_PASSWORD_HASH` | env-name syntax | Name of the environment variable holding `scrypt$<salt hex>$<key hex>`. |
 | `title` | `DSH Web` | 1–120 characters | Login-page and browser-title text. |
 | `secureCookie` | `true` | — | Adds the `Secure` attribute and the `__Host-` cookie name. Keep it enabled outside localhost HTTP development. |
-| `sessionTtlMs` | 30 days | 1 minute–365 days | Session lifetime; a restart always signs users out sooner. |
+| `sessionTtlMs` | 30 days | 1 minute–365 days | Session lifetime. |
+| `persistentSessions` | `true` | boolean | Retain sessions across restarts. |
+| `sessionFile` | `${DSH_HOME}/auth/dsh-web-login/sessions.json` | path | Private persistent-session file. |
+| `auditEnabled` | `true` | boolean | Append local security events. |
+| `auditFile` | `${DSH_HOME}/auth/dsh-web-login/audit.jsonl` | path | Private JSONL audit log. |
 | `maxSessions` | `10000` | 1–1000000 | Maximum live sessions. At capacity a new login receives `503`; live sessions are never evicted. |
 | `maxBodyBytes` | `4096` | 64 B–1 MiB | Maximum accepted login form body. |
 | `sweepIntervalMs` | 5 minutes | 1 second–1 hour | Interval for removing expired session and limiter records. |
+
+The audit log records successful and failed sign-ins, throttling, logout,
+session-capacity refusal, authorization changes, recovery use, and bulk session
+revocation. It never records passwords, verifiers, cookies, session IDs, OAuth
+codes, or access tokens. The active file is mode `0600` and rotates at 5 MiB,
+keeping one previous file as `audit.jsonl.1`.
 
 #### GitHub OAuth (opt-in)
 

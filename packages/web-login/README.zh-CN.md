@@ -10,7 +10,7 @@
 
 - 从环境变量读取 scrypt 密码校验值，不从插件配置读取密码；
 - 可选启用 GitHub OAuth：首次用密码引导绑定 owner 后，仅允许本地登记的 GitHub 数字 ID 登录；
-- 生成高熵、不透明的内存会话 ID，并使用 host-only、`HttpOnly`、`SameSite=Strict` Cookie；在 TLS 环境下还会带上 `__Host-` 前缀；
+- 生成高熵、不透明的持久会话 ID，并使用 host-only、`HttpOnly`、`SameSite=Strict` Cookie；在 TLS 环境下还会带上 `__Host-` 前缀；
 - 浏览器文档导航会跳转到 `/login`；API、插件和其他资源路由返回可处理的 JSON `401`，不会返回 HTML 登录页；
 - 仅允许 `POST /logout`，同时撤销服务端会话并清除浏览器 Cookie；
 - 包装通过 DSH `webServer` 注册的精确路由、前缀路由、SPA fallback 和 WebSocket 升级；
@@ -18,7 +18,7 @@
 - scrypt 在线程池上执行并受并发闸约束，因此大量登录请求不会拖住 DSH 进程的其余部分；
 - 为所有未认证响应设置 `Cache-Control: no-store`、CSP、防嵌入、防 MIME 嗅探和无 Referer 等安全响应头。
 
-会话只保存在进程内存中。重启 DSH 会让所有人退出登录；这避免了落盘会话密钥和会话数据库，但也意味着它**不是**多实例共享会话方案。
+会话默认保存在 `${DSH_HOME}/auth/dsh-web-login` 下的私有文件中，正常重启 DSH 不会退出登录。它仍是单实例存储，并非多实例共享会话方案。
 
 ## 安装前准备
 
@@ -86,10 +86,16 @@ DSH 会用这个 mapping 替换该行的整个 `config`；未写出的插件设�
 | `passwordHashEnv` | `LOGIN_PASSWORD_HASH` | 合法环境变量名 | 保存 `scrypt$<salt hex>$<key hex>` 的环境变量名。 |
 | `title` | `DSH Web` | 1–120 字符 | 登录页与浏览器标题。 |
 | `secureCookie` | `true` | — | 为 Cookie 增加 `Secure` 属性并启用 `__Host-` 名称。除本机 HTTP 开发外不要关闭。 |
-| `sessionTtlMs` | 30 天 | 1 分钟–365 天 | 会话有效期；重启会更早使会话失效。 |
+| `sessionTtlMs` | 30 天 | 1 分钟–365 天 | 会话有效期。 |
+| `persistentSessions` | `true` | 布尔值 | 是否在重启后保留会话。 |
+| `sessionFile` | `${DSH_HOME}/auth/dsh-web-login/sessions.json` | 路径 | 私有会话文件。 |
+| `auditEnabled` | `true` | 布尔值 | 是否追加本地安全审计事件。 |
+| `auditFile` | `${DSH_HOME}/auth/dsh-web-login/audit.jsonl` | 路径 | 私有 JSONL 审计日志。 |
 | `maxSessions` | `10000` | 1–1000000 | 最大活跃会话数。满额时新登录返回 `503`，不会驱逐活跃会话。 |
 | `maxBodyBytes` | `4096` | 64 B–1 MiB | 登录表单最大字节数。 |
 | `sweepIntervalMs` | 5 分钟 | 1 秒–1 小时 | 清理过期会话和限流记录的间隔。 |
+
+审计日志记录登录成功和失败、限流、退出、会话容量拒绝、授权变更、恢复码使用及全部会话撤销；不会记录密码、校验值、Cookie、会话 ID、OAuth 授权码或访问令牌。活动文件权限为 `0600`，达到 5 MiB 时轮转，并保留一个 `audit.jsonl.1` 历史文件。
 
 #### GitHub OAuth（可选）
 
