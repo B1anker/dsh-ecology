@@ -1,3 +1,11 @@
+## [0.4.2](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.4.1...web-login-v0.4.2) (2026-09-04)
+
+
+### Bug Fixes
+
+* **web-login:** harden sessions and add audit logging ([70a1bd8](https://github.com/B1anker/dsh-ecology/commit/70a1bd87799828f8fdf4d48e22970ca20b49f48b))
+* **web-login:** preserve sessions across restarts ([af9f939](https://github.com/B1anker/dsh-ecology/commit/af9f939af450ecf7a48a1b7db75fe27ffe14d790))
+
 ## [0.4.1](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.4.0...web-login-v0.4.1) (2026-09-04)
 
 
