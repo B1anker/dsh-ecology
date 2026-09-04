@@ -113,6 +113,19 @@ packages:
 `
 }
 
+/**
+ * Install a deterministic fake `dsh` binary (prints the adapter-known version)
+ * into <home>/fakebin so doctor/cli tests do not depend on the ambient PATH.
+ * Returns the directory to prepend to PATH.
+ */
+export async function installFakeDsh(home: string): Promise<string> {
+  const dir = join(home, 'fakebin')
+  await mkdir(dir, { recursive: true })
+  const script = '#!/bin/sh\necho 0.1.2-rc.1\n'
+  await writeFile(join(dir, 'dsh'), script, { mode: 0o755 })
+  return dir
+}
+
 /** Run the CLI in-process; returns exit code + collected output. */
 export async function runCliIn(options: {
   argv: string[]

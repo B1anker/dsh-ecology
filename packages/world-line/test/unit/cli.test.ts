@@ -5,11 +5,17 @@
  */
 
 import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 
 import { describe, expect, test } from '@rstest/core'
 
-import { makeTempHome, profilePackageJson, runCliIn, writeProfile } from '../helpers/fixture.js'
+import {
+  installFakeDsh,
+  makeTempHome,
+  profilePackageJson,
+  runCliIn,
+  writeProfile,
+} from '../helpers/fixture.js'
 
 /** Assert the fixed clock so snapshot ids are deterministic. */
 function fixedNow(): () => Date {
@@ -248,16 +254,18 @@ describe('doctor', () => {
     const home = await makeTempHome()
     try {
       await writeProfile(home, 'web')
-      const healthy = await runCliIn({ argv: ['doctor'], home })
+      const fakeBin = await installFakeDsh(home)
+      const env = { PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}` }
+      const healthy = await runCliIn({ argv: ['doctor'], home, env })
       expect(healthy.exitCode).toBe(0)
       expect(healthy.stdout).toContain('verdict: PASS')
 
       await writeFile(join(home, 'profiles', 'web', 'cordis.patch.yml'), '- id: [unclosed\n')
-      const broken = await runCliIn({ argv: ['doctor'], home })
+      const broken = await runCliIn({ argv: ['doctor'], home, env })
       expect(broken.exitCode).toBe(1)
       expect(broken.stdout).toContain('verdict: FAIL')
 
-      const json = await runCliIn({ argv: ['doctor', '--json'], home })
+      const json = await runCliIn({ argv: ['doctor', '--json'], home, env })
       expect(json.exitCode).toBe(1)
       const envelope = JSON.parse(json.stdout) as {
         ok: boolean

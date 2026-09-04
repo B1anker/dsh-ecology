@@ -187,7 +187,11 @@ export async function runLabTransaction(input: LabRunInput): Promise<LabRunOutco
   // ---- 1. Plan steps (dependency mutations through the pnpm forwarder).
   try {
     const needsPnpm = input.plan.some((step) => planNeedsPnpm(step.action))
-    if (needsPnpm) {
+    // The pnpm gate guards the *real* forwarder only: transactions that inject
+    // a fake capture (unit tests) never spawn pnpm, so requiring pnpm on the
+    // ambient PATH there would make the suite environment-dependent.
+    const usingRealForwarder = input.deps?.capture === undefined
+    if (needsPnpm && usingRealForwarder) {
       const pnpm = requirePnpm(ctx.env)
       await log(`pnpm resolved at ${pnpm.path}`)
     }
