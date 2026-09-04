@@ -9,14 +9,18 @@
  *
  * The status half of the snapshot matters as much as the roster: the panel is
  * single-source — when the desktop app answers, its roster is the whole
- * picker; only a proven-unreachable desktop (`offline`) falls back to the
- * built-in SVG roster. `unknown` (no fetch settled yet) renders the fallback
- * without the "not connected" hint, so a slow answer doesn't flash it.
+ * picker; before that (`unknown`, or a proven-unreachable `offline`) the
+ * picker renders nothing, because a page-side stand-in roster would promise
+ * a choice the desktop cannot honor.
  *
- * Discovery is pull-based and lazy: nothing fetches until the panel calls
- * {@link DesktopPetsStore.refresh} on mount (and its light retry after a
- * failure). A failed refresh keeps the previous roster — a desktop app that
- * just quit must not make an already-listed pet vanish mid-render.
+ * Discovery is pull-based — the panel fetches on mount (with a couple of
+ * quiet retries after a failure) and re-checks on a slow poll while open —
+ * plus one push-flavored channel: when /pets advertises `eventsUrl`, the
+ * store holds that SSE stream open, and its drop flips the status offline
+ * the moment the desktop app quits (a crash included — a dying process
+ * sends no goodbye, but its sockets close). A failed refresh keeps the
+ * previous roster — a desktop app that just quit must not make an
+ * already-listed pet vanish mid-render.
  *
  * @module @seaveyon/dsh-pet/client/desktop-pets
  */
@@ -31,13 +35,33 @@ export interface DesktopPetsSnapshot {
   status: DesktopPetsStatus
 }
 
-export interface DesktopPetsStoreOptions extends FetchDesktopPetsOptions {}
+/**
+ * The slice of EventSource the store holds the desktop's liveness stream
+ * with. Structural, so tests hand a fake.
+ */
+export interface DesktopEventsSource {
+  onopen: (() => void) | null
+  onerror: (() => void) | null
+  /** EventSource.CLOSED is 2 — the stream is done reconnecting, for good. */
+  readonly readyState: number
+  close(): void
+}
+
+export interface DesktopPetsStoreOptions extends FetchDesktopPetsOptions {
+  /**
+   * EventSource constructor for the liveness stream. Defaults to the global
+   * EventSource; pass null to force polling-only (tests, non-browser hosts).
+   */
+  eventSourceFn?: ((url: string) => DesktopEventsSource) | null
+}
 
 export class DesktopPetsStore {
-  private readonly options: FetchDesktopPetsOptions
+  private readonly options: DesktopPetsStoreOptions
   private readonly listeners = new Set<() => void>()
   private snapshot: DesktopPetsSnapshot = { pets: [], status: 'unknown' }
   private refreshing: Promise<void> | null = null
+  private events: DesktopEventsSource | null = null
+  private eventsUnsupported = false
 
   constructor(options: DesktopPetsStoreOptions = {}) {
     this.options = options
@@ -72,13 +96,50 @@ export class DesktopPetsStore {
 
   private async runRefresh(): Promise<void> {
     // fetchDesktopPets resolves null on every failure, so this never rejects.
-    const pets = await fetchDesktopPets(this.options)
+    const result = await fetchDesktopPets(this.options)
     this.refreshing = null
-    if (pets === null) {
+    if (result === null) {
       this.setSnapshot({ pets: this.snapshot.pets, status: 'offline' })
       return
     }
-    this.setSnapshot({ pets, status: 'online' })
+    this.setSnapshot({ pets: result.pets, status: 'online' })
+    if (result.eventsUrl !== null) this.openEvents(result.eventsUrl)
+  }
+
+  /**
+   * Hold the desktop's liveness stream (server.zig's /events): the
+   * connection itself is the message. A drop flips the store offline at
+   * once — no poll interval to wait out — and the browser's own reconnect
+   * brings us back (onopen → refresh) when the app restarts. A stream the
+   * server refuses outright (CLOSED without opening: a desktop too old for
+   * /events) is not retried; polling alone carries that case.
+   */
+  private openEvents(url: string): void {
+    if (this.events !== null || this.eventsUnsupported) return
+    const globalCtor = (globalThis as { EventSource?: new (url: string) => DesktopEventsSource })
+      .EventSource
+    const ctor =
+      this.options.eventSourceFn === null
+        ? undefined
+        : (this.options.eventSourceFn ??
+          (globalCtor === undefined ? undefined : (url: string) => new globalCtor(url)))
+    if (ctor === undefined) return
+    const source = ctor(url)
+    source.onopen = () => {
+      void this.refresh()
+    }
+    source.onerror = () => {
+      if (source.readyState === 2) {
+        this.eventsUnsupported = true
+        this.events = null
+        source.close()
+        return
+      }
+      if (this.snapshot.status === 'online') {
+        this.setSnapshot({ pets: this.snapshot.pets, status: 'offline' })
+      }
+    }
+    this.events = source
   }
 
   private setSnapshot(next: DesktopPetsSnapshot): void {

@@ -31,7 +31,7 @@ export interface PetConfig {
 
 export const DEFAULT_CONFIG: PetConfig = {
   name: 'Mochi',
-  petId: 'blob',
+  petId: 'deepseek-chan',
   companionEnabled: true,
 }
 

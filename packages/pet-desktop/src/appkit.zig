@@ -63,6 +63,23 @@ fn call1(comptime R: type, receiver: *anyopaque, selector: *anyopaque, arg: anyt
 
 const window_title = "DSH Pet";
 
+/// NSApplicationActivationPolicy.accessory: no Dock icon, no Cmd+Tab
+/// entry, no menu bar — the shape of a menu-bar agent. The pet is
+/// summoned and quit from its own window (right-click) and driven from
+/// the web page; a Dock presence is clutter for a document-less window.
+/// (Regular, the default for a raw executable, is what showed the
+/// generic "exec" icon.)
+const activation_policy_accessory: i64 = 1;
+
+/// Drop the app from the Dock and the Cmd+Tab switcher. Runtime-settable
+/// and instant; called once from boot, before the window reveals.
+pub fn hideFromDock() void {
+    resolve();
+    const app_class = p_objc_getClass("NSApplication") orelse return;
+    const app = call0(*anyopaque, app_class, sel("sharedApplication"));
+    call1(void, app, sel("setActivationPolicy:"), activation_policy_accessory);
+}
+
 /// The pet's one NSWindow, found by title through [NSApp windows].
 /// A borderless chromeless window keeps its title; transient NSMenu
 /// popup windows carry none, so the match is unambiguous in this app.
@@ -99,10 +116,10 @@ pub fn frame() ?NSRect {
 /// One-line geometry dump for the run log.
 pub fn logFrame(tag: [*:0]const u8) void {
     const f = frame() orelse {
-        std.debug.print("dsh-pet: [{s}] window not found\n", .{tag});
+        std.debug.print("dsh-pet-desktop: [{s}] window not found\n", .{tag});
         return;
     };
-    std.debug.print("dsh-pet: [{s}] frame=({d:.1},{d:.1} {d:.1}x{d:.1})\n", .{ tag, f.origin.x, f.origin.y, f.size.width, f.size.height });
+    std.debug.print("dsh-pet-desktop: [{s}] frame=({d:.1},{d:.1} {d:.1}x{d:.1})\n", .{ tag, f.origin.x, f.origin.y, f.size.width, f.size.height });
 }
 
 /// The pointer's absolute screen position (AppKit bottom-left origin,
@@ -148,6 +165,6 @@ pub fn placeBottomRight(margin: f64, content_size: f64) void {
         .x = visible.origin.x + visible.size.width - content_size - margin,
         .y = visible.origin.y + margin,
     };
-    std.debug.print("dsh-pet: place bottom-right ({d:.1},{d:.1}) visibleFrame=({d:.1},{d:.1} {d:.1}x{d:.1})\n", .{ target.x, target.y, visible.origin.x, visible.origin.y, visible.size.width, visible.size.height });
+    std.debug.print("dsh-pet-desktop: place bottom-right ({d:.1},{d:.1}) visibleFrame=({d:.1},{d:.1} {d:.1}x{d:.1})\n", .{ target.x, target.y, visible.origin.x, visible.origin.y, visible.size.width, visible.size.height });
     setOrigin(target);
 }

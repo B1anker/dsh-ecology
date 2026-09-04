@@ -33,8 +33,36 @@ function fetchStub(impl: () => Promise<Response>) {
   return { calls: () => calls, fn: fn as unknown as typeof fetch }
 }
 
-function petsResponse(ids: string[]): Response {
-  return new Response(JSON.stringify({ pets: ids.map((id) => desktopPetFixture(id)) }))
+function petsResponse(ids: string[], eventsUrl?: string): Response {
+  const envelope: Record<string, unknown> = { pets: ids.map((id) => desktopPetFixture(id)) }
+  if (eventsUrl !== undefined) envelope['eventsUrl'] = eventsUrl
+  return new Response(JSON.stringify(envelope))
+}
+
+/** A fake liveness-stream source: recorded url, scriptable handlers, mutable readyState. */
+function fakeEventSourceFactory() {
+  const created: {
+    url: string
+    readyState: number
+    closes: number
+    onopen: (() => void) | null
+    onerror: (() => void) | null
+  }[] = []
+  const factory = (url: string) => {
+    const source = {
+      url,
+      readyState: 0,
+      closes: 0,
+      onopen: null as (() => void) | null,
+      onerror: null as (() => void) | null,
+      close() {
+        source.closes += 1
+      },
+    }
+    created.push(source)
+    return source
+  }
+  return { created, factory }
 }
 
 describe('DesktopPetsStore', () => {
@@ -124,6 +152,90 @@ describe('DesktopPetsStore', () => {
 
     expect(stub.calls()).toBe(1)
     expect(store.getSnapshot().pets).toHaveLength(1)
+  })
+
+  test('an advertised eventsUrl opens one liveness stream, resolved against the origin', async () => {
+    const stub = fetchStub(() => Promise.resolve(petsResponse(['wolf'], '/events')))
+    const events = fakeEventSourceFactory()
+    const store = new DesktopPetsStore({
+      fetchFn: stub.fn,
+      baseUrl: 'http://127.0.0.1:9',
+      eventSourceFn: events.factory,
+    })
+
+    await store.refresh()
+    await store.refresh()
+
+    expect(events.created).toHaveLength(1)
+    expect(events.created[0]?.url).toBe('http://127.0.0.1:9/events')
+  })
+
+  test('a roster without eventsUrl opens no stream', async () => {
+    const stub = fetchStub(() => Promise.resolve(petsResponse(['wolf'])))
+    const events = fakeEventSourceFactory()
+    const store = new DesktopPetsStore({ fetchFn: stub.fn, eventSourceFn: events.factory })
+
+    await store.refresh()
+
+    expect(events.created).toHaveLength(0)
+  })
+
+  test('a dropped stream flips offline at once but keeps the roster', async () => {
+    const stub = fetchStub(() => Promise.resolve(petsResponse(['wolf'], '/events')))
+    const events = fakeEventSourceFactory()
+    const store = new DesktopPetsStore({ fetchFn: stub.fn, eventSourceFn: events.factory })
+    await store.refresh()
+    let notifications = 0
+    store.subscribe(() => {
+      notifications += 1
+    })
+
+    events.created[0]!.onerror!()
+
+    const snapshot = store.getSnapshot()
+    expect(snapshot.status).toBe('offline')
+    expect(snapshot.pets.map((pet) => pet.id)).toEqual(['wolf'])
+    expect(notifications).toBe(1)
+  })
+
+  test('a reopened stream refreshes back to online', async () => {
+    const stub = fetchStub(() => Promise.resolve(petsResponse(['wolf'], '/events')))
+    const events = fakeEventSourceFactory()
+    const store = new DesktopPetsStore({ fetchFn: stub.fn, eventSourceFn: events.factory })
+    await store.refresh()
+    events.created[0]!.onerror!()
+    expect(store.getSnapshot().status).toBe('offline')
+
+    events.created[0]!.onopen!()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(store.getSnapshot().status).toBe('online')
+    expect(events.created).toHaveLength(1) // still the same stream, no duplicate
+  })
+
+  test('a stream refused outright (CLOSED) is closed once and never retried', async () => {
+    const stub = fetchStub(() => Promise.resolve(petsResponse(['wolf'], '/events')))
+    const events = fakeEventSourceFactory()
+    const store = new DesktopPetsStore({ fetchFn: stub.fn, eventSourceFn: events.factory })
+    await store.refresh()
+    const source = events.created[0]!
+    source.readyState = 2
+
+    source.onerror!()
+    await store.refresh()
+
+    expect(source.closes).toBe(1)
+    expect(events.created).toHaveLength(1)
+    expect(store.getSnapshot().status).toBe('online') // polling still carries the state
+  })
+
+  test('eventSourceFn: null forces polling-only even when the stream is advertised', async () => {
+    const stub = fetchStub(() => Promise.resolve(petsResponse(['wolf'], '/events')))
+    const store = new DesktopPetsStore({ fetchFn: stub.fn, eventSourceFn: null })
+
+    await store.refresh()
+
+    expect(store.getSnapshot().status).toBe('online')
   })
 })
 

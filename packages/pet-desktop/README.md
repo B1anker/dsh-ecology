@@ -21,7 +21,7 @@ see `docs/` for the porting notes.
 ## Commands
 
 ```sh
-zig build          # or: bun run build   -> zig-out/bin/dsh-pet
+zig build          # or: bun run build   -> zig-out/bin/dsh-pet-desktop
 zig build run      # or: bun run run     -> build (ReleaseFast) and launch
 zig build test     # unit tests; never pass -Doptimize=Debug here (framework linking bug)
 ```
@@ -29,13 +29,13 @@ zig build test     # unit tests; never pass -Doptimize=Debug here (framework lin
 **Asset paths resolve against the process working directory** (the runtime's
 image loader opens `assets/sprites/...` cwd-relative; only a packaged `.app`
 bundle resolves them against `Contents/Resources` instead). So run the
-`zig-out/bin/dsh-pet` binary from the package directory, exactly as
+`zig-out/bin/dsh-pet-desktop` binary from the package directory, exactly as
 `zig build run` does.
 
 ## Sprites
 
 `assets/sprites/` holds the baked strips — `sprites/<petId>/<mood>.png` for
-petId ∈ {blob, cat, robot} × the 8 moods — plus `manifest.json`, the **single
+petId ∈ {deepseek-chan, …imported} × the 8 moods — plus `manifest.json`, the **single
 source of truth** for strip geometry:
 
 ```json
@@ -123,11 +123,12 @@ Two framework limits shaped the wiring:
 The app runs a loopback-only HTTP server (`src/server.zig`) on
 `http://127.0.0.1:45731`:
 
-- `POST /state` with `{"mood": "working", "petId": "blob", "name": "Mochi"}`
+- `POST /state` with `{"mood": "working", "petId": "deepseek-chan", "name": "Mochi"}`
   → `200 {"ok":true}`; `mood` is one of `idle | thinking | working | waiting |
   sad | sleeping | celebrating | pet` (mirrors `@seaveyon/dsh-pet/desktop`'s
   `Mood` / `MOODS`). `petId` selects the sprite set — an unknown id falls
-  back to `blob` (logged); `name` is accepted but not displayed in v1.
+  back to the manifest's first pet (logged); `name` is accepted but not
+  displayed in v1.
   Unknown mood → 400, invalid JSON → 400, body over 4 KiB → 413, any other
   path/method → 404.
 - `GET /pets` → `200 application/json`: every pet the loaded manifest
@@ -143,7 +144,11 @@ The app runs a loopback-only HTTP server (`src/server.zig`) on
   shell page's origin.
 
 Enable the "桌面伴侣" (desktop companion) toggle in the pet plugin's settings
-panel and the plugin starts POSTing mood updates.
+panel and the plugin starts POSTing mood updates. On a loopback page the panel
+can also start this app for you: the pet plugin's host face serves
+`POST /dsh-pet/launch-desktop`, which asks Launch Services to open the bundle
+id `dev.seaveyon.dsh-pet-desktop` (falling back to `/Applications/DSH Pet.app` and
+`~/Applications/DSH Pet.app`; `DSH_PET_DESKTOP_APP` overrides the search).
 
 The server thread feeds the UI loop through the framework's external-source
 channel (`fx.openChannel` → thread-safe `ChannelHandle.post`, the
@@ -152,7 +157,10 @@ channel (`fx.openChannel` → thread-safe `ChannelHandle.post`, the
 ## Interactions
 
 - **Drag** anywhere to move the window (app-owned drag: `on_drag` starts the
-  gesture, a 60 Hz poll follows `NSEvent.mouseLocation` until button-up).
+  gesture, a 60 Hz poll follows `NSEvent.mouseLocation` until button-up). The
+  pet plays its working (run) strip while carried — a display-layer override
+  (`Model.effectiveMood`), so bridge state keeps landing underneath and the
+  pet returns to the latest mood on release.
 - **Click** toggles a 1.25× zoom (stays inside the window's transparent
   safety margin).
 - **Right-click** → Quit DSH Pet.
@@ -160,7 +168,7 @@ channel (`fx.openChannel` → thread-safe `ChannelHandle.post`, the
 ## Layout
 
 ```
-app.zon          app manifest (id dev.seaveyon.dsh-pet, window/shell, image budget)
+app.zon          app manifest (id dev.seaveyon.dsh-pet-desktop, window/shell, image budget)
 build.zig        native_sdk.addApp graph
 build.zig.zon    SDK tarball dependency (locked sha + hash)
 assets/sprites/  baked strips + manifest.json (single source for frame geometry)
