@@ -1,17 +1,18 @@
 # @seaveyon/dsh-pet-desktop
 
 Zero-native (Zig + GPU canvas) desktop pet for the DSH Web surface. A 192×192
-transparent, always-on-top, chromeless window whose whole surface is one Metal
-GPU canvas — no WebView. It receives mood state from the `@seaveyon/dsh-pet`
-Web plugin over a loopback HTTP bridge and plays the matching baked sprite
-strip.
+transparent, always-on-top, chromeless window whose whole surface is one GPU
+canvas (Metal on macOS; on Windows the SDK renders transparent windows through
+its software reference renderer + GDI layered window) — no WebView. It receives
+mood state from the `@seaveyon/dsh-pet` Web plugin over a loopback HTTP bridge
+and plays the matching baked sprite strip.
 
 This is the formalized successor of the `/tmp/pet-spike` feasibility spike;
 see `docs/` for the porting notes.
 
 ## Prerequisites
 
-- macOS (the only platform the app builds for)
+- macOS or Windows (the two platforms the app builds for)
 - Zig **0.16.0** — `mise install zig@0.16.0` (or any other install; the build
   pins `minimum_zig_version`)
 - Network on first build: the zero-native SDK is a locked-commit tarball
@@ -26,6 +27,19 @@ zig build run      # or: bun run run     -> build (ReleaseFast) and launch
 zig build test     # unit tests; never pass -Doptimize=Debug here (framework linking bug)
 ```
 
+**Windows cross-build** (from macOS; no Windows SDK or MSVC needed — zig's
+bundled mingw supplies the headers and import libraries):
+
+```sh
+zig build -Dtarget=x86_64-windows-gnu                              # -> zig-out/bin/dsh-pet-desktop.exe
+zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-windows-gnu --prefix zig-out-win-x64
+```
+
+On Windows the transparent window renders through the SDK's software
+reference renderer (CPU + GDI layered-window present), which is fine for a
+192×192 sprite; `gpu_backend = "metal"` in `app.zon`/`main.zig` is a portable
+request value the Windows host maps to its default presenter.
+
 **Asset paths resolve against the process working directory** (the runtime's
 image loader opens `assets/sprites/...` cwd-relative; only a packaged `.app`
 bundle resolves them against `Contents/Resources` instead). So run the
@@ -35,7 +49,7 @@ bundle resolves them against `Contents/Resources` instead). So run the
 ## Sprites
 
 `assets/sprites/` holds the baked strips — `sprites/<petId>/<mood>.png` for
-petId ∈ {deepseek-chan, …imported} × the 8 moods — plus `manifest.json`, the **single
+petId ∈ {deepseek-chan, ai-sleepy-silver-wolf, …imported} × the 8 moods — plus `manifest.json`, the **single
 source of truth** for strip geometry:
 
 ```json
@@ -93,9 +107,10 @@ animation wins; missing ones fall back to idle frames with a warning):
 
 Limitations:
 
-- **Four spare pet slots.** `src/manifest.zig` caps the manifest at 8 pets and
-  the stock sets already ship 4, so up to 4 imported pets fit; the importer
-  refuses rather than write a manifest the app would reject. Re-importing an
+- **Six spare pet slots.** `src/manifest.zig` caps the manifest at 8 pets and
+  the stock sets already ship 2 (`deepseek-chan`, `ai-sleepy-silver-wolf`),
+  so up to 6 imported pets fit; the importer refuses rather than write a
+  manifest the app would reject. Re-importing an
   existing id replaces it and is always allowed.
 - **Timing is per-strip.** Codex's per-frame idle durations, `loop`/fallback
   chains, and the 3×-repeat-then-idle default cadence don't fit the
@@ -123,19 +138,25 @@ Two framework limits shaped the wiring:
 The app runs a loopback-only HTTP server (`src/server.zig`) on
 `http://127.0.0.1:45731`:
 
-- `POST /state` with `{"mood": "working", "petId": "deepseek-chan", "name": "Mochi"}`
+- `POST /state` with `{"mood": "working", "petId": "deepseek-chan", "name": "Mochi", "locale": "en"}`
   → `200 {"ok":true}`; `mood` is one of `idle | thinking | working | waiting |
   sad | sleeping | celebrating | pet` (mirrors `@seaveyon/dsh-pet/desktop`'s
   `Mood` / `MOODS`). `petId` selects the sprite set — an unknown id falls
   back to the manifest's first pet (logged); `name` is accepted but not
-  displayed in v1.
+  displayed in v1; `locale` (`zh` | `en`) localizes the app's context menu.
   Unknown mood → 400, invalid JSON → 400, body over 4 KiB → 413, any other
   path/method → 404.
 - `GET /pets` → `200 application/json`: every pet the loaded manifest
   declares (built-ins and imports like Codex-imported bitmap pets), each
-  with all 8 moods carrying `frames`, `frameDurationMs`, and `url`, e.g.
-  `{"pets":[{"id":"blob","moods":{"idle":{"frames":24,"frameDurationMs":250,"url":"/sprites/blob/idle.png"},…}}]}`.
+  with all 8 moods carrying `frames`, `frameDurationMs`, and `url`, plus an
+  `eventsUrl` for the liveness stream below, e.g.
+  `{"pets":[{"id":"deepseek-chan","moods":{"idle":{"frames":6,"frameDurationMs":1100,"url":"/sprites/deepseek-chan/idle.png"},…}}],"eventsUrl":"/events"}`.
   → `503` when the manifest failed to load at boot.
+- `GET /events` → `200 text/event-stream`: an SSE **liveness** stream. No
+  events are ever published — the open connection itself is the signal, so
+  the plugin notices the moment the app quits instead of waiting for the
+  next poll. Runs on its own thread per connection so it can't starve
+  `/state`.
 - `GET /sprites/<pet>/<mood>.png` → `200 image/png`: the strip file itself.
   Only manifest-declared `file` names are served (exact match — no path
   traversal surface); unknown or undeclared paths → `404`.
@@ -143,12 +164,15 @@ The app runs a loopback-only HTTP server (`src/server.zig`) on
   `access-control-allow-origin: *` so the plugin can fetch/POST from the
   shell page's origin.
 
-Enable the "桌面伴侣" (desktop companion) toggle in the pet plugin's settings
-panel and the plugin starts POSTing mood updates. On a loopback page the panel
-can also start this app for you: the pet plugin's host face serves
-`POST /dsh-pet/launch-desktop`, which asks Launch Services to open the bundle
-id `dev.seaveyon.dsh-pet-desktop` (falling back to `/Applications/DSH Pet.app` and
-`~/Applications/DSH Pet.app`; `DSH_PET_DESKTOP_APP` overrides the search).
+The bridge is on by default — there is no companion toggle in the pet
+plugin's settings panel; as soon as the plugin is installed it starts POSTing
+mood updates, and when this app isn't running the sends fail silently. On a
+loopback page the panel can also start this app for you: the pet plugin's
+host face serves `POST /dsh-pet/launch-desktop`, which first spawns the
+binary bundled inside the npm package, then asks Launch Services to open the
+bundle id `dev.seaveyon.dsh-pet-desktop` (falling back to
+`/Applications/DSH Pet.app` and `~/Applications/DSH Pet.app`;
+`DSH_PET_DESKTOP_APP` overrides the search).
 
 The server thread feeds the UI loop through the framework's external-source
 channel (`fx.openChannel` → thread-safe `ChannelHandle.post`, the
@@ -157,7 +181,9 @@ channel (`fx.openChannel` → thread-safe `ChannelHandle.post`, the
 ## Interactions
 
 - **Drag** anywhere to move the window (app-owned drag: `on_drag` starts the
-  gesture, a 60 Hz poll follows `NSEvent.mouseLocation` until button-up). The
+  gesture, a 60 Hz poll follows the absolute pointer position —
+  `NSEvent.mouseLocation` on macOS, `GetCursorPos` on Windows — until
+  button-up). The
   pet plays its working (run) strip while carried — a display-layer override
   (`Model.effectiveMood`), so bridge state keeps landing underneath and the
   pet returns to the latest mood on release.
@@ -179,5 +205,7 @@ src/view.zig     atlas-cropped sprite in the root container (press/drag/context 
 src/manifest.zig manifest.json parser, image-id mapping, animation arithmetic
 src/state.zig    Mood enum, /state JSON and channel-line codecs
 src/server.zig   loopback HTTP bridge thread (/state POST, /pets + /sprites GETs)
-src/appkit.zig   dlsym'd Objective-C bridge (window placement, drag follow)
+src/windowing.zig platform-neutral windowing API (window placement, drag follow), dispatching per OS
+src/appkit.zig   macOS backend: dlsym'd Objective-C bridge
+src/win32.zig    Windows backend: raw user32 externs (window find/move, cursor, button state)
 ```

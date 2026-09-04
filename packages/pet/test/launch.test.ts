@@ -171,6 +171,79 @@ describe('launchDesktopApp', () => {
     expect(outcome).toBe('launch-failed')
   })
 
+  test('on Windows the bundled exe wins and spawns detached', async () => {
+    const { calls, run } = runStub(['ok'])
+    const spawned: string[] = []
+    const outcome = await launchDesktopApp({
+      platform: 'win32',
+      run,
+      exists: () => true,
+      bundledBinary: 'C:\\pkg\\desktop\\dsh-pet-desktop-windows-x64.exe',
+      spawnDetached: (path) => {
+        spawned.push(path)
+        return Promise.resolve()
+      },
+    })
+    expect(outcome).toBe('launched')
+    expect(spawned).toEqual(['C:\\pkg\\desktop\\dsh-pet-desktop-windows-x64.exe'])
+    // There is no `open -b` on Windows: the execFile seam is never used.
+    expect(calls).toHaveLength(0)
+  })
+
+  test('the default Windows bundled path carries the windows segment', async () => {
+    const spawned: string[] = []
+    const outcome = await launchDesktopApp({
+      platform: 'win32',
+      arch: 'x64',
+      exists: () => true,
+      spawnDetached: (path) => {
+        spawned.push(path)
+        return Promise.resolve()
+      },
+    })
+    expect(outcome).toBe('launched')
+    expect(spawned).toEqual([bundledDesktopBinary('x64', 'win32')])
+    expect(spawned[0]).toContain('dsh-pet-desktop-windows-x64.exe')
+  })
+
+  test('a missing bundled exe falls back to the env override on Windows', async () => {
+    const { calls, run } = runStub(['ok'])
+    const spawned: string[] = []
+    const outcome = await launchDesktopApp({
+      platform: 'win32',
+      run,
+      env: { DSH_PET_DESKTOP_APP: 'C:\\apps\\DSH Pet.exe' },
+      exists: (path) => path === 'C:\\apps\\DSH Pet.exe',
+      bundledBinary: 'C:\\pkg\\desktop\\dsh-pet-desktop-windows-x64.exe',
+      spawnDetached: (path) => {
+        spawned.push(path)
+        return Promise.resolve()
+      },
+    })
+    expect(outcome).toBe('launched')
+    expect(spawned).toEqual(['C:\\apps\\DSH Pet.exe'])
+    expect(calls).toHaveLength(0)
+  })
+
+  test('no bundled exe and no env override on Windows means not-installed', async () => {
+    const { calls, run } = runStub(['ok'])
+    const outcome = await launchDesktopApp({
+      platform: 'win32',
+      run,
+      env: {},
+      exists: () => false,
+    })
+    expect(outcome).toBe('not-installed')
+    expect(calls).toHaveLength(0)
+  })
+
+  test('a non-darwin, non-win32 host is still unsupported', async () => {
+    const { calls, run } = runStub()
+    const outcome = await launchDesktopApp({ platform: 'freebsd', run })
+    expect(outcome).toBe('unsupported-platform')
+    expect(calls).toHaveLength(0)
+  })
+
   test('candidates cover the two standard Applications folders after the env override', () => {
     expect(launchCandidates({ env: {}, home: '/home/u' })).toEqual([
       '/Applications/DSH Pet.app',

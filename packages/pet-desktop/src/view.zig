@@ -8,7 +8,7 @@
 //! itself stays 128pt (160pt zoomed). Until the strip's load lands the
 //! id is 0 — the no-image sentinel — and the widget draws nothing.
 //!
-//! Drag is app-owned (`on_drag` + src/appkit.zig), NOT the built-in
+//! Drag is app-owned (`on_drag` + src/windowing.zig), NOT the built-in
 //! `window_drag` channel: that channel refuses any element whose hit
 //! route contains a press claimer, and this root IS the press claimer
 //! (click = zoom feedback) — see appkit.zig's doc comment. The runtime's

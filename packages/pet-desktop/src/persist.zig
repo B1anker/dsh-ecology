@@ -14,6 +14,7 @@
 //! Io + Dir + path so tests serve out of a tmpDir, never a real home.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const state = @import("state.zig");
 
 /// Env override for the state file location (tests and development).
@@ -23,20 +24,35 @@ pub const state_file_env = "DSH_PET_DESKTOP_STATE_FILE";
 /// tag, separators, and slack.
 pub const max_line_bytes: usize = state.max_field_bytes * 2 + 32;
 
-/// Where the last state line lives: the env override when set, else
-/// `~/Library/Application Support/dsh-pet-desktop/state.txt` (a macOS-only
-/// app; outside iCloud-synced and sandboxed containers either way).
+/// Where the last state line lives: the env override when set, else the
+/// platform per-user app-data location —
+/// `%LOCALAPPDATA%\dsh-pet-desktop\state.txt` on Windows (null when
+/// LOCALAPPDATA is unset), `~/Library/Application
+/// Support/dsh-pet-desktop/state.txt` on macOS (outside iCloud-synced
+/// and sandboxed containers either way).
 pub fn statePath(buffer: []u8) ?[]const u8 {
     if (std.c.getenv(state_file_env)) |override| {
         const value = std.mem.span(override);
         if (value.len > 0) return value;
     }
-    const home_z = std.c.getenv("HOME") orelse return null;
-    return std.fmt.bufPrint(
-        buffer,
-        "{s}/Library/Application Support/dsh-pet-desktop/state.txt",
-        .{std.mem.span(home_z)},
-    ) catch null;
+    switch (builtin.os.tag) {
+        .windows => {
+            const base_z = std.c.getenv("LOCALAPPDATA") orelse return null;
+            return std.fmt.bufPrint(
+                buffer,
+                "{s}\\dsh-pet-desktop\\state.txt",
+                .{std.mem.span(base_z)},
+            ) catch null;
+        },
+        else => {
+            const home_z = std.c.getenv("HOME") orelse return null;
+            return std.fmt.bufPrint(
+                buffer,
+                "{s}/Library/Application Support/dsh-pet-desktop/state.txt",
+                .{std.mem.span(home_z)},
+            ) catch null;
+        },
+    }
 }
 
 /// Write one line, creating the parent directory first.
@@ -92,12 +108,14 @@ pub fn loadStateLine(buffer: []u8) ?[]const u8 {
     return loadStateLineFrom(threaded.io(), std.Io.Dir.cwd(), path, buffer);
 }
 
-test "the default state path lives under Application Support" {
+test "the default state path lives under the platform app-data directory" {
     var buffer: [std.fs.max_path_bytes]u8 = undefined;
     const path = statePath(&buffer) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(
-        std.mem.endsWith(u8, path, "Library/Application Support/dsh-pet-desktop/state.txt"),
-    );
+    const suffix = if (builtin.os.tag == .windows)
+        "\\dsh-pet-desktop\\state.txt"
+    else
+        "Library/Application Support/dsh-pet-desktop/state.txt";
+    try std.testing.expect(std.mem.endsWith(u8, path, suffix));
 }
 
 test "a saved line round-trips through the file, parent dirs created" {

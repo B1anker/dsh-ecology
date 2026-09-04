@@ -25,7 +25,7 @@
 
 const std = @import("std");
 const native_sdk = @import("native_sdk");
-const appkit = @import("appkit.zig");
+const windowing = @import("windowing.zig");
 const assets = @import("assets.zig");
 const manifest = @import("manifest.zig");
 const persist = @import("persist.zig");
@@ -39,14 +39,17 @@ pub const Mood = state.Mood;
 
 pub const Effects = native_sdk.Effects(Msg);
 
-/// Monotonic milliseconds for drag-rate instrumentation (Zig 0.16 has no
-/// std.time.nanoTimestamp; read CLOCK_MONOTONIC directly — macOS-only app).
+/// Monotonic milliseconds for drag-rate instrumentation and the
+/// post-drag press-suppression window. Zig 0.16 has no
+/// std.time.nanoTimestamp — clock reads go through an Io — so one
+/// process-lifetime Threaded io serves every call (all callers are the
+/// UI thread or a single test thread; the lazy init needs no
+/// synchronization).
+var clock_io: ?std.Io.Threaded = null;
+
 fn monotonicMs() i128 {
-    var ts: std.posix.timespec = undefined;
-    switch (std.posix.errno(std.posix.system.clock_gettime(.MONOTONIC, &ts))) {
-        .SUCCESS => return @as(i128, ts.sec) * std.time.ms_per_s + @divTrunc(ts.nsec, std.time.ns_per_ms),
-        else => return 0,
-    }
+    if (clock_io == null) clock_io = .init(std.heap.page_allocator, .{});
+    return @divTrunc(std.Io.Timestamp.now(clock_io.?.io(), .boot).nanoseconds, std.time.ns_per_ms);
 }
 
 /// The one repeating timer: flips the current strip's frame at the
@@ -149,8 +152,8 @@ pub const Model = struct {
     /// Display-layer only, like the drag override — the bridge mood is
     /// untouched. Dragging wins over hovering (a carried pet runs).
     hovering: bool = false,
-    /// App-owned window drag state (see appkit.zig's doc comment for why
-    /// the built-in window_drag channel cannot serve this app). Also
+    /// App-owned window drag state (see windowing.zig / appkit.zig for
+    /// why the built-in window_drag channel cannot serve this app). Also
     /// drives the display-layer mood override (see effectiveMood).
     dragging: bool = false,
     drag_events: u32 = 0,
@@ -166,7 +169,7 @@ pub const Model = struct {
     /// the captured pointer_up still dispatches a click). Presses
     /// within this window are the drag's own release echo, not clicks.
     drag_end_ms: i128 = 0,
-    /// Absolute screen-space offset from the window's AppKit origin to
+    /// Absolute screen-space offset from the window's origin to
     /// the pointer, captured at the drag's first (post-slop) event:
     /// origin = mouseLocation - grab_offset for every later event, so
     /// positioning is an absolute 1:1 mapping with no accumulation and
@@ -407,9 +410,9 @@ pub fn boot(model: *Model, fx: *Effects) void {
             fx.closeChannel(state_channel_key);
         };
     }
-    appkit.hideFromDock();
-    appkit.placeBottomRight(screen_margin, window_size);
-    appkit.logFrame("boot");
+    windowing.hideFromDock();
+    windowing.placeBottomRight(screen_margin, window_size);
+    windowing.logFrame("boot");
 }
 
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
@@ -541,8 +544,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     // coordinates so the drag starts with zero jump
                     // (the pre-slop pixels never move the window), then
                     // hand following to the poll timer.
-                    const o = appkit.origin() orelse return;
-                    const ml = appkit.mouseLocation() orelse return;
+                    const o = windowing.origin() orelse return;
+                    const ml = windowing.mouseLocation() orelse return;
                     model.dragging = true;
                     model.drag_events = 0;
                     model.poll_ticks = 0;
@@ -571,9 +574,9 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 // collapse during fast drags is the evidence for why the
                 // poll timer owns following.
                 model.drag_events += 1;
-                const ml = appkit.mouseLocation() orelse return;
+                const ml = windowing.mouseLocation() orelse return;
                 noteDragPointerX(model, ml.x);
-                appkit.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
+                windowing.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
             },
             else => {
                 // Drag end/cancel events are ADVISORY. The runtime
@@ -583,7 +586,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 // the event there kills the poll loop and strands the
                 // window (the long-fast-flick escape). Only a physical
                 // button-up ends the drag; the poll tick detects it.
-                if (appkit.leftMouseDown()) {
+                if (windowing.leftMouseDown()) {
                     model.spurious_ends += 1;
                     std.debug.print("dsh-pet-desktop: drag end/cancel ignored (button down) phase={d} events={d} polls={d}\n", .{ d.phase, model.drag_events, model.poll_ticks });
                     return;
@@ -599,13 +602,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             // Release detection does not depend on the up/end event
             // reaching us: poll the physical button state.
-            if (!appkit.leftMouseDown()) {
+            if (!windowing.leftMouseDown()) {
                 endDrag(model, fx, "buttons-up");
                 return;
             }
-            const ml = appkit.mouseLocation() orelse return;
+            const ml = windowing.mouseLocation() orelse return;
             noteDragPointerX(model, ml.x);
-            appkit.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
+            windowing.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
             model.poll_ticks += 1;
             if (model.poll_ticks % 60 == 0) {
                 const elapsed_ms = monotonicMs() - model.drag_start_ms;
@@ -663,14 +666,14 @@ pub fn jumpOffsetForFrame(frame_index: u32, frames: u32) f32 {
     return -jump_height_pt * @sin(std.math.pi * phase);
 }
 
-/// Absolute drag mapping. NSEvent.mouseLocation and
-/// NSWindow.setFrameOrigin: share ONE coordinate space (global AppKit
-/// screen space, bottom-left origin, y-up), so there is NO y-flip
-/// anywhere in the drag path: grab = ml - origin at the first post-slop
-/// event makes dragOrigin reproduce the current origin exactly (zero
-/// jump), and every later event maps pointer motion 1:1 with no
-/// accumulation and no view-local feedback.
-pub fn dragOrigin(ml: appkit.NSPoint, grab_x: f64, grab_y: f64) appkit.NSPoint {
+/// Absolute drag mapping. On each platform the pointer read and the
+/// origin write share ONE coordinate space (AppKit's bottom-left y-up
+/// on macOS, Win32's top-left y-down on Windows — see windowing.zig),
+/// so there is NO y-flip anywhere in the drag path: grab = ml - origin
+/// at the first post-slop event makes dragOrigin reproduce the current
+/// origin exactly (zero jump), and every later event maps pointer
+/// motion 1:1 with no accumulation and no view-local feedback.
+pub fn dragOrigin(ml: windowing.Point, grab_x: f64, grab_y: f64) windowing.Point {
     return .{ .x = ml.x - grab_x, .y = ml.y - grab_y };
 }
 
@@ -715,8 +718,8 @@ test "drag heading follows the pointer x with a dead zone" {
 }
 
 test "drag origin mapping is absolute, unflipped, and jump-free" {
-    const origin = appkit.NSPoint{ .x = 1360, .y = 110 };
-    const grab = appkit.NSPoint{ .x = 42, .y = 17 };
+    const origin = windowing.Point{ .x = 1360, .y = 110 };
+    const grab = windowing.Point{ .x = 42, .y = 17 };
     // First event: pointer at origin+grab reproduces the origin exactly.
     const first = dragOrigin(.{ .x = origin.x + grab.x, .y = origin.y + grab.y }, grab.x, grab.y);
     try std.testing.expectEqual(origin.x, first.x);

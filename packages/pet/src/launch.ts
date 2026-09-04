@@ -9,14 +9,18 @@
  * Two ways to find the app, in order:
  *
  * 1. The binaries bundled inside this npm package (`desktop/dsh-pet-desktop-*`,
- *    one per Mac architecture, packed by the release workflow). The bundled
- *    build wins over any installed copy because it is version-locked to this
- *    plugin — the /state contract (MOODS order, bridge port) can never drift
- *    between the two sides. It is also the path with no Gatekeeper friction:
+ *    one build per platform/architecture — macOS arm64 and x64, Windows x64 —
+ *    packed by the release workflow). The bundled build wins over any
+ *    installed copy because it is version-locked to this plugin — the /state
+ *    contract (MOODS order, bridge port) can never drift between the two
+ *    sides. On macOS it is also the path with no Gatekeeper friction:
  *    npm-installed files carry no quarantine attribute, so an unsigned binary
  *    spawns cleanly.
- * 2. macOS Launch Services (`open -b` the bundle id, then the standard
- *    Applications folders) — development installs and pre-bundle packages.
+ * 2. An installed copy, per platform. On macOS, Launch Services (`open -b`
+ *    the bundle id, then the standard Applications folders) — development
+ *    installs and pre-bundle packages. On Windows there is no `open -b` and
+ *    no installer, so the fallback is the DSH_PET_DESKTOP_APP environment
+ *    variable pointing at an exe.
  *
  * Three guards, each cheap and each covering a distinct abuse:
  *
@@ -53,18 +57,24 @@ export const LAUNCH_ROUTE_PATH = '/dsh-pet/launch-desktop'
 export const LAUNCH_HEADER = 'x-dsh-pet-launch'
 
 /**
- * The desktop binary bundled into this npm package for one architecture:
- * `desktop/dsh-pet-desktop-<arch>` where `<arch>` is the Node
- * `process.arch` spelling (arm64, x64), so selection is a template with no
- * mapping table to drift. Resolved from this module's own URL so the same
- * layout holds from src/ (tests) and dist/ (an installed package): both sit
- * one level below the package root. A source checkout has no desktop/
+ * The desktop binary bundled into this npm package for one platform and
+ * architecture: `desktop/dsh-pet-desktop-<arch>` on macOS and
+ * `desktop/dsh-pet-desktop-windows-<arch>.exe` on Windows, where `<arch>` is
+ * the Node `process.arch` spelling (arm64, x64), so selection is a template
+ * with no mapping table to drift. Resolved from this module's own URL so the
+ * same layout holds from src/ (tests) and dist/ (an installed package): both
+ * sit one level below the package root. A source checkout has no desktop/
  * directory — the release workflow adds it at pack time — so the lookup
- * simply misses and the .app chain runs; an architecture with no bundled
+ * simply misses and the fallback chain runs; an architecture with no bundled
  * build misses the same way.
  */
-export function bundledDesktopBinary(arch: NodeJS.Process['arch'] = process.arch): string {
-  return fileURLToPath(new URL(`../desktop/dsh-pet-desktop-${arch}`, import.meta.url))
+export function bundledDesktopBinary(
+  arch: NodeJS.Process['arch'] = process.arch,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const name =
+    platform === 'win32' ? `dsh-pet-desktop-windows-${arch}.exe` : `dsh-pet-desktop-${arch}`
+  return fileURLToPath(new URL(`../desktop/${name}`, import.meta.url))
 }
 
 /**
@@ -87,8 +97,9 @@ export interface LaunchDeps {
   /** Resolves on exit code 0, rejects otherwise. Defaults to execFile. */
   run?: (command: string, args: string[]) => Promise<void>
   /**
-   * The package-bundled binary to try before Launch Services; null disables
-   * the lookup. Defaults to {@link bundledDesktopBinary} for the host arch.
+   * The package-bundled binary to try before the platform fallback chain;
+   * null disables the lookup. Defaults to {@link bundledDesktopBinary} for
+   * the host platform and arch.
    */
   bundledBinary?: string | null
   /**
@@ -114,7 +125,7 @@ async function defaultSpawnDetached(path: string): Promise<void> {
   })
 }
 
-/** Candidate .app locations, in the order they are tried. */
+/** Candidate .app locations on macOS, in the order they are tried. */
 export function launchCandidates(deps: LaunchDeps = {}): string[] {
   const env = deps.env ?? process.env
   const home = deps.home ?? process.env.HOME ?? ''
@@ -128,19 +139,22 @@ export function launchCandidates(deps: LaunchDeps = {}): string[] {
 
 /**
  * Start the desktop app. The bundled binary wins because it is version-locked
- * to this plugin; otherwise the bundle-id query covers any install location
- * Launch Services knows, and the path list covers a freshly downloaded copy
- * it has not indexed yet. DSH_PET_DESKTOP_APP overrides the path search
- * (development and non-standard installs).
+ * to this plugin; after that the fallback is platform-shaped. On macOS the
+ * bundle-id query covers any install location Launch Services knows, and the
+ * path list covers a freshly downloaded copy it has not indexed yet, with
+ * DSH_PET_DESKTOP_APP heading the path search (development and non-standard
+ * installs). On Windows there is no `open -b` and no installer record, so
+ * DSH_PET_DESKTOP_APP pointing at an exe is the whole fallback.
  */
 export async function launchDesktopApp(deps: LaunchDeps = {}): Promise<LaunchOutcome> {
   const platform = deps.platform ?? process.platform
-  if (platform !== 'darwin') return 'unsupported-platform'
+  if (platform !== 'darwin' && platform !== 'win32') return 'unsupported-platform'
   const exists = deps.exists ?? existsSync
-  const run = deps.run ?? defaultRun
 
   const bundled =
-    deps.bundledBinary === undefined ? bundledDesktopBinary(deps.arch) : deps.bundledBinary
+    deps.bundledBinary === undefined
+      ? bundledDesktopBinary(deps.arch, platform)
+      : deps.bundledBinary
   if (bundled !== null && exists(bundled)) {
     const spawnDetached = deps.spawnDetached ?? defaultSpawnDetached
     try {
@@ -151,6 +165,19 @@ export async function launchDesktopApp(deps: LaunchDeps = {}): Promise<LaunchOut
     }
   }
 
+  if (platform === 'win32') {
+    const fromEnv = (deps.env ?? process.env).DSH_PET_DESKTOP_APP
+    if (fromEnv === undefined || fromEnv === '' || !exists(fromEnv)) return 'not-installed'
+    const spawnDetached = deps.spawnDetached ?? defaultSpawnDetached
+    try {
+      await spawnDetached(fromEnv)
+      return 'launched'
+    } catch {
+      return 'launch-failed'
+    }
+  }
+
+  const run = deps.run ?? defaultRun
   try {
     await run('open', ['-b', DESKTOP_BUNDLE_ID])
     return 'launched'

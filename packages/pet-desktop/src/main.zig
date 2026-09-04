@@ -9,8 +9,8 @@
 //! hovering hops with excitement (pet strip + a sine bounce), right-click
 //! carries Quit (in the driving page's language — the bridge mirrors its
 //! locale through /state), and dragging is app-owned: on_drag starts the
-//! gesture, then a 60Hz poll timer follows NSEvent.mouseLocation
-//! absolutely (src/appkit.zig) until the physical left button releases.
+//! gesture, then a 60Hz poll timer follows the absolute pointer position
+//! (src/windowing.zig) until the physical left button releases.
 //!
 //! WebView-free: no frontend/, no WebViewSource — a pure Zig-core UiApp
 //! (modeled on /tmp/zero-native/examples/calculator).

@@ -5,7 +5,7 @@
     .description = "Desktop pet for the DSH Web surface: transparent always-on-top chromeless canvas window driven by the plugin's mood state.",
     .version = "0.1.0",
     .icons = .{ "assets/icon.icns" },
-    .platforms = .{"macos"},
+    .platforms = .{ "macos", "windows" },
     .permissions = .{ "view", "command" },
     .capabilities = .{ "native_views", "gpu_surfaces" },
     // The 24-frame strips decode to 6144x256 RGBA = 6 MiB per registry

@@ -37,10 +37,10 @@ permissions:
   pull-requests: write
 
 jobs:
-  # The pet's desktop companion is a macOS binary (one build per
-  # architecture) that ships INSIDE the @seaveyon/dsh-pet tarball
-  # (packages/pet/desktop/ is in its files), so the ubuntu publish job cannot
-  # build it. This job does, and hands the staged directory over as an
+  # The pet's desktop companion ships as native binaries INSIDE the
+  # @seaveyon/dsh-pet tarball (packages/pet/desktop/ is in its files), so
+  # the ubuntu publish job cannot build them. This job does — macOS arm64
+  # and x64 plus Windows x64 — and hands the staged directory over as an
   # artifact.
   desktop-binary:
     runs-on: macos-latest
@@ -54,20 +54,23 @@ jobs:
           # dependency, fetched by zig itself.
           version: 0.16.0
 
-      # One build per Mac architecture, staged under the names the launcher's
-      # `process.arch` template selects (`dsh-pet-desktop-arm64`,
-      # `dsh-pet-desktop-x64`). The x86_64 build is a zig cross-compile off
-      # the same sysroot — macos-latest runners are Apple silicon, and zig
-      # needs no Intel host to target Intel.
+      # One build per Mac architecture plus one for Windows x64, staged under
+      # the names the launcher's `process.platform`/`process.arch` template
+      # selects (`dsh-pet-desktop-arm64`, `dsh-pet-desktop-x64`,
+      # `dsh-pet-desktop-windows-x64.exe`). The x86_64 builds are zig
+      # cross-compiles off the same sysroot — macos-latest runners are Apple
+      # silicon, and zig needs no Intel or Windows host to target either.
       - run: |
           zig build -Doptimize=ReleaseSmall --prefix zig-out-arm64
           zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-macos --prefix zig-out-x64
+          zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-windows-gnu --prefix zig-out-win-x64
         working-directory: packages/pet-desktop
 
       - run: |
           mkdir -p packages/pet/desktop
           install -m 755 packages/pet-desktop/zig-out-arm64/bin/dsh-pet-desktop packages/pet/desktop/dsh-pet-desktop-arm64
           install -m 755 packages/pet-desktop/zig-out-x64/bin/dsh-pet-desktop packages/pet/desktop/dsh-pet-desktop-x64
+          install -m 755 packages/pet-desktop/zig-out-win-x64/bin/dsh-pet-desktop.exe packages/pet/desktop/dsh-pet-desktop-windows-x64.exe
           cp -R packages/pet-desktop/assets packages/pet/desktop/assets
 
       - uses: actions/upload-artifact@v4

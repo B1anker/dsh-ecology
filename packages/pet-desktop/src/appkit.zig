@@ -1,6 +1,7 @@
-//! In-process AppKit bridge for the chromeless pet window (macOS-only:
-//! the app only builds for macOS and already links AppKit/libobjc for
-//! the platform host — no sidecar, no host patch).
+//! In-process AppKit bridge for the chromeless pet window — the macOS
+//! backend behind src/windowing.zig (the Windows backend is
+//! src/win32.zig). In-process because the AppKit platform host already
+//! links AppKit/libobjc: no sidecar, no host patch.
 //!
 //! Why this exists: the built-in `window_drag` channel hands the gesture
 //! to the platform ONLY when the hit walk finds no press-claiming widget
@@ -111,15 +112,6 @@ pub fn origin() ?NSPoint {
 pub fn frame() ?NSRect {
     const window = petWindow() orelse return null;
     return call0(NSRect, window, sel("frame"));
-}
-
-/// One-line geometry dump for the run log.
-pub fn logFrame(tag: [*:0]const u8) void {
-    const f = frame() orelse {
-        std.debug.print("dsh-pet-desktop: [{s}] window not found\n", .{tag});
-        return;
-    };
-    std.debug.print("dsh-pet-desktop: [{s}] frame=({d:.1},{d:.1} {d:.1}x{d:.1})\n", .{ tag, f.origin.x, f.origin.y, f.size.width, f.size.height });
 }
 
 /// The pointer's absolute screen position (AppKit bottom-left origin,
