@@ -13,6 +13,16 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { dirname, join } from 'node:path'
 
 /** Bytes of entropy per session id. */
 const ID_BYTES = 32
@@ -40,6 +50,7 @@ export interface SessionStoreOptions {
   ttlMs: number
   maxSessions: number
   now?: Clock
+  persistentFile?: string
 }
 
 /** The operations a session store exposes. */
@@ -72,9 +83,67 @@ export function createSessionStore({
   ttlMs,
   maxSessions,
   now = Date.now,
+  persistentFile,
 }: SessionStoreOptions): SessionStore {
   /** Session id -> record. */
   const sessions = new Map<string, SessionRecord>()
+  /* v8 ignore start -- filesystem failure and symlink defences need hostile local setup */
+  const persist = (): void => {
+    if (persistentFile === undefined) return
+    mkdirSync(dirname(persistentFile), { recursive: true, mode: 0o700 })
+    try {
+      if (lstatSync(persistentFile).isSymbolicLink())
+        throw new Error(`dsh-web-login: refusing symlink ${persistentFile}`)
+    } catch (error) {
+      if (!(error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT'))
+        throw error
+    }
+    const temp = join(dirname(persistentFile), `.sessions-${randomBytes(12).toString('hex')}`)
+    try {
+      writeFileSync(temp, JSON.stringify({ schemaVersion: 1, sessions: [...sessions] }), {
+        encoding: 'utf8',
+        mode: 0o600,
+        flag: 'wx',
+      })
+      chmodSync(temp, 0o600)
+      renameSync(temp, persistentFile)
+      chmodSync(persistentFile, 0o600)
+    } finally {
+      rmSync(temp, { force: true })
+    }
+  }
+  if (persistentFile !== undefined) {
+    try {
+      if (lstatSync(persistentFile).isSymbolicLink())
+        throw new Error(`dsh-web-login: refusing symlink ${persistentFile}`)
+      const parsed: unknown = JSON.parse(readFileSync(persistentFile, 'utf8'))
+      const values = parsed as { schemaVersion?: unknown; sessions?: unknown }
+      if (values.schemaVersion !== 1 || !Array.isArray(values.sessions))
+        throw new Error('invalid session store')
+      for (const entry of values.sessions) {
+        if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string')
+          throw new Error('invalid session record')
+        const record = entry[1] as SessionRecord
+        if (
+          typeof record?.expiresAt !== 'number' ||
+          !Number.isFinite(record.expiresAt) ||
+          record.principal === null ||
+          typeof record.principal !== 'object'
+        )
+          throw new Error('invalid session record')
+        if (record.expiresAt > now()) sessions.set(entry[0], record)
+      }
+      if (sessions.size > maxSessions) throw new Error('session store exceeds maxSessions')
+      persist()
+    } catch (error) {
+      if (!(error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT'))
+        throw new Error(
+          `dsh-web-login: could not load persistent sessions: ${error instanceof Error ? error.message : String(error)}`,
+        )
+    }
+  }
+
+  /* v8 ignore stop */
 
   /** Drop expired ids so a long-lived process does not accumulate them. */
   const sweep = (): void => {
@@ -82,6 +151,7 @@ export function createSessionStore({
     for (const [id, record] of sessions) {
       if (record.expiresAt <= cutoff) sessions.delete(id)
     }
+    persist()
   }
 
   /**
@@ -95,6 +165,7 @@ export function createSessionStore({
     if (record === undefined) return undefined
     if (record.expiresAt <= now()) {
       sessions.delete(id)
+      persist()
       return undefined
     }
     return record
@@ -120,6 +191,7 @@ export function createSessionStore({
         expiresAt: now() + ttlMs,
         principal: Object.freeze({ ...principal }),
       })
+      persist()
       return id
     },
 
@@ -145,6 +217,7 @@ export function createSessionStore({
      */
     revoke(id) {
       if (typeof id === 'string') sessions.delete(id)
+      persist()
     },
 
     /**
@@ -160,12 +233,14 @@ export function createSessionStore({
           removed += 1
         }
       }
+      persist()
       return removed
     },
 
     /** Drop every session. Used when the authorization file is replaced. */
     revokeAll() {
       sessions.clear()
+      persist()
     },
 
     /** Drop expired sessions. Exposed for the periodic sweep and for tests. */

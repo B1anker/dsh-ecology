@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { expect, test } from '@rstest/core'
 import {
   createSessionStore,
@@ -133,4 +136,22 @@ test('revokeAll clears the store', () => {
   store.open(GITHUB_OWNER)
   store.revokeAll()
   expect(store.size).toBe(0)
+})
+
+test('a private store restores unexpired sessions after restart and persists revocation', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-web-login-sessions-'))
+  const file = join(dir, 'sessions.json')
+  try {
+    const first = createSessionStore({ ttlMs: 1000, maxSessions: 10, persistentFile: file })
+    const id = first.open(PASSWORD_PRINCIPAL)
+    expect(
+      createSessionStore({ ttlMs: 1000, maxSessions: 10, persistentFile: file }).isLive(id),
+    ).toBe(true)
+    first.revoke(id)
+    expect(
+      createSessionStore({ ttlMs: 1000, maxSessions: 10, persistentFile: file }).isLive(id),
+    ).toBe(false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

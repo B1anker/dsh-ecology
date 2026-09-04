@@ -42,6 +42,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { join } from 'node:path'
 import { createAttemptLimiter } from './attempt-limiter.js'
 import {
   type AuthLifecycle,
@@ -62,6 +63,7 @@ import {
   serializeSessionCookie,
   sessionCookieName,
 } from './cookies.js'
+import { resolveDshHome } from './env-file.js'
 import {
   buildAuthorizeUrl,
   createConcurrencyGate,
@@ -148,6 +150,17 @@ function requestPathname(req: IncomingMessage): string {
   }
 }
 
+/** Let DSH validate and redeem its one-time BrowserAuth launch token. */
+function isBrowserAuthLaunchRequest(req: IncomingMessage): boolean {
+  if (req.method !== 'GET') return false
+  try {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    return url.pathname === '/' && url.searchParams.has('token')
+  } catch {
+    return false
+  }
+}
+
 /** Where a successful sign-in lands. Fixed, so there is no redirect parameter to poison. */
 const HOME_PATH = '/'
 
@@ -197,6 +210,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   const sessions = createSessionStore({
     ttlMs: options.sessionTtlMs,
     maxSessions: options.maxSessions,
+    persistentFile: join(resolveDshHome(), 'auth', 'dsh-web-login', 'sessions.json'),
   })
   const limiter = createAttemptLimiter({
     limit: options.attemptLimit,
@@ -420,7 +434,11 @@ export function apply(ctx: PluginContext, config?: unknown): void {
 
   const decoratedRegisterFallback: WebServerService['registerFallback'] = (handler) =>
     originalRegisterFallback(async (req, res) => {
-      if (isAuthenticated(req) || ANON_STATIC_PATHS.has(requestPathname(req))) {
+      if (
+        isAuthenticated(req) ||
+        ANON_STATIC_PATHS.has(requestPathname(req)) ||
+        isBrowserAuthLaunchRequest(req)
+      ) {
         await handler(req, res)
         return
       }

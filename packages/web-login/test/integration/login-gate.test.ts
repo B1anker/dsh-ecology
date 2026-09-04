@@ -282,6 +282,24 @@ test('anonymous document navigation is redirected to /login', async () => {
   })
 })
 
+test('a DSH BrowserAuth launch token reaches the downstream fallback before password login', async () => {
+  await withFixture({}, async ({ port }) => {
+    const response = await request(port, '/?token=launch-token', {
+      headers: { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' },
+    })
+    expect(response.status).toBe(200)
+    expect(response.body).toBe('<main>spa</main>')
+  })
+})
+
+test('a token query cannot make an arbitrary fallback path public', async () => {
+  await withFixture({}, async ({ port }) => {
+    const response = await request(port, '/other?token=launch-token')
+    expect(response.status).toBe(401)
+    expect(JSON.parse(response.body)).toEqual({ error: 'unauthenticated' })
+  })
+})
+
 test('the anonymous login page is served with its browser hardening headers', async () => {
   await withFixture({}, async ({ port }) => {
     const response = await request(port, '/login', {
