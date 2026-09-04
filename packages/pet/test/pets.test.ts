@@ -10,7 +10,7 @@ describe('PETS roster', () => {
   test('ids are unique and in picker order', () => {
     const ids = PETS.map((pet) => pet.id)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(ids).toEqual(['deepseek-chan'])
+    expect(ids).toEqual(['deepseek-chan', 'ai-sleepy-silver-wolf'])
   })
 
   test('every pet has both locale names', () => {

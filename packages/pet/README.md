@@ -10,10 +10,12 @@ finished turn, dozing off when you both go quiet), derives a mood, and pushes
 every change to the [desktop companion app](../pet-desktop), where the pet
 actually lives on your screen.
 
-![Mochi the blob mirroring agent state: idle, thinking, working, celebrating, petted](assets/demo.gif)
+![DeepSeek-chan, the default built-in pet, mirroring agent state: idle, thinking, working, celebrating, petted](assets/demo.gif)
 
-> The demo shows the pet's original on-page form (v1.2 and earlier); the pet
-> has since moved to the desktop, and this plugin is what tells it how to feel.
+> The demo is rendered from the sprite strips that actually ship in the
+> desktop app (`render-demo-gif.mjs` in
+> [`../pet-desktop/scripts`](../pet-desktop/scripts)) — what you see is what
+> sits on your desktop.
 
 ## Install
 
@@ -36,8 +38,8 @@ the plugin starts feeding the desktop app immediately.
 The pet itself appears on your desktop, courtesy of the companion app. What
 you get in the web UI is **Settings → Pet**:
 
-- Which pet shows on the desktop: the built-in sprite (deepseek-chan),
-  plus any pets imported into the desktop app.
+- Which pet shows on the desktop: the two built-in sprites (deepseek-chan
+  and ai-sleepy-silver-wolf), plus any pets imported into the desktop app.
 - The pet's name.
 - The desktop companion's summon button. The bridge itself is always on —
   driving the desktop pet is this plugin's whole job, and when the desktop
@@ -57,15 +59,18 @@ your desktop.
 
 What the host starts, in order:
 
-1. The companion binary bundled inside this npm package
-   (`desktop/dsh-pet-desktop-<arch>` — one build per Mac architecture, the
-   launcher picks by `process.arch` — plus its sprite assets in
-   `desktop/assets/`, staged by the release workflow). It is
+1. The companion binary bundled inside this npm package (macOS arm64/x64:
+   `desktop/dsh-pet-desktop-<arch>`, the launcher picks by `process.arch`;
+   Windows x64: `desktop/dsh-pet-desktop-windows-x64.exe`; plus its sprite
+   assets in `desktop/assets/`, staged by the release workflow). It is
    version-locked to the plugin, so the bridge protocol can never drift, and
-   npm-installed files carry no quarantine attribute, so it spawns without a
-   Gatekeeper prompt.
-2. An installed `DSH Pet.app` — resolved by bundle id first, then the
-   standard Applications folders (development and pre-bundle installs).
+   on macOS npm-installed files carry no quarantine attribute, so it spawns
+   without a Gatekeeper prompt.
+2. An installed copy, per platform. On macOS, `DSH Pet.app` — resolved by
+   bundle id first, then the standard Applications folders (development and
+   pre-bundle installs). On Windows there is no `open -b` and no installer,
+   so the fallback is the `DSH_PET_DESKTOP_APP` environment variable pointing
+   at an exe.
 
 If the host finds neither, the panel links to the download page instead.
 

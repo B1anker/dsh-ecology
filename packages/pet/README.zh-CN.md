@@ -7,10 +7,11 @@ agent 正在做什么（思考、调用工具、等待你确认、完成回合�
 推导出心情，并把每次变化推送给[桌面伴侣 App](../pet-desktop)——宠物真正生活在你
 的桌面上。
 
-![演示：Mochi 跟随 agent 状态切换——待机、思考、工作、庆祝、被抚摸](assets/demo.gif)
+![演示：默认内置宠物 DeepSeek 酱跟随 agent 状态切换——待机、思考、工作、庆祝、被抚摸](assets/demo.gif)
 
-> 演示里是宠物早期的页面形态（v1.2 及更早）；宠物现已搬到桌面上，本插件负责告诉它
-> 该是什么心情。
+> 演示直接用桌面 App 实际内置的精灵条带渲染（脚本见
+> [`../pet-desktop/scripts`](../pet-desktop/scripts) 里的
+> `render-demo-gif.mjs`）——你看到的就是桌面上的样子。
 
 ## 安装
 
@@ -30,8 +31,8 @@ dsh plugin --profile web add @seaveyon/dsh-pet
 
 宠物本体由桌面伴侣 App 显示在你的桌面上。Web 界面里你看到的是 **设置 → 宠物**：
 
-- 桌面上显示哪只宠物：内置形象（deepseek-chan），以及导入到
-  桌面 App 里的宠物。
+- 桌面上显示哪只宠物：两个内置形象（deepseek-chan 与
+  ai-sleepy-silver-wolf），以及导入到桌面 App 里的宠物。
 - 宠物的名字。
 - 桌面伴侣的召唤按钮。桥接本身常开——驱动桌宠就是本插件存在的意义；桌面 App
   不在线时桥接静默失败，开着没有任何副作用。
@@ -46,12 +47,14 @@ dsh plugin --profile web add @seaveyon/dsh-pet
 
 宿主按以下顺序决定启动什么：
 
-1. 本 npm 包内置的伴侣二进制（`desktop/dsh-pet-desktop-<arch>`——每种 Mac 架构
-   各一份，启动器按 `process.arch` 选取——连同 `desktop/assets/`
-   里的精灵素材，由发布流水线在打包时放入）。它与插件版本锁定，桥接协议绝不会错配；
-   npm 安装的文件不带 quarantine 属性，所以未签名也能直接启动，不会触发 Gatekeeper。
-2. 已安装的 `DSH Pet.app`——先按 bundle id 解析，再查标准 Applications 目录
-  （开发和未内置二进制的旧包走这条路）。
+1. 本 npm 包内置的伴侣二进制（macOS arm64/x64：`desktop/dsh-pet-desktop-<arch>`，
+   启动器按 `process.arch` 选取；Windows x64：`desktop/dsh-pet-desktop-windows-x64.exe`；
+   连同 `desktop/assets/` 里的精灵素材，由发布流水线在打包时放入）。它与插件版本锁定，
+   桥接协议绝不会错配；macOS 上 npm 安装的文件不带 quarantine 属性，所以未签名也能
+   直接启动，不会触发 Gatekeeper。
+2. 已安装的副本，各平台不同。macOS 上是 `DSH Pet.app`——先按 bundle id 解析，
+   再查标准 Applications 目录（开发和未内置二进制的旧包走这条路）。Windows 没有
+   `open -b` 也没有安装器，回退为指向 exe 路径的 `DSH_PET_DESKTOP_APP` 环境变量。
 
 两者都找不到时，面板改为给出下载链接。
 

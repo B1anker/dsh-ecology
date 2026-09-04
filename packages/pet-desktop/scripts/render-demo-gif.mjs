@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Renders packages/pet/assets/demo.gif from the blob sprite sheets.
+// Renders packages/pet/assets/demo.gif from the built-in sprite sheets.
 // Pure-JS pipeline (no native deps): PNG decode via node:zlib -> 2x box
 // downscale (256px -> 128px per frame) -> global median-cut palette
 // (slot 0 = transparent) -> GIF89a with per-frame delays from manifest.json.
@@ -17,13 +17,13 @@ const outFile = join(here, '..', '..', 'pet', 'assets', 'demo.gif')
 
 // How many 256px frames each story beat contributes (short loops repeat).
 const STORY = [
-  ['idle', 8], // 8 * 250ms  = 2.0s
-  ['thinking', 15], // 15 * 100ms = 1.5s
-  ['working', 17], // ~4 loops  = 1.5s
-  ['celebrating', 14], // 2 loops  = 1.2s
-  ['pet', 12], // 2 loops  = 1.0s
+  ['idle', 3], // 3 * 1100ms = 3.3s
+  ['thinking', 6], // 1 loop    = 0.9s
+  ['working', 10], // ~1.7 loops = 1.2s
+  ['celebrating', 7], // 1.4 loops = 1.0s
+  ['pet', 8], // 2 loops    = 1.1s
 ]
-const PET = 'blob'
+const PET = 'deepseek-chan'
 
 // ---------- PNG decode (8-bit RGBA, non-interlaced) ----------
 
