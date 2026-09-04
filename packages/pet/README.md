@@ -47,16 +47,19 @@ Settings persist through the DSH settings service when it is available and
 fall back to `localStorage` — including for browsers on a remote host, whose
 settings RPCs never leave the server.
 
-### Imported desktop pets
+### The picker is the desktop roster
 
-Any bitmap pets imported into the desktop app (for example a Codex pet pack
-such as `ai-sleepy-silver-wolf`) appear in the **Settings → Pet** picker,
-marked with a *Desktop* badge. The plugin discovers them over the companion's
-loopback server (`GET http://127.0.0.1:45731/pets`) and animates their sprite
-strips in the picker previews with stepped CSS background animation.
-Discovery is best-effort: if the desktop app is offline, the picker simply
-shows the built-in roster; the desktop app itself owns what happens to a
-selected-but-unavailable imported pet on its own surface.
+The picker's single source of truth is the desktop app: when it answers
+`GET http://127.0.0.1:45731/pets`, that roster — built-ins included — is the
+whole list, and every preview is a sprite strip off the bridge server played
+with stepped CSS background animation. Known built-in ids keep their
+localized names (deepseek-chan stays「DeepSeek 酱」); anything else is an
+import, humanized from its id and marked with an *Imported* badge. If the
+desktop app is unreachable the picker falls back to the built-in SVG roster
+with a "not connected" hint, retries quietly a couple of times while the
+panel stays open, and a selection made against either roster stays selected
+across the switch since ids match on both sides. The desktop app itself owns
+what happens to a selected-but-unavailable imported pet on its own surface.
 
 ## How it works
 

@@ -1,7 +1,11 @@
 /**
- * The settings panel: the appearance picker merges the built-in SVG roster
- * with whatever imported pets the desktop app advertises, and selecting any of
- * them writes straight into the settings store.
+ * The settings panel: the appearance picker is single-source. When the
+ * desktop app answers /pets, its roster — built-ins included — is the whole
+ * list (so deepseek-chan can never appear twice), with RasterPet strip
+ * previews off the bridge server and localized names for known ids. Only a
+ * proven-offline desktop falls back to the built-in SVG roster plus a "not
+ * connected" hint. Discovery retries quietly a couple of times while the
+ * panel stays open.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from '@rstest/core'
@@ -29,7 +33,7 @@ afterEach(() => {
   container.remove()
 })
 
-/** A wire-format imported pet with every mood covered. */
+/** A wire-format desktop pet with every mood covered. */
 function desktopPetFixture(id: string) {
   return {
     id,
@@ -42,6 +46,9 @@ function desktopPetFixture(id: string) {
   }
 }
 
+/** The desktop manifest's shape in production: built-ins plus imports. */
+const DESKTOP_ROSTER = ['blob', 'cat', 'robot', 'deepseek-chan', 'ai-sleepy-silver-wolf']
+
 function desktopPetsStore(ids: string[]): DesktopPetsStore {
   const fetchFn = () =>
     Promise.resolve(new Response(JSON.stringify({ pets: ids.map(desktopPetFixture) })))
@@ -52,7 +59,7 @@ function desktopPetsStore(ids: string[]): DesktopPetsStore {
 const offlineFetch = (() =>
   Promise.reject(new Error('connection refused'))) as unknown as typeof fetch
 
-function mount(desktopPets?: DesktopPetsStore) {
+function mount(desktopPets?: DesktopPetsStore, retryDelayMs?: number) {
   const settings = new PetSettingsStore({})
   root = createRoot(container)
   act(() => {
@@ -60,6 +67,7 @@ function mount(desktopPets?: DesktopPetsStore) {
       createElement(PetSettingsPanel, {
         settings,
         ...(desktopPets !== undefined ? { desktopPets } : {}),
+        ...(retryDelayMs !== undefined ? { retryDelayMs } : {}),
       }),
     )
   })
@@ -70,12 +78,19 @@ function pickerButtons(): HTMLButtonElement[] {
   return Array.from(container.querySelectorAll('button[aria-pressed]'))
 }
 
-describe('PetSettingsPanel', () => {
-  test('lists the four built-in pets and selects one on click', () => {
+async function flushRefresh(store: DesktopPetsStore) {
+  await act(async () => {
+    await store.refresh()
+  })
+}
+
+describe('fallback (desktop unreachable or not asked yet)', () => {
+  test('lists the four built-in pets as SVG and selects one on click', () => {
     const { settings } = mount()
     const buttons = pickerButtons()
     expect(buttons).toHaveLength(4)
     expect(buttons[0]?.getAttribute('aria-pressed')).toBe('true') // blob is default
+    expect(container.querySelector('svg[data-pet-id="blob"]')).not.toBeNull()
 
     act(() => {
       buttons[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -84,6 +99,172 @@ describe('PetSettingsPanel', () => {
     expect(settings.getSnapshot().petId).toBe('cat')
   })
 
+  test('a proven-offline desktop adds the not-connected hint', async () => {
+    const desktopPets = new DesktopPetsStore({ fetchFn: offlineFetch })
+    mount(desktopPets)
+
+    await flushRefresh(desktopPets)
+
+    expect(pickerButtons()).toHaveLength(4)
+    expect(container.querySelector('section')?.textContent).toContain('Desktop app not connected')
+  })
+
+  test('no fetch yet (unknown) shows built-ins without the hint', () => {
+    mount() // no store at all: nothing is ever asked
+    expect(container.querySelector('section')?.textContent).not.toContain('not connected')
+    expect(pickerButtons()).toHaveLength(4)
+  })
+})
+
+describe('single-source picker (desktop online)', () => {
+  test('the /pets roster is the whole list — built-ins are not duplicated', async () => {
+    const desktopPets = desktopPetsStore(DESKTOP_ROSTER)
+    mount(desktopPets)
+
+    await flushRefresh(desktopPets)
+
+    const buttons = pickerButtons()
+    expect(buttons).toHaveLength(5)
+    // Exactly one deepseek-chan entry, under its real localized name.
+    const chan = buttons.filter((b) => b.title === 'DeepSeek-chan')
+    expect(chan).toHaveLength(1)
+    expect(buttons.map((b) => b.title)).toEqual([
+      'Blob',
+      'Cat',
+      'Robot',
+      'DeepSeek-chan',
+      'Ai Sleepy Silver Wolf',
+    ])
+    // Every preview is a raster strip off the bridge server, including the
+    // built-ins — the SVG path only renders in the fallback.
+    expect(container.querySelectorAll('[data-dsh-pet-raster]')).toHaveLength(5)
+    expect(container.querySelectorAll('svg[data-pet-id]')).toHaveLength(0)
+  })
+
+  test('imported pets wear the badge; built-ins served by the desktop do not', async () => {
+    const desktopPets = desktopPetsStore(DESKTOP_ROSTER)
+    mount(desktopPets)
+    await flushRefresh(desktopPets)
+
+    const buttons = pickerButtons()
+    const wolf = buttons.find((b) => b.title === 'Ai Sleepy Silver Wolf')!
+    expect(wolf.textContent).toContain('Imported')
+    for (const title of ['Blob', 'Cat', 'Robot', 'DeepSeek-chan']) {
+      expect(buttons.find((b) => b.title === title)!.textContent).not.toContain('Imported')
+    }
+  })
+
+  test('selecting an imported pet persists its id and previews the pet mood', async () => {
+    const desktopPets = desktopPetsStore(DESKTOP_ROSTER)
+    const { settings } = mount(desktopPets)
+    await flushRefresh(desktopPets)
+
+    const wolf = pickerButtons().find((b) => b.title === 'Ai Sleepy Silver Wolf')!
+    act(() => {
+      wolf.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(settings.getSnapshot().petId).toBe('ai-sleepy-silver-wolf')
+    expect(wolf.getAttribute('aria-pressed')).toBe('true')
+    expect(wolf.querySelector('[data-dsh-pet-raster]')?.getAttribute('data-mood')).toBe('pet')
+  })
+
+  test('a selection made in the fallback stays selected once the desktop answers', async () => {
+    let online = false
+    const fetchFn = () =>
+      online
+        ? Promise.resolve(
+            new Response(JSON.stringify({ pets: DESKTOP_ROSTER.map(desktopPetFixture) })),
+          )
+        : Promise.reject(new Error('connection refused'))
+    const desktopPets = new DesktopPetsStore({ fetchFn: fetchFn as unknown as typeof fetch })
+    const { settings } = mount(desktopPets)
+
+    // Fallback roster: pick the cat.
+    act(() => {
+      pickerButtons()[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(settings.getSnapshot().petId).toBe('cat')
+
+    // Desktop comes up; the same petId is selected in the desktop roster.
+    online = true
+    await flushRefresh(desktopPets)
+
+    const cat = pickerButtons().find((b) => b.title === 'Cat')!
+    expect(cat.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  test('localized names follow the locale (zh gets DeepSeek 酱)', async () => {
+    const original = Object.getOwnPropertyDescriptor(Navigator.prototype, 'language')
+    Object.defineProperty(Navigator.prototype, 'language', {
+      configurable: true,
+      get: () => 'zh-CN',
+    })
+    try {
+      const desktopPets = desktopPetsStore(DESKTOP_ROSTER)
+      mount(desktopPets)
+      await flushRefresh(desktopPets)
+
+      const buttons = pickerButtons()
+      expect(buttons.map((b) => b.title)).toEqual([
+        '果冻团',
+        '猫猫',
+        '机器人',
+        'DeepSeek 酱',
+        'Ai Sleepy Silver Wolf',
+      ])
+      expect(buttons.find((b) => b.title === 'Ai Sleepy Silver Wolf')!.textContent).toContain(
+        '导入',
+      )
+    } finally {
+      if (original !== undefined) Object.defineProperty(Navigator.prototype, 'language', original)
+    }
+  })
+})
+
+describe('discovery retry', () => {
+  test('a desktop that answers on the second attempt appears without reopening the panel', async () => {
+    let calls = 0
+    const fetchFn = () => {
+      calls += 1
+      return calls === 1
+        ? Promise.reject(new Error('connection refused'))
+        : Promise.resolve(
+            new Response(JSON.stringify({ pets: DESKTOP_ROSTER.map(desktopPetFixture) })),
+          )
+    }
+    const desktopPets = new DesktopPetsStore({ fetchFn: fetchFn as unknown as typeof fetch })
+    mount(desktopPets, 10 /* ms between retries */)
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    })
+
+    expect(calls).toBe(2)
+    expect(pickerButtons()).toHaveLength(5)
+    expect(pickerButtons().some((b) => b.title === 'Ai Sleepy Silver Wolf')).toBe(true)
+  })
+
+  test('retries stop after the cap and the offline hint stays', async () => {
+    let calls = 0
+    const fetchFn = () => {
+      calls += 1
+      return Promise.reject(new Error('connection refused'))
+    }
+    const desktopPets = new DesktopPetsStore({ fetchFn: fetchFn as unknown as typeof fetch })
+    mount(desktopPets, 10)
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    })
+
+    expect(calls).toBe(3) // initial attempt + 2 retries
+    expect(pickerButtons()).toHaveLength(4)
+    expect(container.querySelector('section')?.textContent).toContain('Desktop app not connected')
+  })
+})
+
+describe('the rest of the panel', () => {
   test('the page-era controls are gone; the desktop hint stands in', () => {
     mount()
     // Only name (text) and companion (checkbox) survive.
@@ -91,50 +272,5 @@ describe('PetSettingsPanel', () => {
     expect(container.querySelectorAll('input[type="text"]')).toHaveLength(1)
     expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(1)
     expect(container.querySelector('section p')?.textContent).toContain('desktop app')
-  })
-
-  test('imported desktop pets join the picker with a badge and a pretty title', async () => {
-    const desktopPets = desktopPetsStore(['ai-sleepy-silver-wolf'])
-    mount(desktopPets)
-
-    await act(async () => {
-      await desktopPets.refresh()
-    })
-
-    const buttons = pickerButtons()
-    expect(buttons).toHaveLength(5)
-    const imported = buttons[4]!
-    expect(imported.title).toBe('Ai Sleepy Silver Wolf')
-    expect(imported.textContent).toContain('Desktop') // the badge, en locale
-    expect(imported.querySelector('[data-dsh-pet-raster]')).not.toBeNull()
-  })
-
-  test('selecting an imported pet persists its id and previews the pet mood', async () => {
-    const desktopPets = desktopPetsStore(['ai-sleepy-silver-wolf'])
-    const { settings } = mount(desktopPets)
-    await act(async () => {
-      await desktopPets.refresh()
-    })
-
-    act(() => {
-      pickerButtons()[4]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-
-    expect(settings.getSnapshot().petId).toBe('ai-sleepy-silver-wolf')
-    const imported = pickerButtons()[4]!
-    expect(imported.getAttribute('aria-pressed')).toBe('true')
-    expect(imported.querySelector('[data-dsh-pet-raster]')?.getAttribute('data-mood')).toBe('pet')
-  })
-
-  test('a failed discovery leaves only the built-in roster', async () => {
-    const desktopPets = new DesktopPetsStore({ fetchFn: offlineFetch })
-    mount(desktopPets)
-
-    await act(async () => {
-      await desktopPets.refresh()
-    })
-
-    expect(pickerButtons()).toHaveLength(4)
-    expect(container.querySelector('[data-dsh-pet-raster]')).toBeNull()
   })
 })

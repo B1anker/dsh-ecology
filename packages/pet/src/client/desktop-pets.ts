@@ -1,36 +1,50 @@
 /**
- * Discovery of imported desktop pets: a tiny observable roster.
+ * Discovery of desktop pets: a tiny observable roster plus connection status.
  *
- * The desktop app can serve imported bitmap pets (see `fetchDesktopPets` in
- * bridge.ts) that the built-in SVG roster knows nothing about. This store
- * holds the last successfully fetched list and exposes it in the shell's
- * observable shape (`getSnapshot`/`subscribe`), so the settings panel
- * subscribes with `useSyncExternalStore` exactly like it does for settings.
+ * The desktop app serves the full pet roster — built-ins included — over its
+ * loopback server (see `fetchDesktopPets` in bridge.ts). This store holds the
+ * last fetch's outcome and exposes it in the shell's observable shape
+ * (`getSnapshot`/`subscribe`), so the settings panel subscribes with
+ * `useSyncExternalStore` exactly like it does for settings.
+ *
+ * The status half of the snapshot matters as much as the roster: the panel is
+ * single-source — when the desktop app answers, its roster is the whole
+ * picker; only a proven-unreachable desktop (`offline`) falls back to the
+ * built-in SVG roster. `unknown` (no fetch settled yet) renders the fallback
+ * without the "not connected" hint, so a slow answer doesn't flash it.
  *
  * Discovery is pull-based and lazy: nothing fetches until the panel calls
- * {@link DesktopPetsStore.refresh} on mount (i.e. each time it opens). A
- * failed refresh keeps the previous list — a desktop app that just quit must
- * not make an already-listed imported pet vanish mid-render.
+ * {@link DesktopPetsStore.refresh} on mount (and its light retry after a
+ * failure). A failed refresh keeps the previous roster — a desktop app that
+ * just quit must not make an already-listed pet vanish mid-render.
  *
  * @module @seaveyon/dsh-pet/client/desktop-pets
  */
 
 import { type DesktopPet, type FetchDesktopPetsOptions, fetchDesktopPets } from './bridge.js'
 
+/** Whether the desktop app's roster has answered, failed, or never been asked. */
+export type DesktopPetsStatus = 'unknown' | 'online' | 'offline'
+
+export interface DesktopPetsSnapshot {
+  pets: readonly DesktopPet[]
+  status: DesktopPetsStatus
+}
+
 export interface DesktopPetsStoreOptions extends FetchDesktopPetsOptions {}
 
 export class DesktopPetsStore {
   private readonly options: FetchDesktopPetsOptions
   private readonly listeners = new Set<() => void>()
-  private pets: readonly DesktopPet[] = []
+  private snapshot: DesktopPetsSnapshot = { pets: [], status: 'unknown' }
   private refreshing: Promise<void> | null = null
 
   constructor(options: DesktopPetsStoreOptions = {}) {
     this.options = options
   }
 
-  /** The last successfully fetched roster. Cached identity, as React requires. */
-  getSnapshot = (): readonly DesktopPet[] => this.pets
+  /** The last settled discovery outcome. Cached identity, as React requires. */
+  getSnapshot = (): DesktopPetsSnapshot => this.snapshot
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -39,15 +53,16 @@ export class DesktopPetsStore {
     }
   }
 
-  /** Look up an imported pet by id. */
+  /** Look up a pet by id in the last successfully fetched roster. */
   find(id: string): DesktopPet | undefined {
-    return this.pets.find((pet) => pet.id === id)
+    return this.snapshot.pets.find((pet) => pet.id === id)
   }
 
   /**
-   * Ask the desktop app for its imported pets. Concurrent calls share one
-   * in-flight request; failures resolve quietly with the roster unchanged.
-   * Returned so tests can await the settle; callers fire-and-forget it.
+   * Ask the desktop app for its pets. Concurrent calls share one in-flight
+   * request; failures resolve quietly with the roster unchanged (only the
+   * status moves to `offline`). Returned so tests can await the settle;
+   * callers fire-and-forget it.
    */
   refresh(): Promise<void> {
     if (this.refreshing !== null) return this.refreshing
@@ -59,10 +74,23 @@ export class DesktopPetsStore {
     // fetchDesktopPets resolves null on every failure, so this never rejects.
     const pets = await fetchDesktopPets(this.options)
     this.refreshing = null
-    if (pets === null) return
-    // Same roster arriving again is not a change; spare subscribers a render.
-    if (JSON.stringify(pets) === JSON.stringify(this.pets)) return
-    this.pets = pets
+    if (pets === null) {
+      this.setSnapshot({ pets: this.snapshot.pets, status: 'offline' })
+      return
+    }
+    this.setSnapshot({ pets, status: 'online' })
+  }
+
+  private setSnapshot(next: DesktopPetsSnapshot): void {
+    // Same roster and same status arriving again is not a change; spare
+    // subscribers a render.
+    if (
+      next.status === this.snapshot.status &&
+      JSON.stringify(next.pets) === JSON.stringify(this.snapshot.pets)
+    ) {
+      return
+    }
+    this.snapshot = next
     for (const listener of Array.from(this.listeners)) listener()
   }
 }
