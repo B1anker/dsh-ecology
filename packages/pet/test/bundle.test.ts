@@ -36,12 +36,15 @@ test('the bundle announces itself to the module loader', () => {
   expect(typeof exports.apply).toBe('function')
 })
 
-test('apply registers the overlay slot contribution', () => {
+test('apply registers only the settings-section slot contribution', () => {
   const runtime = loadBundle()
   const exports = runtime.loader.invokeFactory()
   exports.apply?.(runtime.context)
 
-  const overlays = runtime.slots.registrations.get('shell.overlay')
-  expect(overlays).toHaveLength(1)
-  expect(overlays?.[0]?.descriptor['id']).toBe('dsh-pet')
+  // The plugin renders nothing on the page: no shell.overlay contribution…
+  expect(runtime.slots.registrations.get('shell.overlay') ?? []).toHaveLength(0)
+  // …just the settings panel.
+  const sections = runtime.slots.registrations.get('settings.section')
+  expect(sections).toHaveLength(1)
+  expect(sections?.[0]?.descriptor['id']).toBe('dsh-pet-settings')
 })

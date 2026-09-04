@@ -34,7 +34,7 @@ export const DESKTOP_BASE_URL = `http://127.0.0.1:${DESKTOP_COMPANION_PORT}`
 /**
  * How long pet discovery may take before the plugin settles for the built-in
  * roster. The desktop app not running is the normal case, and it must never
- * stall the panel or the overlay.
+ * stall the settings panel.
  */
 export const DESKTOP_PETS_TIMEOUT_MS = 800
 

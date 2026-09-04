@@ -3,9 +3,9 @@
  *
  * This module is deliberately pure and DOM-free: everything time-dependent
  * goes through an injected `now()` so the whole behavior is unit-testable,
- * and nothing here subscribes to timers — the overlay drives `tick()` on an
- * interval. The split mirrors the value of the logic: the mood rules are the
- * product, the rendering is replaceable.
+ * and nothing here subscribes to timers — the mood source (mood-source.ts)
+ * drives `tick()` on an interval. The split mirrors the value of the logic:
+ * the mood rules are the product, the rendering is replaceable.
  *
  * Two layers of state:
  *
@@ -87,12 +87,12 @@ function fingerprint(snapshot: ConversationSnapshotSlice): string {
 /**
  * The pet's emotional state over time.
  *
- * Implements the shell's observable shape (`getSnapshot`/`subscribe`) so the
- * overlay can subscribe with `useSyncExternalStore` directly. Time only
- * enters through the injected clock and only advances the state on an
- * explicit `update`/`pet`/`tick` call — the machine never starts timers,
- * which keeps tests deterministic and the shell free of stray intervals
- * after the overlay unmounts.
+ * Implements the shell's observable shape (`getSnapshot`/`subscribe`) so
+ * consumers (the bridge) can subscribe directly. Time only enters through
+ * the injected clock and only advances the state on an explicit
+ * `update`/`pet`/`tick` call — the machine never starts timers, which keeps
+ * tests deterministic and the shell free of stray intervals after the plugin
+ * unloads.
  */
 export class PetStateMachine {
   private readonly now: () => number
@@ -163,7 +163,7 @@ export class PetStateMachine {
 
   /**
    * Advance time-driven transitions (pulse expiry, sleep onset) without a new
-   * snapshot. The overlay calls this on a 1s interval; tests call it after
+   * snapshot. The mood source calls this on a 1s interval; tests call it after
    * moving their fake clock.
    */
   tick(): void {

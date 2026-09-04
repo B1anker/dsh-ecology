@@ -84,6 +84,15 @@ describe('PetSettingsPanel', () => {
     expect(settings.getSnapshot().petId).toBe('cat')
   })
 
+  test('the page-era controls are gone; the desktop hint stands in', () => {
+    mount()
+    // Only name (text) and companion (checkbox) survive.
+    expect(container.querySelectorAll('input[type="range"]')).toHaveLength(0)
+    expect(container.querySelectorAll('input[type="text"]')).toHaveLength(1)
+    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(1)
+    expect(container.querySelector('section p')?.textContent).toContain('desktop app')
+  })
+
   test('imported desktop pets join the picker with a badge and a pretty title', async () => {
     const desktopPets = desktopPetsStore(['ai-sleepy-silver-wolf'])
     mount(desktopPets)

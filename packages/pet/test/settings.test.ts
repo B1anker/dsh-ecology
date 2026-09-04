@@ -6,12 +6,7 @@
 import { beforeEach, describe, expect, test } from '@rstest/core'
 import { createMockSettingsScopeBinder } from '@seaveyon/dsh-plugin-testkit'
 import type { SettingsScopeBinder } from '../src/client/host-types.js'
-import {
-  CONFIG_STORAGE_KEY,
-  DEFAULT_CONFIG,
-  MAX_SCALE,
-  PetSettingsStore,
-} from '../src/client/settings.js'
+import { CONFIG_STORAGE_KEY, DEFAULT_CONFIG, PetSettingsStore } from '../src/client/settings.js'
 
 /** Minimal in-memory Storage: jsdom's localStorage without the global state. */
 function memoryStorage(initial: Record<string, string> = {}): Storage {
@@ -61,12 +56,46 @@ describe('read precedence', () => {
     expect(store.getSnapshot()).toEqual(DEFAULT_CONFIG)
   })
 
-  test('stored values are sanitized: scale is clamped, junk dropped', () => {
+  test('the companion bridge defaults to on — driving the desktop pet is the job', () => {
+    expect(DEFAULT_CONFIG.companionEnabled).toBe(true)
+    const store = new PetSettingsStore({ storage: memoryStorage() })
+    expect(store.getSnapshot().companionEnabled).toBe(true)
+  })
+
+  test('legacy records carrying page-era fields (visible, scale) parse cleanly', () => {
     const storage = memoryStorage({
-      [CONFIG_STORAGE_KEY]: JSON.stringify({ scale: 99, visible: 'yes', name: 42 }),
+      [CONFIG_STORAGE_KEY]: JSON.stringify({
+        name: '豆豆',
+        visible: false,
+        scale: 1.8,
+        companionEnabled: false,
+      }),
     })
     const store = new PetSettingsStore({ storage })
-    expect(store.getSnapshot()).toEqual({ ...DEFAULT_CONFIG, scale: MAX_SCALE })
+    // The old fields are dropped on read, not resurrected into the config…
+    expect(store.getSnapshot()).toEqual({
+      ...DEFAULT_CONFIG,
+      name: '豆豆',
+      companionEnabled: false,
+    })
+    expect(store.getSnapshot()).not.toHaveProperty('visible')
+    expect(store.getSnapshot()).not.toHaveProperty('scale')
+  })
+
+  test('a legacy record without companionEnabled gets the new default, not the old one', () => {
+    const storage = memoryStorage({
+      [CONFIG_STORAGE_KEY]: JSON.stringify({ petId: 'cat' }),
+    })
+    const store = new PetSettingsStore({ storage })
+    expect(store.getSnapshot().companionEnabled).toBe(true)
+  })
+
+  test('stored values are sanitized: junk fields and wrong types are dropped', () => {
+    const storage = memoryStorage({
+      [CONFIG_STORAGE_KEY]: JSON.stringify({ visible: 'yes', name: 42, companionEnabled: 'no' }),
+    })
+    const store = new PetSettingsStore({ storage })
+    expect(store.getSnapshot()).toEqual(DEFAULT_CONFIG)
   })
 })
 
@@ -76,12 +105,12 @@ describe('write-through', () => {
     const storage = memoryStorage()
     const store = new PetSettingsStore({ binder, storage })
 
-    store.update({ name: 'Momo', scale: 1.5 })
+    store.update({ name: 'Momo', petId: 'cat' })
 
-    expect(binder.bound.get('dsh-pet')).toMatchObject({ name: 'Momo', scale: 1.5 })
+    expect(binder.bound.get('dsh-pet')).toMatchObject({ name: 'Momo', petId: 'cat' })
     expect(JSON.parse(storage.getItem(CONFIG_STORAGE_KEY)!)).toMatchObject({
       name: 'Momo',
-      scale: 1.5,
+      petId: 'cat',
     })
     expect(store.getSnapshot().name).toBe('Momo')
   })
@@ -99,7 +128,7 @@ describe('write-through', () => {
     const store = new PetSettingsStore({ storage: memoryStorage() })
     let calls = 0
     store.subscribe(() => calls++)
-    store.update({ visible: false })
+    store.update({ petId: 'robot' })
     expect(calls).toBe(1)
   })
 })
@@ -130,7 +159,7 @@ describe('degradation', () => {
 
   test('with no backends at all the store still works in memory', () => {
     const store = new PetSettingsStore({ storage: null as unknown as Storage })
-    store.update({ visible: false })
-    expect(store.getSnapshot().visible).toBe(false)
+    store.update({ companionEnabled: false })
+    expect(store.getSnapshot().companionEnabled).toBe(false)
   })
 })

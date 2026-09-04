@@ -14,22 +14,14 @@
 export type Locale = 'zh' | 'en'
 
 export interface Strings {
-  /** aria-label fallback when the pet has no name yet. */
-  defaultPetName: string
   /** Label of the settings section slot. */
   settingsSection: string
-  /** Bubble shown while the agent waits for user input. */
-  waitingHint: string
-  /** Tooltip/aria for the paw button that brings a hidden pet back. */
-  restorePet: string
   /** Settings panel: pet appearance picker. */
   appearanceLabel: string
+  /** Settings panel: note that the pet itself lives on the desktop. */
+  desktopHint: string
   /** Settings panel: rename input. */
   nameLabel: string
-  /** Settings panel: scale slider. */
-  scaleLabel: string
-  /** Settings panel: show/hide switch. */
-  visibleLabel: string
   /** Settings panel: desktop-companion bridge switch. */
   companionLabel: string
   /** Badge marking an imported desktop pet in the appearance picker. */
@@ -38,26 +30,18 @@ export interface Strings {
 
 const DICTIONARIES: Record<Locale, Strings> = {
   zh: {
-    defaultPetName: 'Mochi',
     settingsSection: '宠物',
-    waitingHint: '在等你回复…',
-    restorePet: '召回宠物',
     appearanceLabel: '形象',
+    desktopHint: '宠物显示在桌面 App 里，不在本页面上。',
     nameLabel: '名字',
-    scaleLabel: '大小',
-    visibleLabel: '显示宠物',
     companionLabel: '桌面伴侣',
     desktopPetBadge: '桌面',
   },
   en: {
-    defaultPetName: 'Mochi',
     settingsSection: 'Pet',
-    waitingHint: 'Waiting for you…',
-    restorePet: 'Bring the pet back',
     appearanceLabel: 'Appearance',
+    desktopHint: 'The pet lives in the desktop app, not on this page.',
     nameLabel: 'Name',
-    scaleLabel: 'Size',
-    visibleLabel: 'Show pet',
     companionLabel: 'Desktop companion',
     desktopPetBadge: 'Desktop',
   },

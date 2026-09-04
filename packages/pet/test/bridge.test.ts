@@ -62,9 +62,16 @@ function bareSettings(): PetSettingsStore {
 }
 
 /** The full wiring under test: store + machine + bridge + the fetch record. */
-function wire(options: { impl?: () => Promise<Response>; endpoint?: string } = {}) {
+function wire(
+  options: { impl?: () => Promise<Response>; endpoint?: string; companionEnabled?: boolean } = {},
+) {
   const stub = fetchStub(options.impl)
   const settings = bareSettings()
+  // The bridge announces on construction when the toggle allows it, so a test
+  // that wants the toggle off must set it before the bridge exists.
+  if (options.companionEnabled !== undefined) {
+    settings.update({ companionEnabled: options.companionEnabled })
+  }
   const machine = new PetStateMachine()
   const bridge = new DesktopBridge({
     settings,
@@ -77,7 +84,7 @@ function wire(options: { impl?: () => Promise<Response>; endpoint?: string } = {
 
 describe('gating', () => {
   test('with the toggle off, no state change ever sends a request', () => {
-    const { stub, settings, machine, bridge } = wire()
+    const { stub, settings, machine, bridge } = wire({ companionEnabled: false })
 
     machine.update(snap({ running: true }))
     machine.pet()
@@ -87,10 +94,8 @@ describe('gating', () => {
     bridge.dispose()
   })
 
-  test('flipping the toggle on announces the current state immediately', () => {
-    const { stub, settings, bridge } = wire()
-
-    settings.update({ companionEnabled: true })
+  test('the toggle defaults to on: a fresh bridge announces state immediately', () => {
+    const { stub, bridge } = wire()
 
     expect(stub.calls).toHaveLength(1)
     expect(stub.calls[0]?.url).toBe(DEFAULT_ENDPOINT)
@@ -104,20 +109,28 @@ describe('gating', () => {
     bridge.dispose()
   })
 
-  test('flipping the toggle back off stops the traffic', () => {
-    const { stub, settings, machine, bridge } = wire()
+  test('flipping the toggle on later announces the current state at that moment', () => {
+    const { stub, settings, bridge } = wire({ companionEnabled: false })
 
     settings.update({ companionEnabled: true })
+
+    expect(stub.calls).toHaveLength(1)
+    expect(JSON.parse(String(stub.calls[0]?.init?.body))).toMatchObject({ mood: 'idle' })
+    bridge.dispose()
+  })
+
+  test('flipping the toggle off stops the traffic', () => {
+    const { stub, settings, machine, bridge } = wire() // on by default: 1 announcement
+
     settings.update({ companionEnabled: false })
     machine.update(snap({ running: true }))
 
-    expect(stub.calls).toHaveLength(1) // only the announcement from enabling
+    expect(stub.calls).toHaveLength(1) // only the announcement from construction
     bridge.dispose()
   })
 
   test('a disposed bridge goes quiet even with the toggle on', () => {
-    const { stub, settings, machine, bridge } = wire()
-    settings.update({ companionEnabled: true })
+    const { stub, machine, bridge } = wire()
 
     bridge.dispose()
     machine.update(snap({ running: true }))
@@ -128,8 +141,7 @@ describe('gating', () => {
 
 describe('state pushes', () => {
   test('a mood change POSTs the new state to the companion endpoint', () => {
-    const { stub, settings, machine, bridge } = wire()
-    settings.update({ companionEnabled: true })
+    const { stub, machine, bridge } = wire()
 
     machine.update(snap({ running: true, runningCalls: [{ name: 'bash' }] }))
 
@@ -144,7 +156,6 @@ describe('state pushes', () => {
 
   test('renaming the pet pushes the new name; species changes too', () => {
     const { stub, settings, bridge } = wire()
-    settings.update({ companionEnabled: true })
 
     settings.update({ name: '豆豆', petId: 'cat' })
 
@@ -159,11 +170,11 @@ describe('state pushes', () => {
 
   test('notifications that change nothing are not re-sent', () => {
     const { stub, settings, machine, bridge } = wire()
-    settings.update({ companionEnabled: true })
 
-    // Same effective state arriving repeatedly: scale is not part of the
-    // payload, and re-feeding an unchanged snapshot keeps the mood.
-    settings.update({ scale: 1.5 })
+    // Same effective state arriving repeatedly: re-writing the same name is
+    // not part of the payload diff, and re-feeding an unchanged snapshot
+    // keeps the mood.
+    settings.update({ name: 'Mochi' })
     machine.update(snap())
     machine.tick()
 
@@ -172,8 +183,7 @@ describe('state pushes', () => {
   })
 
   test('the endpoint is injectable, and the port constant anchors the default', () => {
-    const { stub, settings, bridge } = wire({ endpoint: 'http://127.0.0.1:9/state' })
-    settings.update({ companionEnabled: true })
+    const { stub, bridge } = wire({ endpoint: 'http://127.0.0.1:9/state' })
 
     expect(stub.calls[0]?.url).toBe('http://127.0.0.1:9/state')
     expect(DEFAULT_ENDPOINT).toBe(`http://127.0.0.1:${DESKTOP_COMPANION_PORT}/state`)
@@ -187,12 +197,12 @@ describe('fire-and-forget', () => {
       impl: () => Promise.reject(new Error('connection refused')),
     })
 
-    expect(() => settings.update({ companionEnabled: true })).not.toThrow()
+    expect(() => settings.update({ name: 'Momo' })).not.toThrow()
     expect(() => machine.update(snap({ running: true }))).not.toThrow()
 
     // Both changes were attempted; the failure of the first changed nothing.
-    expect(stub.calls).toHaveLength(2)
-    expect(JSON.parse(String(stub.calls[1]?.init?.body))).toMatchObject({ mood: 'thinking' })
+    expect(stub.calls).toHaveLength(3)
+    expect(JSON.parse(String(stub.calls[2]?.init?.body))).toMatchObject({ mood: 'thinking' })
     bridge.dispose()
   })
 
@@ -203,8 +213,8 @@ describe('fire-and-forget', () => {
       },
     })
 
-    expect(() => settings.update({ companionEnabled: true })).not.toThrow()
-    expect(stub.calls).toHaveLength(1)
+    expect(() => settings.update({ name: 'Momo' })).not.toThrow()
+    expect(stub.calls).toHaveLength(2) // the announcement plus the rename
     bridge.dispose()
   })
 })

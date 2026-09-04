@@ -11,7 +11,7 @@
  *
  * Both backends are optional at runtime: a scope whose `bind` throws and a
  * storage that throws (private mode, disabled cookies) are both tolerated —
- * the store degrades to in-memory defaults instead of breaking the overlay.
+ * the store degrades to in-memory defaults instead of breaking the plugin.
  *
  * @module @seaveyon/dsh-pet/client/settings
  */
@@ -21,37 +21,36 @@ import type { BoundSettingsScope, SettingsScopeBinder } from './host-types.js'
 export interface PetConfig {
   name: string
   petId: string
-  scale: number
-  visible: boolean
-  /** Push state to the desktop companion app (see bridge.ts). Off by default. */
+  /**
+   * Push state to the desktop companion app (see bridge.ts). On by default:
+   * driving the desktop pet is the plugin's whole job, and a desktop app that
+   * isn't running makes the bridge fail silently, not noisily.
+   */
   companionEnabled: boolean
 }
 
 export const DEFAULT_CONFIG: PetConfig = {
   name: 'Mochi',
   petId: 'blob',
-  scale: 1,
-  visible: true,
-  companionEnabled: false,
+  companionEnabled: true,
 }
 
 export const CONFIG_STORAGE_KEY = 'dsh-pet:config'
 
-export const MIN_SCALE = 0.5
-export const MAX_SCALE = 2
 const MAX_NAME_LENGTH = 40
 
-/** Whatever partial junk a backend might hand back, narrowed field by field. */
+/**
+ * Whatever partial junk a backend might hand back, narrowed field by field.
+ * Fields from older versions (`visible`, `scale` — page-overlay concepts the
+ * desktop pivot removed) are simply not copied, so a stale stored record
+ * parses cleanly instead of breaking the store.
+ */
 function sanitize(raw: unknown): Partial<PetConfig> {
   if (typeof raw !== 'object' || raw === null) return {}
   const record = raw as Record<string, unknown>
   const out: Partial<PetConfig> = {}
   if (typeof record['name'] === 'string') out.name = record['name'].slice(0, MAX_NAME_LENGTH)
   if (typeof record['petId'] === 'string') out.petId = record['petId']
-  if (typeof record['scale'] === 'number' && Number.isFinite(record['scale'])) {
-    out.scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, record['scale']))
-  }
-  if (typeof record['visible'] === 'boolean') out.visible = record['visible']
   if (typeof record['companionEnabled'] === 'boolean')
     out.companionEnabled = record['companionEnabled']
   return out

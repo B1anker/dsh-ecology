@@ -4,10 +4,10 @@ import { defineConfig } from '@rstest/core'
  * Test configuration.
  *
  * The suite is jsdom-side throughout: the code under test is the browser
- * bundle, and its tests mount the overlay against the client doubles from
- * `@seaveyon/dsh-plugin-testkit`. Pure logic (mood derivation, settings
- * serialization, position clamping) runs in the same environment rather than
- * splitting the suite over two configs.
+ * bundle, and its tests drive the mood source and the settings panel against
+ * the client doubles from `@seaveyon/dsh-plugin-testkit`. Pure logic (mood
+ * derivation, settings serialization, the discovery store) runs in the same
+ * environment rather than splitting the suite over two configs.
  */
 export default defineConfig({
   testEnvironment: 'jsdom',
@@ -31,17 +31,18 @@ export default defineConfig({
     include: ['src/**/*.ts', 'src/**/*.tsx'],
     reporters: ['text', 'html'],
     thresholds: {
-      // Honest baseline for v0.1.x, set just under the current measurement
-      // (75.9 / 69.7 / 73.1 / 78.1). The overlay and settings-panel UI plus the
-      // SVG-heavy pet sprites are only partially exercised by the suite, so a
-      // 90% floor at this stage would be a wish, not a ratchet. Raise these
-      // numbers in steps as the UI suites grow during v1 — a threshold below
-      // the current number fails the build when a change removes coverage,
-      // which is the only thing it can usefully be.
-      statements: 74,
-      functions: 68,
-      branches: 70,
-      lines: 75,
+      // Ratcheted baseline, set just under the current measurement
+      // (91.4 / 85.6 / 95.2 / 92.6). The v1.3 desktop pivot deleted the
+      // page-side overlay — the suite's least-covered surface — and raised
+      // every ratio; what remains is the mood core, the bridge, and the
+      // settings panel, all of which the suite exercises closely. Raise these
+      // numbers in steps as the suites grow — a threshold below the current
+      // number fails the build when a change removes coverage, which is the
+      // only thing it can usefully be.
+      statements: 88,
+      functions: 82,
+      branches: 90,
+      lines: 89,
     },
   },
 })

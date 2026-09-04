@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from '@rstest/core'
-import { getPet, PET_STYLE_CSS, PETS } from '../src/client/pets.js'
+import { PET_STYLE_CSS, PETS } from '../src/client/pets.js'
 import { MOODS } from '../src/desktop.js'
 
 describe('PETS roster', () => {
@@ -37,7 +37,7 @@ describe('PETS roster', () => {
 })
 
 describe('deepseek-chan', () => {
-  const pet = getPet('deepseek-chan')
+  const pet = PETS.find((p) => p.id === 'deepseek-chan')!
 
   test('is named DeepSeek 酱 / DeepSeek-chan', () => {
     expect(pet.label).toEqual({ zh: 'DeepSeek 酱', en: 'DeepSeek-chan' })
@@ -81,15 +81,5 @@ describe('deepseek-chan', () => {
     expect(pet.svg('idle')).toContain('dsh-pet-blink')
     expect(pet.svg('celebrating')).not.toContain('class="dsh-pet-blink"')
     expect(pet.svg('sleeping')).toContain('dsh-pet-zzz')
-  })
-})
-
-describe('getPet', () => {
-  test('resolves a known id', () => {
-    expect(getPet('deepseek-chan').id).toBe('deepseek-chan')
-  })
-
-  test('falls back to the first pet for unknown ids', () => {
-    expect(getPet('nope').id).toBe(PETS[0]!.id)
   })
 })
