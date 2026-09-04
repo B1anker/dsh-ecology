@@ -1,7 +1,7 @@
 /**
  * The settings panel: the appearance picker is single-source. When the
  * desktop app answers /pets, its roster — built-ins included — is the whole
- * list (so deepseek-chan can never appear twice), with RasterPet strip
+ * list (a pet can never appear twice), with RasterPet strip
  * previews off the bridge server and localized names for known ids. Only a
  * proven-offline desktop falls back to the built-in SVG roster plus a "not
  * connected" hint. Discovery retries quietly a couple of times while the
@@ -47,7 +47,7 @@ function desktopPetFixture(id: string) {
 }
 
 /** The desktop manifest's shape in production: built-ins plus imports. */
-const DESKTOP_ROSTER = ['blob', 'cat', 'robot', 'deepseek-chan', 'ai-sleepy-silver-wolf']
+const DESKTOP_ROSTER = ['blob', 'cat', 'robot', 'ai-sleepy-silver-wolf']
 
 function desktopPetsStore(ids: string[]): DesktopPetsStore {
   const fetchFn = () =>
@@ -85,10 +85,10 @@ async function flushRefresh(store: DesktopPetsStore) {
 }
 
 describe('fallback (desktop unreachable or not asked yet)', () => {
-  test('lists the four built-in pets as SVG and selects one on click', () => {
+  test('lists the three built-in pets as SVG and selects one on click', () => {
     const { settings } = mount()
     const buttons = pickerButtons()
-    expect(buttons).toHaveLength(4)
+    expect(buttons).toHaveLength(3)
     expect(buttons[0]?.getAttribute('aria-pressed')).toBe('true') // blob is default
     expect(container.querySelector('svg[data-pet-id="blob"]')).not.toBeNull()
 
@@ -105,14 +105,14 @@ describe('fallback (desktop unreachable or not asked yet)', () => {
 
     await flushRefresh(desktopPets)
 
-    expect(pickerButtons()).toHaveLength(4)
+    expect(pickerButtons()).toHaveLength(3)
     expect(container.querySelector('section')?.textContent).toContain('Desktop app not connected')
   })
 
   test('no fetch yet (unknown) shows built-ins without the hint', () => {
     mount() // no store at all: nothing is ever asked
     expect(container.querySelector('section')?.textContent).not.toContain('not connected')
-    expect(pickerButtons()).toHaveLength(4)
+    expect(pickerButtons()).toHaveLength(3)
   })
 })
 
@@ -124,20 +124,11 @@ describe('single-source picker (desktop online)', () => {
     await flushRefresh(desktopPets)
 
     const buttons = pickerButtons()
-    expect(buttons).toHaveLength(5)
-    // Exactly one deepseek-chan entry, under its real localized name.
-    const chan = buttons.filter((b) => b.title === 'DeepSeek-chan')
-    expect(chan).toHaveLength(1)
-    expect(buttons.map((b) => b.title)).toEqual([
-      'Blob',
-      'Cat',
-      'Robot',
-      'DeepSeek-chan',
-      'Ai Sleepy Silver Wolf',
-    ])
+    expect(buttons).toHaveLength(4)
+    expect(buttons.map((b) => b.title)).toEqual(['Blob', 'Cat', 'Robot', 'Ai Sleepy Silver Wolf'])
     // Every preview is a raster strip off the bridge server, including the
     // built-ins — the SVG path only renders in the fallback.
-    expect(container.querySelectorAll('[data-dsh-pet-raster]')).toHaveLength(5)
+    expect(container.querySelectorAll('[data-dsh-pet-raster]')).toHaveLength(4)
     expect(container.querySelectorAll('svg[data-pet-id]')).toHaveLength(0)
   })
 
@@ -149,7 +140,7 @@ describe('single-source picker (desktop online)', () => {
     const buttons = pickerButtons()
     const wolf = buttons.find((b) => b.title === 'Ai Sleepy Silver Wolf')!
     expect(wolf.textContent).toContain('Imported')
-    for (const title of ['Blob', 'Cat', 'Robot', 'DeepSeek-chan']) {
+    for (const title of ['Blob', 'Cat', 'Robot']) {
       expect(buttons.find((b) => b.title === title)!.textContent).not.toContain('Imported')
     }
   })
@@ -194,7 +185,7 @@ describe('single-source picker (desktop online)', () => {
     expect(cat.getAttribute('aria-pressed')).toBe('true')
   })
 
-  test('localized names follow the locale (zh gets DeepSeek 酱)', async () => {
+  test('localized names follow the locale', async () => {
     const original = Object.getOwnPropertyDescriptor(Navigator.prototype, 'language')
     Object.defineProperty(Navigator.prototype, 'language', {
       configurable: true,
@@ -210,7 +201,6 @@ describe('single-source picker (desktop online)', () => {
         '果冻团',
         '猫猫',
         '机器人',
-        'DeepSeek 酱',
         'Ai Sleepy Silver Wolf',
       ])
       expect(buttons.find((b) => b.title === 'Ai Sleepy Silver Wolf')!.textContent).toContain(
@@ -241,7 +231,7 @@ describe('discovery retry', () => {
     })
 
     expect(calls).toBe(2)
-    expect(pickerButtons()).toHaveLength(5)
+    expect(pickerButtons()).toHaveLength(4)
     expect(pickerButtons().some((b) => b.title === 'Ai Sleepy Silver Wolf')).toBe(true)
   })
 
@@ -259,7 +249,7 @@ describe('discovery retry', () => {
     })
 
     expect(calls).toBe(3) // initial attempt + 2 retries
-    expect(pickerButtons()).toHaveLength(4)
+    expect(pickerButtons()).toHaveLength(3)
     expect(container.querySelector('section')?.textContent).toContain('Desktop app not connected')
   })
 })
