@@ -1,6 +1,6 @@
 .{
-    .id = "dev.seaveyon.dsh-pet",
-    .name = "dsh-pet",
+    .id = "dev.seaveyon.dsh-pet-desktop",
+    .name = "dsh-pet-desktop",
     .display_name = "DSH Pet",
     .description = "Desktop pet for the DSH Web surface: transparent always-on-top chromeless canvas window driven by the plugin's mood state.",
     .version = "0.1.0",

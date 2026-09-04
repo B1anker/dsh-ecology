@@ -1,4 +1,4 @@
-//! dsh-pet view: one centered, atlas-cropped image inside a root
+//! dsh-pet-desktop view: one centered, atlas-cropped image inside a root
 //! container that is the press target, the drag source, and the
 //! context-menu owner.
 //!

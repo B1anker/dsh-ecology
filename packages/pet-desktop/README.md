@@ -21,7 +21,7 @@ see `docs/` for the porting notes.
 ## Commands
 
 ```sh
-zig build          # or: bun run build   -> zig-out/bin/dsh-pet
+zig build          # or: bun run build   -> zig-out/bin/dsh-pet-desktop
 zig build run      # or: bun run run     -> build (ReleaseFast) and launch
 zig build test     # unit tests; never pass -Doptimize=Debug here (framework linking bug)
 ```
@@ -29,7 +29,7 @@ zig build test     # unit tests; never pass -Doptimize=Debug here (framework lin
 **Asset paths resolve against the process working directory** (the runtime's
 image loader opens `assets/sprites/...` cwd-relative; only a packaged `.app`
 bundle resolves them against `Contents/Resources` instead). So run the
-`zig-out/bin/dsh-pet` binary from the package directory, exactly as
+`zig-out/bin/dsh-pet-desktop` binary from the package directory, exactly as
 `zig build run` does.
 
 ## Sprites
@@ -160,7 +160,7 @@ channel (`fx.openChannel` → thread-safe `ChannelHandle.post`, the
 ## Layout
 
 ```
-app.zon          app manifest (id dev.seaveyon.dsh-pet, window/shell, image budget)
+app.zon          app manifest (id dev.seaveyon.dsh-pet-desktop, window/shell, image budget)
 build.zig        native_sdk.addApp graph
 build.zig.zon    SDK tarball dependency (locked sha + hash)
 assets/sprites/  baked strips + manifest.json (single source for frame geometry)

@@ -1,4 +1,4 @@
-//! dsh-pet model: the runtime-parsed sprite manifest (src/manifest.zig,
+//! dsh-pet-desktop model: the runtime-parsed sprite manifest (src/manifest.zig,
 //! the single source for strip geometry), a manifest-paced repeating
 //! frame timer, the plugin state bridge (HTTP server thread ->
 //! external-source channel -> state_event Msgs), and the press/quit
@@ -318,11 +318,11 @@ fn switchPet(model: *Model, fx: *Effects, new_pet: usize) void {
 /// reintroduce).
 pub fn boot(model: *Model, fx: *Effects) void {
     manifest.load("assets/sprites/manifest.json") catch |err| {
-        std.debug.print("dsh-pet: sprite manifest load failed: {s}\n", .{@errorName(err)});
+        std.debug.print("dsh-pet-desktop: sprite manifest load failed: {s}\n", .{@errorName(err)});
     };
     model.manifest_ok = manifest.current() != null;
     if (manifest.current()) |m| {
-        std.debug.print("dsh-pet: sprite manifest: {d} pet(s) scale={d} frame={d}pt\n", .{ m.pet_count, m.scale, m.frame_size });
+        std.debug.print("dsh-pet-desktop: sprite manifest: {d} pet(s) scale={d} frame={d}pt\n", .{ m.pet_count, m.scale, m.frame_size });
     }
     loadPetSet(model, fx);
     startFrameTimer(fx, currentIntervalMs(model));
@@ -358,13 +358,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .image_done => |result| {
             const decoded = manifest.decodeImageId(result.id) orelse {
-                std.debug.print("dsh-pet: image_done for unknown id={d}\n", .{result.id});
+                std.debug.print("dsh-pet-desktop: image_done for unknown id={d}\n", .{result.id});
                 return;
             };
             const mood_index = @intFromEnum(decoded.mood);
             if (result.outcome != .loaded) {
                 model.strip_status[decoded.pet][mood_index] = .unloaded;
-                std.debug.print("dsh-pet: strip load failed pet={d} mood={s} outcome={s}\n", .{ decoded.pet, @tagName(decoded.mood), @tagName(result.outcome) });
+                std.debug.print("dsh-pet-desktop: strip load failed pet={d} mood={s} outcome={s}\n", .{ decoded.pet, @tagName(decoded.mood), @tagName(result.outcome) });
                 return;
             }
             if (decoded.pet != model.active_pet) {
@@ -374,13 +374,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 // registry slots forever.
                 _ = fx.unregisterImage(result.id);
                 model.strip_status[decoded.pet][mood_index] = .unloaded;
-                std.debug.print("dsh-pet: stale strip released pet={d} mood={s}\n", .{ decoded.pet, @tagName(decoded.mood) });
+                std.debug.print("dsh-pet-desktop: stale strip released pet={d} mood={s}\n", .{ decoded.pet, @tagName(decoded.mood) });
                 return;
             }
             model.strip_status[decoded.pet][mood_index] = .loaded;
             model.strip_width[decoded.pet][mood_index] = @intCast(result.width);
             model.strip_height[decoded.pet][mood_index] = @intCast(result.height);
-            std.debug.print("dsh-pet: strip loaded pet={d} mood={s} {d}x{d}\n", .{ decoded.pet, @tagName(decoded.mood), result.width, result.height });
+            std.debug.print("dsh-pet-desktop: strip loaded pet={d} mood={s} {d}x{d}\n", .{ decoded.pet, @tagName(decoded.mood), result.width, result.height });
         },
         .state_event => |event| switch (event.kind) {
             .data => {
@@ -389,7 +389,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     const new_pet = blk: {
                         const m = manifest.current() orelse break :blk fallback_pet_index;
                         break :blk m.petIndex(model.petId()) orelse {
-                            std.debug.print("dsh-pet: unknown petId \"{s}\", falling back to blob\n", .{model.petId()});
+                            std.debug.print("dsh-pet-desktop: unknown petId \"{s}\", falling back to blob\n", .{model.petId()});
                             break :blk fallback_pet_index;
                         };
                     };
@@ -400,16 +400,16 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     model.frame_index = 0;
                     startFrameTimer(fx, currentIntervalMs(model));
                 }
-                std.debug.print("dsh-pet: state #{d} mood={s} pet={s} name={s}\n", .{ model.state_updates, @tagName(model.mood), model.petId(), model.petName() });
+                std.debug.print("dsh-pet-desktop: state #{d} mood={s} pet={s} name={s}\n", .{ model.state_updates, @tagName(model.mood), model.petId(), model.petName() });
             },
             .closed => {
                 model.bridge_live = false;
-                std.debug.print("dsh-pet: state channel closed\n", .{});
+                std.debug.print("dsh-pet-desktop: state channel closed\n", .{});
             },
             .rejected => {
                 model.bridge_live = false;
                 model.bridge_failed = true;
-                std.debug.print("dsh-pet: state channel rejected\n", .{});
+                std.debug.print("dsh-pet-desktop: state channel rejected\n", .{});
             },
         },
         .press => {
@@ -422,12 +422,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             if (model.dragging) return;
             if (model.drag_end_ms != 0 and monotonicMs() - model.drag_end_ms < 250) {
                 model.drag_end_ms = 0;
-                std.debug.print("dsh-pet: press suppressed (post-drag release)\n", .{});
+                std.debug.print("dsh-pet-desktop: press suppressed (post-drag release)\n", .{});
                 return;
             }
             model.press_count += 1;
             model.zoomed = !model.zoomed;
-            std.debug.print("dsh-pet: press #{d} zoomed={}\n", .{ model.press_count, model.zoomed });
+            std.debug.print("dsh-pet-desktop: press #{d} zoomed={}\n", .{ model.press_count, model.zoomed });
         },
         // The runtime slop-filters drag gestures (6px): sub-slop motion
         // never reaches us and its release stays an ordinary press, so
@@ -486,7 +486,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 // button-up ends the drag; the poll tick detects it.
                 if (appkit.leftMouseDown()) {
                     model.spurious_ends += 1;
-                    std.debug.print("dsh-pet: drag end/cancel ignored (button down) phase={d} events={d} polls={d}\n", .{ d.phase, model.drag_events, model.poll_ticks });
+                    std.debug.print("dsh-pet-desktop: drag end/cancel ignored (button down) phase={d} events={d} polls={d}\n", .{ d.phase, model.drag_events, model.poll_ticks });
                     return;
                 }
                 endDrag(model, fx, "event");
@@ -509,7 +509,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.poll_ticks += 1;
             if (model.poll_ticks % 60 == 0) {
                 const elapsed_ms = monotonicMs() - model.drag_start_ms;
-                std.debug.print("dsh-pet: drag poll ticks={d} events={d} elapsed_ms={d} origin=({d:.1},{d:.1})\n", .{ model.poll_ticks, model.drag_events, elapsed_ms, ml.x - model.grab_offset_x, ml.y - model.grab_offset_y });
+                std.debug.print("dsh-pet-desktop: drag poll ticks={d} events={d} elapsed_ms={d} origin=({d:.1},{d:.1})\n", .{ model.poll_ticks, model.drag_events, elapsed_ms, ml.x - model.grab_offset_x, ml.y - model.grab_offset_y });
             }
         },
         .quit => fx.quitApp(),
@@ -524,7 +524,7 @@ fn endDrag(model: *Model, fx: *Effects, reason: [*:0]const u8) void {
     fx.cancelTimer(drag_poll_timer_key);
     model.drag_end_ms = monotonicMs();
     const elapsed_ms = model.drag_end_ms - model.drag_start_ms;
-    std.debug.print("dsh-pet: drag end ({s}) events={d} polls={d} spurious_ends={d} elapsed_ms={d}\n", .{ reason, model.drag_events, model.poll_ticks, model.spurious_ends, elapsed_ms });
+    std.debug.print("dsh-pet-desktop: drag end ({s}) events={d} polls={d} spurious_ends={d} elapsed_ms={d}\n", .{ reason, model.drag_events, model.poll_ticks, model.spurious_ends, elapsed_ms });
 }
 
 /// Absolute drag mapping. NSEvent.mouseLocation and

@@ -1,4 +1,4 @@
-// dsh-pet builds through the framework's standard app graph
+// dsh-pet-desktop builds through the framework's standard app graph
 // (`native_sdk.addApp`): the SDK is a locked-commit tarball dependency in
 // build.zig.zon (github.com/vercel-labs/zero-native @ 5665a35), and the
 // graph wires the SDK modules, the app runner, and the platform link
@@ -9,5 +9,5 @@ const std = @import("std");
 const native_sdk = @import("native_sdk");
 
 pub fn build(b: *std.Build) void {
-    native_sdk.addApp(b, b.dependency("native_sdk", .{}), .{ .name = "dsh-pet" });
+    native_sdk.addApp(b, b.dependency("native_sdk", .{}), .{ .name = "dsh-pet-desktop" });
 }

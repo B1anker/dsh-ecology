@@ -1,4 +1,4 @@
-//! dsh-pet state wire format: the JSON the DSH Web plugin POSTs to
+//! dsh-pet-desktop state wire format: the JSON the DSH Web plugin POSTs to
 //! /state, the Mood enum shared with the plugin's own `Mood` type
 //! (packages/pet src/client/mood.ts — mirrored by hand; the baking
 //! pipeline consumes the TS export), and the compact tab-separated line
