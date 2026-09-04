@@ -1,0 +1,74 @@
+{
+  "name": "@seaveyon/dsh-world-line",
+  "version": "0.1.0",
+  "description": "Safe change manager for DSH profiles: divergence labs, lastKnownGood snapshots, and a local time machine for profile and plugin composition",
+  "keywords": [
+    "dsh",
+    "profile",
+    "plugin",
+    "snapshot",
+    "time-machine",
+    "recovery",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "B1anker",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "bin": {
+    "dsh-world-line": "./bin/dsh-world-line.mjs",
+    "world-line": "./bin/dsh-world-line.mjs"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "docs/",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/B1anker/dsh-ecology.git",
+    "directory": "packages/world-line"
+  },
+  "homepage": "https://github.com/B1anker/dsh-ecology/tree/main/packages/world-line#readme",
+  "bugs": {
+    "url": "https://github.com/B1anker/dsh-ecology/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "js-yaml": "4.3.1"
+  },
+  "devDependencies": {
+    "@rstest/core": "^0.11.9",
+    "@rstest/coverage-v8": "^0.11.9",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "test": "bun run build && rstest run",
+    "test:unit": "rstest run",
+    "test:coverage": "rstest run --coverage",
+    "test:real": "bun run build && node scripts/evidence.mjs",
+    "test:real:phase2": "node scripts/evidence-phase2.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pack:check": "bun run build && npm pack --dry-run",
+    "test:real:phase2:cli": "bun scripts/evidence-phase2-cli.mjs"
+  }
+}
