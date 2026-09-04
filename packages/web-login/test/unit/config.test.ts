@@ -19,10 +19,13 @@ function bad(config: unknown): () => unknown {
 
 /** Defaults after path resolution, which depends on DSH_HOME. */
 function resolvedDefaults(env: NodeJS.ProcessEnv = process.env) {
+  const authRoot = `${env.DSH_HOME ?? `${env.HOME}/.dsh`}/auth/dsh-web-login`
   return {
     ...DEFAULTS,
     authorizationFile: defaultAuthorizationPath(env),
     recoveryFile: defaultRecoveryPath(env),
+    sessionFile: `${authRoot}/sessions.json`,
+    auditFile: `${authRoot}/audit.jsonl`,
   }
 }
 
@@ -80,7 +83,13 @@ test('an over-long title is rejected', () => {
 })
 
 test('boolean settings reject truthy non-booleans', () => {
-  for (const key of ['secureCookie', 'trustProxy', 'githubEnabled'] as const) {
+  for (const key of [
+    'secureCookie',
+    'trustProxy',
+    'githubEnabled',
+    'persistentSessions',
+    'auditEnabled',
+  ] as const) {
     expect(bad({ [key]: 'true' }), `${key} string`).toThrow(TypeError)
     expect(bad({ [key]: 1 }), `${key} number`).toThrow(TypeError)
   }

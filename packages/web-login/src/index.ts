@@ -22,8 +22,7 @@
  *   - Optional GitHub OAuth (`githubEnabled`) binds a stable numeric GitHub id
  *     as the authorized owner, then admits only that identity on later visits.
  *   - Sessions are opaque random ids behind an HttpOnly, SameSite=Strict
- *     cookie, held in memory. A restart signs everyone out, which is the right
- *     trade for a single-operator deployment: no key material on disk.
+ *     cookie, optionally retained in a private local session file.
  *
  * Decoration alone is not sufficient, and this is the subtle part. dsh loader
  * entries activate concurrently, so a route owner that registers during the
@@ -41,8 +40,10 @@
  * @module @seaveyon/dsh-web-login
  */
 
+import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createAttemptLimiter } from './attempt-limiter.js'
+import { createSecurityAudit } from './audit.js'
 import {
   type AuthLifecycle,
   type AuthorizationDocument,
@@ -148,6 +149,17 @@ function requestPathname(req: IncomingMessage): string {
   }
 }
 
+/** Let DSH validate and redeem its one-time BrowserAuth launch token. */
+function isBrowserAuthLaunchRequest(req: IncomingMessage): boolean {
+  if (req.method !== 'GET') return false
+  try {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    return url.pathname === '/' && url.searchParams.has('token')
+  } catch {
+    return false
+  }
+}
+
 /** Where a successful sign-in lands. Fixed, so there is no redirect parameter to poison. */
 const HOME_PATH = '/'
 
@@ -172,7 +184,8 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   // serving an open port because a variable was unset is the one outcome a
   // login plugin must never produce.
   const options = resolveConfig(config)
-  const verifier = requireVerifier(process.env[options.passwordHashEnv], options.passwordHashEnv)
+  const verifierText = process.env[options.passwordHashEnv]
+  const verifier = requireVerifier(verifierText, options.passwordHashEnv)
 
   let githubCredentials: GitHubAppCredentials | undefined
   if (options.githubEnabled) {
@@ -197,7 +210,18 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   const sessions = createSessionStore({
     ttlMs: options.sessionTtlMs,
     maxSessions: options.maxSessions,
+    persistentFile: options.persistentSessions ? options.sessionFile : undefined,
+    binding: createHash('sha256')
+      .update(verifierText ?? '')
+      .digest('hex'),
   })
+  const audit = options.auditEnabled
+    ? createSecurityAudit(options.auditFile, undefined, (error) =>
+        ctx.logger.warn(
+          `dsh-web-login: could not append security audit: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      )
+    : undefined
   const limiter = createAttemptLimiter({
     limit: options.attemptLimit,
     windowMs: options.attemptWindowMs,
@@ -321,6 +345,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     const id = sessions.open(principal)
     if (id === null) return false
     if (priorSessionId !== undefined) sessions.revoke(priorSessionId)
+    audit?.record('login_succeeded', { provider: principal.provider })
     sendRedirect(res, 303, HOME_PATH, {
       'set-cookie': serializeSessionCookie(id, {
         maxAgeSeconds: options.sessionTtlMs / 1000,
@@ -346,6 +371,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     const id = sessions.open(principal)
     if (id === null) return false
     if (priorSessionId !== undefined) sessions.revoke(priorSessionId)
+    audit?.record('login_succeeded', { provider: principal.provider })
     sendHtml(res, 200, renderOAuthContinuePage(options.title), {
       'set-cookie': serializeSessionCookie(id, {
         maxAgeSeconds: options.sessionTtlMs / 1000,
@@ -420,7 +446,11 @@ export function apply(ctx: PluginContext, config?: unknown): void {
 
   const decoratedRegisterFallback: WebServerService['registerFallback'] = (handler) =>
     originalRegisterFallback(async (req, res) => {
-      if (isAuthenticated(req) || ANON_STATIC_PATHS.has(requestPathname(req))) {
+      if (
+        isAuthenticated(req) ||
+        ANON_STATIC_PATHS.has(requestPathname(req)) ||
+        isBrowserAuthLaunchRequest(req)
+      ) {
         await handler(req, res)
         return
       }
@@ -609,6 +639,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
           const blockedFor = limiter.retryAfterMs(key)
           if (blockedFor > 0) {
             const seconds = Math.ceil(blockedFor / 1000)
+            audit?.record('login_throttled', { client: key, retryAfterSeconds: seconds })
             sendHtml(
               res,
               429,
@@ -637,6 +668,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
           const matched = await kdf.run(() => verifyPassword(password, verifier))
           if (matched === null) {
             ctx.logger.warn('dsh-web-login: sign-in queue full; refusing to start another hash')
+            audit?.record('login_throttled', { client: key, reason: 'verification_queue_full' })
             sendHtml(
               res,
               503,
@@ -656,6 +688,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
           if (!matched) {
             const waitMs = limiter.fail(key)
             ctx.logger.warn(`dsh-web-login: failed attempt from ${key}`)
+            audit?.record('login_failed', { client: key })
             if (waitMs > 0) {
               const seconds = Math.ceil(waitMs / 1000)
               sendHtml(
@@ -692,6 +725,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
           const id = sessions.open(principal)
           if (id === null) {
             ctx.logger.warn('dsh-web-login: session capacity reached; refusing new sign-in')
+            audit?.record('session_capacity_reached', { client: key })
             sendHtml(
               res,
               503,
@@ -706,6 +740,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
           }
 
           limiter.succeed(key)
+          audit?.record('login_succeeded', { client: key, provider: principal.provider })
           if (principal.provider === 'password-bootstrap') {
             // Land on the enroll affordance rather than the guarded home.
             sendRedirect(res, 303, LOGIN_PATH, {
@@ -738,6 +773,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
             return
           }
           sessions.revoke(readCookie(req.headers.cookie, cookieName))
+          audit?.record('logout', { client: clientKey(req, options) })
           sendRedirect(res, 303, LOGIN_PATH, {
             'set-cookie': serializeClearedCookies({ secure: options.secureCookie }),
           })
@@ -1090,6 +1126,8 @@ export function apply(ctx: PluginContext, config?: unknown): void {
                 authDocument = document
                 lifecycle = 'active'
                 sessions.revokeAll()
+                audit?.record('sessions_revoked_all', { reason: 'authorization_changed' })
+                audit?.record('authorization_changed')
                 await clearRecoveryRecord(options.recoveryFile).catch(() => undefined)
                 ctx.logger.info(`dsh-web-login: enrolled GitHub owner id=${user.id}`)
                 const admitted = admitFromOAuth(res, {
@@ -1278,6 +1316,8 @@ export function apply(ctx: PluginContext, config?: unknown): void {
             authDocument = cleared
             lifecycle = 'bootstrap'
             sessions.revokeAll()
+            audit?.record('sessions_revoked_all', { reason: 'recovery_used' })
+            audit?.record('recovery_used')
             const id = sessions.open({
               provider: 'recovery',
               role: 'owner',

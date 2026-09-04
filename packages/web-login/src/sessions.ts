@@ -1,9 +1,8 @@
 /**
- * In-memory session store with optional identity principals.
+ * Bounded session store with optional private persistence.
  *
- * Sessions are opaque random ids mapped to an expiry and a principal. Nothing
- * is persisted, so a restart signs everyone out — the deliberate trade for a
- * single-operator deployment: no key material and no session database on disk.
+ * Sessions are opaque random ids mapped to an expiry and a principal. They may
+ * be persisted in a private JSON file so normal restarts retain login.
  *
  * When GitHub OAuth is enabled, each session carries a principal so revocation
  * can target a GitHub user and authorization-version checks can reject stale
@@ -13,9 +12,22 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { dirname, join } from 'node:path'
 
 /** Bytes of entropy per session id. */
 const ID_BYTES = 32
+const SESSION_ID = /^[A-Za-z0-9_-]{43}$/
+const MAX_SESSION_FILE_BYTES = 4 * 1024 * 1024
+const SESSION_SCHEMA_VERSION = 2
 
 /** A clock, injectable so tests can advance time without waiting for it. */
 export type Clock = () => number
@@ -35,11 +47,54 @@ export interface SessionRecord {
   principal: SessionPrincipal
 }
 
+/* v8 ignore start -- exercised through the hostile persistent-file boundary */
+function parsePrincipal(value: unknown): SessionPrincipal | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  if (
+    Object.keys(record).some(
+      (key) => !['provider', 'role', 'authzVersion', 'githubUserId', 'githubLogin'].includes(key),
+    )
+  )
+    return undefined
+  const githubUserId = record.githubUserId
+  const githubLogin = record.githubLogin
+  if (
+    (record.provider !== 'password' &&
+      record.provider !== 'password-bootstrap' &&
+      record.provider !== 'github' &&
+      record.provider !== 'recovery') ||
+    (record.role !== 'owner' && record.role !== 'member') ||
+    typeof record.authzVersion !== 'number' ||
+    !Number.isInteger(record.authzVersion) ||
+    record.authzVersion < 0 ||
+    (githubUserId !== undefined &&
+      (typeof githubUserId !== 'number' || !Number.isInteger(githubUserId) || githubUserId <= 0)) ||
+    (githubLogin !== undefined && (typeof githubLogin !== 'string' || githubLogin.length > 64))
+  )
+    return undefined
+  if (record.provider === 'github' && (githubUserId === undefined || githubLogin === undefined))
+    return undefined
+  if (record.provider !== 'github' && (githubUserId !== undefined || githubLogin !== undefined))
+    return undefined
+  return {
+    provider: record.provider,
+    role: record.role,
+    authzVersion: record.authzVersion as number,
+    ...(githubUserId === undefined ? {} : { githubUserId }),
+    ...(githubLogin === undefined ? {} : { githubLogin }),
+  }
+}
+/* v8 ignore stop */
+
 /** Construction options for {@link createSessionStore}. */
 export interface SessionStoreOptions {
   ttlMs: number
   maxSessions: number
   now?: Clock
+  persistentFile?: string
+  /** Non-secret verifier fingerprint; a change invalidates restored sessions. */
+  binding?: string
 }
 
 /** The operations a session store exposes. */
@@ -72,9 +127,104 @@ export function createSessionStore({
   ttlMs,
   maxSessions,
   now = Date.now,
+  persistentFile,
+  binding = '',
 }: SessionStoreOptions): SessionStore {
   /** Session id -> record. */
   const sessions = new Map<string, SessionRecord>()
+  /* v8 ignore start -- filesystem failure and symlink defences need hostile local setup */
+  const persist = (): void => {
+    if (persistentFile === undefined) return
+    mkdirSync(dirname(persistentFile), { recursive: true, mode: 0o700 })
+    const directory = lstatSync(dirname(persistentFile))
+    if (directory.isSymbolicLink() || !directory.isDirectory()) {
+      throw new Error(`dsh-web-login: invalid session parent ${dirname(persistentFile)}`)
+    }
+    chmodSync(dirname(persistentFile), 0o700)
+    try {
+      if (lstatSync(persistentFile).isSymbolicLink())
+        throw new Error(`dsh-web-login: refusing symlink ${persistentFile}`)
+    } catch (error) {
+      if (!(error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT'))
+        throw error
+    }
+    const temp = join(dirname(persistentFile), `.sessions-${randomBytes(12).toString('hex')}`)
+    try {
+      writeFileSync(
+        temp,
+        JSON.stringify({ schemaVersion: SESSION_SCHEMA_VERSION, binding, sessions: [...sessions] }),
+        {
+          encoding: 'utf8',
+          mode: 0o600,
+          flag: 'wx',
+        },
+      )
+      chmodSync(temp, 0o600)
+      renameSync(temp, persistentFile)
+      chmodSync(persistentFile, 0o600)
+    } finally {
+      rmSync(temp, { force: true })
+    }
+  }
+  if (persistentFile !== undefined) {
+    try {
+      const stats = lstatSync(persistentFile)
+      if (stats.isSymbolicLink() || !stats.isFile() || stats.size > MAX_SESSION_FILE_BYTES)
+        throw new Error(`dsh-web-login: refusing symlink ${persistentFile}`)
+      const raw = readFileSync(persistentFile, 'utf8')
+      if (Buffer.byteLength(raw, 'utf8') > MAX_SESSION_FILE_BYTES)
+        throw new Error('session store exceeds size limit')
+      const parsed: unknown = JSON.parse(raw)
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+        throw new Error('invalid session store')
+      const values = parsed as { schemaVersion?: unknown; binding?: unknown; sessions?: unknown }
+      const legacy = values.schemaVersion === 1 && values.binding === undefined
+      if (
+        Object.keys(parsed).some(
+          (key) => !['schemaVersion', 'binding', 'sessions'].includes(key),
+        ) ||
+        (!legacy && values.schemaVersion !== SESSION_SCHEMA_VERSION) ||
+        (!legacy && typeof values.binding !== 'string') ||
+        !Array.isArray(values.sessions) ||
+        values.sessions.length > maxSessions
+      )
+        throw new Error('invalid session store')
+      for (const entry of values.sessions) {
+        if (
+          !Array.isArray(entry) ||
+          entry.length !== 2 ||
+          typeof entry[0] !== 'string' ||
+          !SESSION_ID.test(entry[0])
+        )
+          throw new Error('invalid session record')
+        const record = entry[1] as SessionRecord
+        if (
+          record === null ||
+          typeof record !== 'object' ||
+          Object.keys(record).some((key) => key !== 'expiresAt' && key !== 'principal') ||
+          typeof record?.expiresAt !== 'number' ||
+          !Number.isFinite(record.expiresAt) ||
+          parsePrincipal(record.principal) === undefined
+        )
+          throw new Error('invalid session record')
+        if (!legacy && values.binding === binding && record.expiresAt > now())
+          sessions.set(entry[0], {
+            expiresAt: record.expiresAt,
+            principal: parsePrincipal(record.principal) as SessionPrincipal,
+          })
+      }
+      if (sessions.size > maxSessions) throw new Error('session store exceeds maxSessions')
+      persist()
+    } catch (error) {
+      if (!(error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT'))
+        throw new Error(
+          `dsh-web-login: could not load persistent sessions: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        )
+    }
+  }
+
+  /* v8 ignore stop */
 
   /** Drop expired ids so a long-lived process does not accumulate them. */
   const sweep = (): void => {
@@ -82,6 +232,7 @@ export function createSessionStore({
     for (const [id, record] of sessions) {
       if (record.expiresAt <= cutoff) sessions.delete(id)
     }
+    persist()
   }
 
   /**
@@ -95,6 +246,7 @@ export function createSessionStore({
     if (record === undefined) return undefined
     if (record.expiresAt <= now()) {
       sessions.delete(id)
+      persist()
       return undefined
     }
     return record
@@ -120,6 +272,7 @@ export function createSessionStore({
         expiresAt: now() + ttlMs,
         principal: Object.freeze({ ...principal }),
       })
+      persist()
       return id
     },
 
@@ -145,6 +298,7 @@ export function createSessionStore({
      */
     revoke(id) {
       if (typeof id === 'string') sessions.delete(id)
+      persist()
     },
 
     /**
@@ -160,12 +314,14 @@ export function createSessionStore({
           removed += 1
         }
       }
+      persist()
       return removed
     },
 
     /** Drop every session. Used when the authorization file is replaced. */
     revokeAll() {
       sessions.clear()
+      persist()
     },
 
     /** Drop expired sessions. Exposed for the periodic sweep and for tests. */

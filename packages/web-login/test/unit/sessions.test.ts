@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { expect, test } from '@rstest/core'
 import {
   createSessionStore,
@@ -133,4 +136,65 @@ test('revokeAll clears the store', () => {
   store.open(GITHUB_OWNER)
   store.revokeAll()
   expect(store.size).toBe(0)
+})
+
+test('a private store restores unexpired sessions after restart and persists revocation', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-web-login-sessions-'))
+  const file = join(dir, 'sessions.json')
+  try {
+    const first = createSessionStore({ ttlMs: 1000, maxSessions: 10, persistentFile: file })
+    const id = first.open(PASSWORD_PRINCIPAL)
+    expect(
+      createSessionStore({ ttlMs: 1000, maxSessions: 10, persistentFile: file }).isLive(id),
+    ).toBe(true)
+    first.revoke(id)
+    expect(
+      createSessionStore({ ttlMs: 1000, maxSessions: 10, persistentFile: file }).isLive(id),
+    ).toBe(false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('persistent sessions fail closed on an invalid bearer id or principal', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-web-login-invalid-sessions-'))
+  const file = join(dir, 'sessions.json')
+  try {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        sessions: [['short', { expiresAt: Date.now() + 1000, principal: PASSWORD_PRINCIPAL }]],
+      }),
+    )
+    expect(() =>
+      createSessionStore({ ttlMs: 1000, maxSessions: 10, persistentFile: file }),
+    ).toThrow(/invalid session record/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('changing the password binding invalidates every restored session', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-web-login-session-binding-'))
+  const file = join(dir, 'sessions.json')
+  try {
+    const first = createSessionStore({
+      ttlMs: 1000,
+      maxSessions: 10,
+      persistentFile: file,
+      binding: 'old',
+    })
+    const id = first.open(PASSWORD_PRINCIPAL)
+    expect(
+      createSessionStore({
+        ttlMs: 1000,
+        maxSessions: 10,
+        persistentFile: file,
+        binding: 'new',
+      }).isLive(id),
+    ).toBe(false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

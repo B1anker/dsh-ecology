@@ -127,6 +127,8 @@ async function fixture(overrides: LoginConfig = {}): Promise<Fixture> {
     apply(ctx, {
       passwordHashEnv: ENV_NAME,
       secureCookie: false,
+      persistentSessions: false,
+      auditEnabled: false,
       sessionTtlMs: 60_000,
       maxSessions: 10,
       attemptLimit: 3,
@@ -279,6 +281,24 @@ test('anonymous document navigation is redirected to /login', async () => {
     expect(response.headers.location).toBe('/login')
     expect(response.headers['cache-control']).toBe('no-store')
     expect(response.body).toBe('')
+  })
+})
+
+test('a DSH BrowserAuth launch token reaches the downstream fallback before password login', async () => {
+  await withFixture({}, async ({ port }) => {
+    const response = await request(port, '/?token=launch-token', {
+      headers: { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' },
+    })
+    expect(response.status).toBe(200)
+    expect(response.body).toBe('<main>spa</main>')
+  })
+})
+
+test('a token query cannot make an arbitrary fallback path public', async () => {
+  await withFixture({}, async ({ port }) => {
+    const response = await request(port, '/other?token=launch-token')
+    expect(response.status).toBe(401)
+    expect(JSON.parse(response.body)).toEqual({ error: 'unauthenticated' })
   })
 })
 
@@ -655,7 +675,13 @@ test('startup fails closed when a registry member silently refuses the wrapper',
 
   const ctx = createMockContext({ webServer: web.service })
   try {
-    expect(() => apply(ctx, { passwordHashEnv: ENV_NAME })).toThrow(/could not be wrapped/)
+    expect(() =>
+      apply(ctx, {
+        passwordHashEnv: ENV_NAME,
+        persistentSessions: false,
+        auditEnabled: false,
+      }),
+    ).toThrow(/could not be wrapped/)
     // And nothing half-installed is left behind: a gate that guards HTTP routes
     // but not upgrades is worse than one that refuses to start, because it
     // looks like it is working.
@@ -675,7 +701,12 @@ test('disposal does not clobber a decorator installed after the gate', async () 
   const ctx = createMockContext({ webServer: web.service })
   try {
     const untouchedFallback = web.service.registerFallback
-    apply(ctx, { passwordHashEnv: ENV_NAME, secureCookie: false })
+    apply(ctx, {
+      passwordHashEnv: ENV_NAME,
+      secureCookie: false,
+      persistentSessions: false,
+      auditEnabled: false,
+    })
     const gateDecorator = web.service.register
     const laterDecorator: typeof gateDecorator = (route) => gateDecorator(route)
     web.service.register = laterDecorator

@@ -15,14 +15,19 @@
  * @module @seaveyon/dsh-web-login/config
  */
 
+import { join } from 'node:path'
 import { defaultAuthorizationPath, defaultRecoveryPath } from './authorization.js'
-import type { EnvLike } from './env-file.js'
+import { type EnvLike, resolveDshHome } from './env-file.js'
 
 /** Defaults chosen for the deployment this package exists for: one operator, TLS at a proxy. */
 export const DEFAULTS = Object.freeze({
   passwordHashEnv: 'LOGIN_PASSWORD_HASH',
   title: 'DSH Web',
   sessionTtlMs: 30 * 24 * 60 * 60 * 1000,
+  persistentSessions: true,
+  sessionFile: '',
+  auditEnabled: true,
+  auditFile: '',
   secureCookie: true,
   maxBodyBytes: 4096,
   maxSessions: 10000,
@@ -107,8 +112,15 @@ type StringKey =
   | 'githubClientSecretEnv'
   | 'authorizationFile'
   | 'recoveryFile'
+  | 'sessionFile'
+  | 'auditFile'
 /** Keys holding a boolean value. */
-type BooleanKey = 'secureCookie' | 'trustProxy' | 'githubEnabled'
+type BooleanKey =
+  | 'secureCookie'
+  | 'trustProxy'
+  | 'githubEnabled'
+  | 'persistentSessions'
+  | 'auditEnabled'
 /** Keys holding an integer, each with an inclusive range. */
 type NumericKey =
   | 'sessionTtlMs'
@@ -175,8 +187,16 @@ const STRING_KEYS: readonly StringKey[] = [
   'githubClientSecretEnv',
   'authorizationFile',
   'recoveryFile',
+  'sessionFile',
+  'auditFile',
 ]
-const BOOLEAN_KEYS: readonly BooleanKey[] = ['secureCookie', 'trustProxy', 'githubEnabled']
+const BOOLEAN_KEYS: readonly BooleanKey[] = [
+  'secureCookie',
+  'trustProxy',
+  'githubEnabled',
+  'persistentSessions',
+  'auditEnabled',
+]
 const ENV_NAME_KEYS = ['passwordHashEnv', 'githubClientIdEnv', 'githubClientSecretEnv'] as const
 
 const MAX_TITLE_LENGTH = 120
@@ -320,6 +340,9 @@ export function resolveConfig(config: unknown = {}, env: EnvLike = process.env):
   if ((out.recoveryFile as string) === '') {
     out.recoveryFile = defaultRecoveryPath(env)
   }
+  const authRoot = join(resolveDshHome(env), 'auth', 'dsh-web-login')
+  if ((out.sessionFile as string) === '') out.sessionFile = join(authRoot, 'sessions.json')
+  if ((out.auditFile as string) === '') out.auditFile = join(authRoot, 'audit.jsonl')
 
   return Object.freeze(out) as ResolvedConfig
 }

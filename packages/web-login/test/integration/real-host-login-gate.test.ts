@@ -84,6 +84,8 @@ realHostTest('a real DSH host protects routes registered after the login gate', 
     apply(root as unknown as PluginContext, {
       passwordHashEnv: HASH_ENV,
       secureCookie: false,
+      persistentSessions: false,
+      auditEnabled: false,
       sessionTtlMs: 60_000,
       maxSessions: 10,
     })
