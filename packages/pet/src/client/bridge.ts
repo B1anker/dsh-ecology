@@ -206,9 +206,11 @@ export class DesktopBridge {
 
   /**
    * The single notification handler. Builds the payload, skips it if nothing
-   * changed since the last send, and otherwise POSTs it. The `.catch` (and
-   * the try around the call itself, for fetch implementations that throw
-   * synchronously) is the whole error story: the desktop app is optional, so
+   * changed since the last send, and otherwise POSTs it. A failed send rolls
+   * the dedupe back — `lastSent` must mean "the app has this", and a POST
+   * that died in the void (app down, port not yet bound) has to be retried
+   * at the next change or {@link announce}, not remembered as delivered.
+   * Remaining errors are still swallowed: the desktop app is optional, so
    * its absence must be invisible.
    */
   private push = (): void => {
@@ -223,15 +225,34 @@ export class DesktopBridge {
     const body = JSON.stringify(state)
     if (body === this.lastSent) return
     this.lastSent = body
+    const forgetIfUnchanged = () => {
+      if (this.lastSent === body) this.lastSent = ''
+    }
 
     try {
       this.fetchFn(this.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
-      }).catch(() => {})
+      })
+        .then((res) => {
+          if (!res.ok) forgetIfUnchanged()
+        })
+        .catch(forgetIfUnchanged)
     } catch {
-      // A synchronous throw is the same story as a rejection: ignore it.
+      // A synchronous throw is the same story as a rejection: not delivered.
+      forgetIfUnchanged()
     }
+  }
+
+  /**
+   * Force a resend of the current state even when nothing changed. The
+   * desktop app restores its own state file at boot; when it answers
+   * discovery after this page's first push went into the void, this is how
+   * the page's selection reasserts itself.
+   */
+  announce(): void {
+    this.lastSent = ''
+    this.push()
   }
 }

@@ -45,15 +45,33 @@ export function apply(ctx: ClientContext): void {
   const disposeMoodSource = wireMoodSource(sessions, machine)
   ctx.effect?.(() => disposeMoodSource(), 'dsh-pet:mood-source')
 
-  // Side channel to the desktop app: self-subscribed, silent when the setting
-  // is off or the app isn't there. Disposed the same way.
-  const bridge = new DesktopBridge({ settings, machine })
-  ctx.effect?.(() => () => bridge.dispose(), 'dsh-pet:bridge')
-
   // Imported-pet discovery: one shared roster the settings panel pulls lazily
   // (each time it opens). Empty until the desktop app answers, and simply
   // empty when it never does.
   const desktopPets = new DesktopPetsStore()
+
+  // Side channel to the desktop app: self-subscribed, silent when the setting
+  // is off or the app isn't there. Disposed with the plugin where the context
+  // offers an effect hook.
+  const bridge = new DesktopBridge({ settings, machine })
+
+  // A desktop that comes online may have booted after this page's first push
+  // went into the void (or restored a stale state file): re-assert the page's
+  // selection on every offline→online transition.
+  let discoveryOnline = desktopPets.getSnapshot().status === 'online'
+  const unsubscribeDiscovery = desktopPets.subscribe(() => {
+    const online = desktopPets.getSnapshot().status === 'online'
+    if (online && !discoveryOnline) bridge.announce()
+    discoveryOnline = online
+  })
+
+  ctx.effect?.(
+    () => () => {
+      unsubscribeDiscovery()
+      bridge.dispose()
+    },
+    'dsh-pet:bridge',
+  )
 
   const slots = ctx.get('slots')
   if (slots === undefined) return

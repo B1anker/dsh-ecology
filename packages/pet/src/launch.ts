@@ -4,8 +4,18 @@
  * The settings panel cannot start a local process from a browser page, but the
  * host face runs inside the DSH server — which, for a loopback page, is the
  * user's own machine. This module is the seam: the panel POSTs the route when
- * the companion switch is on but the bridge port answers nothing, and the
- * handler asks macOS Launch Services to open the packaged desktop app.
+ * the summon button is pressed, and the handler starts the desktop app.
+ *
+ * Two ways to find the app, in order:
+ *
+ * 1. The binary bundled inside this npm package (`desktop/dsh-pet-desktop`,
+ *    packed by the release workflow). It wins over any installed copy because
+ *    it is version-locked to this plugin — the /state contract (MOODS order,
+ *    bridge port) can never drift between the two sides. It is also the path
+ *    with no Gatekeeper friction: npm-installed files carry no quarantine
+ *    attribute, so an unsigned binary spawns cleanly.
+ * 2. macOS Launch Services (`open -b` the bundle id, then the standard
+ *    Applications folders) — development installs and pre-bundle packages.
  *
  * Three guards, each cheap and each covering a distinct abuse:
  *
@@ -26,11 +36,12 @@
 
 /// <reference types="node" />
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import type { ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 
 import type { RouteHandler } from './host-types.js'
 
@@ -39,6 +50,17 @@ export const LAUNCH_ROUTE_PATH = '/dsh-pet/launch-desktop'
 
 /** Cross-origin drive-by fence: the request must carry this header. */
 export const LAUNCH_HEADER = 'x-dsh-pet-launch'
+
+/**
+ * The desktop binary bundled into this npm package. Resolved from this
+ * module's own URL so the same layout holds from src/ (tests) and dist/
+ * (an installed package): both sit one level below the package root. A
+ * source checkout has no desktop/ directory — the release workflow adds it
+ * at pack time — so the lookup simply misses and the .app chain runs.
+ */
+export const BUNDLED_DESKTOP_BINARY = fileURLToPath(
+  new URL('../desktop/dsh-pet-desktop', import.meta.url),
+)
 
 /**
  * Bundle id the packaged desktop app registers
@@ -57,11 +79,31 @@ export interface LaunchDeps {
   exists?: (path: string) => boolean
   /** Resolves on exit code 0, rejects otherwise. Defaults to execFile. */
   run?: (command: string, args: string[]) => Promise<void>
+  /**
+   * The package-bundled binary to try before Launch Services; null disables
+   * the lookup. Defaults to {@link BUNDLED_DESKTOP_BINARY}.
+   */
+  bundledBinary?: string | null
+  /**
+   * Starts the bundled binary as a detached child that outlives the request
+   * (and even the DSH server). Resolves once the process is spawned, rejects
+   * on spawn error. Defaults to a detached, stdio-ignored spawn.
+   */
+  spawnDetached?: (path: string) => Promise<void>
 }
 
 async function defaultRun(command: string, args: string[]): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     execFile(command, args, (error) => (error === null ? resolve() : reject(error)))
+  })
+}
+
+async function defaultSpawnDetached(path: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(path, [], { detached: true, stdio: 'ignore' })
+    child.once('error', reject)
+    child.once('spawn', () => resolve())
+    child.unref()
   })
 }
 
@@ -78,9 +120,10 @@ export function launchCandidates(deps: LaunchDeps = {}): string[] {
 }
 
 /**
- * Ask macOS to start the desktop app. The bundle-id query covers any install
- * location Launch Services knows; the path list covers a freshly downloaded
- * copy it has not indexed yet. DSH_PET_DESKTOP_APP overrides the path search
+ * Start the desktop app. The bundled binary wins because it is version-locked
+ * to this plugin; otherwise the bundle-id query covers any install location
+ * Launch Services knows, and the path list covers a freshly downloaded copy
+ * it has not indexed yet. DSH_PET_DESKTOP_APP overrides the path search
  * (development and non-standard installs).
  */
 export async function launchDesktopApp(deps: LaunchDeps = {}): Promise<LaunchOutcome> {
@@ -88,6 +131,17 @@ export async function launchDesktopApp(deps: LaunchDeps = {}): Promise<LaunchOut
   if (platform !== 'darwin') return 'unsupported-platform'
   const exists = deps.exists ?? existsSync
   const run = deps.run ?? defaultRun
+
+  const bundled = deps.bundledBinary === undefined ? BUNDLED_DESKTOP_BINARY : deps.bundledBinary
+  if (bundled !== null && exists(bundled)) {
+    const spawnDetached = deps.spawnDetached ?? defaultSpawnDetached
+    try {
+      await spawnDetached(bundled)
+      return 'launched'
+    } catch {
+      return 'launch-failed'
+    }
+  }
 
   try {
     await run('open', ['-b', DESKTOP_BUNDLE_ID])

@@ -22,8 +22,10 @@ export interface Strings {
   desktopHint: string
   /** Settings panel: rename input. */
   nameLabel: string
-  /** Settings panel: desktop-companion bridge switch. */
+  /** Settings panel: desktop-companion summon row label. */
   companionLabel: string
+  /** Settings panel: the desktop app answers the bridge. */
+  companionConnected: string
   /** Badge marking an imported (non-built-in) desktop pet in the picker. */
   desktopPetBadge: string
   /** Settings panel: the desktop app is unreachable, showing the fallback roster. */
@@ -47,8 +49,9 @@ const DICTIONARIES: Record<Locale, Strings> = {
     desktopHint: '宠物显示在桌面 App 里，不在本页面上。',
     nameLabel: '名字',
     companionLabel: '桌面伴侣',
+    companionConnected: '桌面宠物已连接。',
     desktopPetBadge: '导入',
-    desktopOfflineHint: '桌面 App 未连接，暂时只显示内置形象。',
+    desktopOfflineHint: '桌面 App 未连接，连接后可选择形象。',
     launchButton: '启动桌面 App',
     launchStarting: '正在启动桌面 App…',
     launchNotInstalled: '这台机器上还没安装桌面 App。',
@@ -61,8 +64,9 @@ const DICTIONARIES: Record<Locale, Strings> = {
     desktopHint: 'The pet lives in the desktop app, not on this page.',
     nameLabel: 'Name',
     companionLabel: 'Desktop companion',
+    companionConnected: 'Desktop pet connected.',
     desktopPetBadge: 'Imported',
-    desktopOfflineHint: 'Desktop app not connected — showing the built-in pets for now.',
+    desktopOfflineHint: 'Desktop app not connected — connect it to pick a pet.',
     launchButton: 'Launch desktop app',
     launchStarting: 'Starting the desktop app…',
     launchNotInstalled: 'The desktop app is not installed on this machine.',

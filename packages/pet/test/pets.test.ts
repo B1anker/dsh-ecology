@@ -1,31 +1,16 @@
 /**
- * The built-in pet roster: every pet must render every mood as a standalone
- * SVG.
+ * The built-in pet roster: ids unique, labels localized. Sprites belong to
+ * the desktop app; this list must match its manifest's built-ins.
  */
 
 import { describe, expect, test } from '@rstest/core'
 import { PETS } from '../src/client/pets.js'
-import { MOODS } from '../src/desktop.js'
 
 describe('PETS roster', () => {
   test('ids are unique and in picker order', () => {
     const ids = PETS.map((pet) => pet.id)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(ids).toEqual(['blob', 'cat', 'robot'])
-  })
-
-  test('every pet renders every mood as a standalone 64×64 svg', () => {
-    for (const pet of PETS) {
-      for (const mood of MOODS) {
-        const svg = pet.svg(mood)
-        expect(svg).toContain(`data-pet-id="${pet.id}"`)
-        expect(svg).toContain(`data-mood="${mood}"`)
-        expect(svg).toContain('viewBox="0 0 64 64"')
-        expect(svg).toContain('data-mood-parts="eyes"')
-        expect(svg.startsWith('<svg')).toBe(true)
-        expect(svg.endsWith('</svg>')).toBe(true)
-      }
-    }
+    expect(ids).toEqual(['deepseek-chan'])
   })
 
   test('every pet has both locale names', () => {

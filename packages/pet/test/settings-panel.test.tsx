@@ -2,10 +2,10 @@
  * The settings panel: the appearance picker is single-source. When the
  * desktop app answers /pets, its roster — built-ins included — is the whole
  * list (a pet can never appear twice), with RasterPet strip
- * previews off the bridge server and localized names for known ids. Only a
- * proven-offline desktop falls back to the built-in SVG roster plus a "not
- * connected" hint. Discovery retries quietly a couple of times while the
- * panel stays open.
+ * previews off the bridge server and localized names for known ids. Until
+ * the desktop answers (unknown or proven offline), the picker renders
+ * nothing; offline adds a "not connected" hint. Discovery retries quietly a
+ * couple of times while the panel stays open.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from '@rstest/core'
@@ -48,7 +48,7 @@ function desktopPetFixture(id: string) {
 }
 
 /** The desktop manifest's shape in production: built-ins plus imports. */
-const DESKTOP_ROSTER = ['blob', 'cat', 'robot', 'ai-sleepy-silver-wolf']
+const DESKTOP_ROSTER = ['deepseek-chan', 'ai-sleepy-silver-wolf']
 
 function desktopPetsStore(ids: string[]): DesktopPetsStore {
   const fetchFn = () =>
@@ -85,35 +85,21 @@ async function flushRefresh(store: DesktopPetsStore) {
   })
 }
 
-describe('fallback (desktop unreachable or not asked yet)', () => {
-  test('lists the three built-in pets as SVG and selects one on click', () => {
-    const { settings } = mount()
-    const buttons = pickerButtons()
-    expect(buttons).toHaveLength(3)
-    expect(buttons[0]?.getAttribute('aria-pressed')).toBe('true') // blob is default
-    expect(container.querySelector('svg[data-pet-id="blob"]')).not.toBeNull()
-
-    act(() => {
-      buttons[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-
-    expect(settings.getSnapshot().petId).toBe('cat')
+describe('picker hidden until the desktop answers', () => {
+  test('no store at all: no picker, no hint', () => {
+    mount() // no store at all: nothing is ever asked
+    expect(pickerButtons()).toHaveLength(0)
+    expect(container.querySelector('section')?.textContent).not.toContain('not connected')
   })
 
-  test('a proven-offline desktop adds the not-connected hint', async () => {
+  test('a proven-offline desktop shows only the not-connected hint', async () => {
     const desktopPets = new DesktopPetsStore({ fetchFn: offlineFetch })
     mount(desktopPets)
 
     await flushRefresh(desktopPets)
 
-    expect(pickerButtons()).toHaveLength(3)
+    expect(pickerButtons()).toHaveLength(0)
     expect(container.querySelector('section')?.textContent).toContain('Desktop app not connected')
-  })
-
-  test('no fetch yet (unknown) shows built-ins without the hint', () => {
-    mount() // no store at all: nothing is ever asked
-    expect(container.querySelector('section')?.textContent).not.toContain('not connected')
-    expect(pickerButtons()).toHaveLength(3)
   })
 })
 
@@ -125,11 +111,11 @@ describe('single-source picker (desktop online)', () => {
     await flushRefresh(desktopPets)
 
     const buttons = pickerButtons()
-    expect(buttons).toHaveLength(4)
-    expect(buttons.map((b) => b.title)).toEqual(['Blob', 'Cat', 'Robot', 'Ai Sleepy Silver Wolf'])
+    expect(buttons).toHaveLength(2)
+    expect(buttons.map((b) => b.title)).toEqual(['DeepSeek-chan', 'Ai Sleepy Silver Wolf'])
     // Every preview is a raster strip off the bridge server, including the
-    // built-ins — the SVG path only renders in the fallback.
-    expect(container.querySelectorAll('[data-dsh-pet-raster]')).toHaveLength(4)
+    // built-in — the page no longer ships an SVG stand-in path at all.
+    expect(container.querySelectorAll('[data-dsh-pet-raster]')).toHaveLength(2)
     expect(container.querySelectorAll('svg[data-pet-id]')).toHaveLength(0)
   })
 
@@ -141,9 +127,7 @@ describe('single-source picker (desktop online)', () => {
     const buttons = pickerButtons()
     const wolf = buttons.find((b) => b.title === 'Ai Sleepy Silver Wolf')!
     expect(wolf.textContent).toContain('Imported')
-    for (const title of ['Blob', 'Cat', 'Robot']) {
-      expect(buttons.find((b) => b.title === title)!.textContent).not.toContain('Imported')
-    }
+    expect(buttons.find((b) => b.title === 'DeepSeek-chan')!.textContent).not.toContain('Imported')
   })
 
   test('selecting an imported pet persists its id and previews the pet mood', async () => {
@@ -161,29 +145,20 @@ describe('single-source picker (desktop online)', () => {
     expect(wolf.querySelector('[data-dsh-pet-raster]')?.getAttribute('data-mood')).toBe('pet')
   })
 
-  test('a selection made in the fallback stays selected once the desktop answers', async () => {
-    let online = false
-    const fetchFn = () =>
-      online
-        ? Promise.resolve(
-            new Response(JSON.stringify({ pets: DESKTOP_ROSTER.map(desktopPetFixture) })),
-          )
-        : Promise.reject(new Error('connection refused'))
-    const desktopPets = new DesktopPetsStore({ fetchFn: fetchFn as unknown as typeof fetch })
+  test('a stored petId stays selected once the desktop answers', async () => {
+    const desktopPets = desktopPetsStore(DESKTOP_ROSTER)
     const { settings } = mount(desktopPets)
 
-    // Fallback roster: pick the cat.
+    // The petId persisted from an earlier session (the desktop app restores
+    // the same one from its own state file).
     act(() => {
-      pickerButtons()[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      settings.update({ petId: 'deepseek-chan' })
     })
-    expect(settings.getSnapshot().petId).toBe('cat')
 
-    // Desktop comes up; the same petId is selected in the desktop roster.
-    online = true
     await flushRefresh(desktopPets)
 
-    const cat = pickerButtons().find((b) => b.title === 'Cat')!
-    expect(cat.getAttribute('aria-pressed')).toBe('true')
+    const chan = pickerButtons().find((b) => b.title === 'DeepSeek-chan')!
+    expect(chan.getAttribute('aria-pressed')).toBe('true')
   })
 
   test('localized names follow the locale', async () => {
@@ -198,15 +173,11 @@ describe('single-source picker (desktop online)', () => {
       await flushRefresh(desktopPets)
 
       const buttons = pickerButtons()
-      expect(buttons.map((b) => b.title)).toEqual([
-        '果冻团',
-        '猫猫',
-        '机器人',
-        'Ai Sleepy Silver Wolf',
-      ])
+      expect(buttons.map((b) => b.title)).toEqual(['DeepSeek 酱', 'Ai Sleepy Silver Wolf'])
       expect(buttons.find((b) => b.title === 'Ai Sleepy Silver Wolf')!.textContent).toContain(
         '导入',
       )
+      expect(buttons.find((b) => b.title === 'DeepSeek 酱')!.textContent).not.toContain('导入')
     } finally {
       if (original !== undefined) Object.defineProperty(Navigator.prototype, 'language', original)
     }
@@ -232,7 +203,7 @@ describe('discovery retry', () => {
     })
 
     expect(calls).toBe(2)
-    expect(pickerButtons()).toHaveLength(4)
+    expect(pickerButtons()).toHaveLength(2)
     expect(pickerButtons().some((b) => b.title === 'Ai Sleepy Silver Wolf')).toBe(true)
   })
 
@@ -250,7 +221,7 @@ describe('discovery retry', () => {
     })
 
     expect(calls).toBe(3) // initial attempt + 2 retries
-    expect(pickerButtons()).toHaveLength(3)
+    expect(pickerButtons()).toHaveLength(0)
     expect(container.querySelector('section')?.textContent).toContain('Desktop app not connected')
   })
 })
@@ -258,10 +229,10 @@ describe('discovery retry', () => {
 describe('the rest of the panel', () => {
   test('the page-era controls are gone; the desktop hint stands in', () => {
     mount()
-    // Only name (text) and companion (checkbox) survive.
+    // Only the name input survives; the companion is a summon button now.
     expect(container.querySelectorAll('input[type="range"]')).toHaveLength(0)
     expect(container.querySelectorAll('input[type="text"]')).toHaveLength(1)
-    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(1)
+    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0)
     expect(container.querySelector('section p')?.textContent).toContain('desktop app')
   })
 })
@@ -352,7 +323,7 @@ describe('desktop launch (loopback page, offline companion)', () => {
     expect(link).not.toBeNull()
   })
 
-  test('turning the companion on against an offline desktop fires one launch attempt', async () => {
+  test('the summon button turns the companion on and fires one launch attempt', async () => {
     const desktopPets = new DesktopPetsStore({ fetchFn: offlineFetch })
     let launchCalls = 0
     const { settings } = mountWithLaunch(desktopPets, () => {
@@ -361,38 +332,40 @@ describe('desktop launch (loopback page, offline companion)', () => {
     })
     await settleOffline()
 
-    // Turn the companion off first, then click the checkbox to turn it on.
+    // Companion off: the summon button is still offered — clicking it is
+    // the "make it work" gesture, enabling the bridge as it launches.
     act(() => settings.update({ companionEnabled: false }))
-    const checkbox = container.querySelector('input[type="checkbox"]')
+    expect(launchButton()).toBeDefined()
     await act(async () => {
-      checkbox?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      launchButton()?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
     expect(settings.getSnapshot().companionEnabled).toBe(true)
     expect(launchCalls).toBe(1)
   })
 
-  test('a failed launch says so, and no attempt fires while the companion stays off', async () => {
+  test('a failed launch says so', async () => {
     const desktopPets = new DesktopPetsStore({ fetchFn: offlineFetch })
     let launchCalls = 0
-    const { settings } = mountWithLaunch(desktopPets, () => {
+    mountWithLaunch(desktopPets, () => {
       launchCalls += 1
       return Promise.resolve('unavailable')
     })
     await settleOffline()
 
-    // Companion off: no button, no attempt.
-    act(() => settings.update({ companionEnabled: false }))
-    expect(launchButton()).toBeUndefined()
-    expect(launchCalls).toBe(0)
-
-    // Turning it on fires the attempt; 'unavailable' shows the failure hint.
-    const checkbox = container.querySelector('input[type="checkbox"]')
     await act(async () => {
-      checkbox?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      launchButton()?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
-    expect(settings.getSnapshot().companionEnabled).toBe(true)
     expect(launchCalls).toBe(1)
     expect(container.querySelector('section')?.textContent).toContain('Launch failed')
+  })
+
+  test('a connected desktop replaces the button with a readout', async () => {
+    const desktopPets = desktopPetsStore(DESKTOP_ROSTER)
+    mountWithLaunch(desktopPets, () => Promise.resolve('launched'))
+    await flushRefresh(desktopPets)
+
+    expect(launchButton()).toBeUndefined()
+    expect(container.querySelector('section')?.textContent).toContain('Desktop pet connected')
   })
 })

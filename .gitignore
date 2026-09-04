@@ -7,6 +7,9 @@ coverage/
 zig-out/
 .zig-cache/
 zig-pkg/
+# The desktop companion binary, staged into the pet package at pack time
+# (packages/pet build:desktop); never committed, the release workflow rebuilds it.
+packages/pet/desktop/
 
 # Local runtime secrets and state
 .env

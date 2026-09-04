@@ -3,18 +3,27 @@
  *
  * The plugin renders nothing else on the page — the pet itself lives in the
  * desktop app — so this panel is the plugin's only visible surface: which pet
- * shows on the desktop, its name, and the companion bridge switch. Every
+ * shows on the desktop, its name, and the companion summon button. Every
  * control writes straight into the {@link PetSettingsStore}, which notifies
  * subscribers (the bridge included) so changes take effect with no "save"
  * step, and the store's dual-backend write makes them stick.
  *
  * The picker is single-source: when the desktop app answers `GET /pets`, its
  * roster is the whole list (built-ins included) and every preview is a
- * {@link RasterPet} strip off the bridge server. Only a proven-unreachable
- * desktop falls back to the built-in SVG roster with a "not connected" hint.
- * The same petId stays selected across the switch, since ids match on both
+ * {@link RasterPet} strip off the bridge server. Until the app answers, the
+ * picker shows nothing — the pet lives on the desktop, so a page-side
+ * stand-in roster would only promise a choice the desktop cannot honor.
+ * The same petId stays selected across reconnects, since ids match on both
  * sides. Previews wear the affection pose (`pet`) when selected, because that
  * is the pose that best distinguishes sprites at thumbnail size.
+ *
+ * The controls are native elements carrying the host's own recipes —
+ * capsule Button, bordered Input, accent-colored checkbox — transcribed over
+ * `--dsw-alias-*` tokens so light/dark themes apply with no local palette.
+ * Importing the primitives package itself is not viable for an external
+ * plugin (one flat browser artifact, no per-component entries; bundling one
+ * Button would drag its markdown/highlight stack into this single-file
+ * client.js) — see the web-login account panel, which made the same call.
  *
  * @module @seaveyon/dsh-pet/client/settings-panel
  */
@@ -32,7 +41,7 @@ import {
   type LaunchRequestResult,
   requestDesktopLaunch,
 } from './launch.js'
-import { PET_STYLE_CSS, PETS } from './pets.js'
+import { PETS } from './pets.js'
 import { RasterPet } from './raster-pet.js'
 import type { PetSettingsStore } from './settings.js'
 
@@ -40,7 +49,7 @@ export interface PetSettingsPanelProps {
   settings: PetSettingsStore
   /**
    * Desktop-pet discovery. Absent in tests and minimal mounts: the picker
-   * falls back to the built-in roster and no fetch is attempted.
+   * stays empty and no fetch is attempted.
    */
   desktopPets?: DesktopPetsStore
   /**
@@ -60,15 +69,100 @@ export interface PetSettingsPanelProps {
   launchRefreshDelaysMs?: readonly number[]
 }
 
-const rowStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '8px',
-  marginBlock: '8px',
-} as const
-
 const FALLBACK_SNAPSHOT: DesktopPetsSnapshot = { pets: [], status: 'unknown' }
 const NOOP_SUBSCRIBE = () => () => {}
+
+/**
+ * The host's control recipes over `--dsw-alias-*` tokens (see the module
+ * header): the compact capsule Button and the bordered Input.
+ */
+const PANEL_CSS = `
+.dsh-pet-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 14px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 560;
+  cursor: pointer;
+}
+.dsh-pet-control.primary {
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+.dsh-pet-control.primary:hover {
+  background: var(--dsw-alias-button-primary-hover);
+}
+.dsh-pet-control:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.dsh-pet-control.primary:disabled:hover {
+  background: var(--dsw-alias-button-primary-fill);
+}
+.dsh-pet-input {
+  box-sizing: border-box;
+  width: min(260px, 100%);
+  height: 32px;
+  padding: 0 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  outline: none;
+}
+.dsh-pet-input:focus {
+  border-color: var(--dsw-alias-brand-primary);
+}
+.dsh-pet-link {
+  color: var(--dsw-alias-brand-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+`
+
+const sectionStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '14px',
+} as const
+
+const rowStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(7rem, 9rem) 1fr',
+  gap: '8px 12px',
+  alignItems: 'center',
+  margin: 0,
+  fontSize: '13px',
+  lineHeight: 1.45,
+} as const
+
+const labelStyle = {
+  color: 'var(--dsw-alias-label-secondary)',
+} as const
+
+const hintStyle = {
+  margin: 0,
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: '12px',
+  lineHeight: 1.45,
+} as const
+
+const actionsStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: '8px',
+} as const
 
 /** The picker's tile is 56px with a 2px border; the preview gets the rest. */
 const PREVIEW_SIZE = 52
@@ -105,8 +199,10 @@ function tileStyle(selected: boolean) {
     padding: 0,
     borderRadius: '10px',
     cursor: 'pointer',
-    border: selected ? '2px solid var(--dsw-color-primary, #4b6bfb)' : '2px solid transparent',
-    background: 'var(--dsw-color-surface, #f3f4f6)',
+    border: selected
+      ? '2px solid var(--dsw-alias-brand-primary, #4b6bfb)'
+      : '2px solid transparent',
+    background: 'var(--dsw-alias-bg-layer-1, #f3f4f6)',
     overflow: 'hidden',
   } as const
 }
@@ -187,51 +283,35 @@ export function PetSettingsPanel({
     })
   }, [desktopPets, requestLaunch, launchRefreshDelaysMs])
 
-  // Turning the companion ON against a proven-offline desktop is the user's
-  // "make it work" gesture: fire one launch attempt alongside the setting.
-  const onCompanionChange = useCallback(
-    (enabled: boolean) => {
-      settings.update({ companionEnabled: enabled })
-      if (enabled && canLaunch && desktopPets?.getSnapshot().status === 'offline') {
-        void onLaunch()
-      }
-    },
-    [settings, canLaunch, desktopPets, onLaunch],
-  )
+  // The summon button is the companion's one control: it turns the bridge
+  // on (if it ever was off) and asks the host to launch the desktop app.
+  const onSummon = useCallback(() => {
+    if (!config.companionEnabled) settings.update({ companionEnabled: true })
+    void onLaunch()
+  }, [config.companionEnabled, settings, onLaunch])
+
+  // The companion row's two faces: a connected readout once the desktop
+  // app answers, the summon button otherwise (an offline desktop, or a
+  // companion that was switched off, both want it). Unknown status shows
+  // neither — the first fetch has not settled yet.
+  const connected = online && config.companionEnabled
+  const showSummon = canLaunch && (discovery.status === 'offline' || !config.companionEnabled)
 
   return (
-    <section aria-label={strings.settingsSection}>
-      {/* The built-in previews' keyframes; the raster previews carry their own. */}
-      <style>{PET_STYLE_CSS}</style>
-      <p style={{ marginBlock: '8px', opacity: 0.75 }}>{strings.desktopHint}</p>
-      {discovery.status === 'offline' && (
-        <p style={{ marginBlock: '8px', opacity: 0.75 }}>{strings.desktopOfflineHint}</p>
-      )}
-      {discovery.status === 'offline' && config.companionEnabled && canLaunch && (
+    <section aria-label={strings.settingsSection} style={sectionStyle}>
+      {/* The host control recipes; the raster previews carry their own CSS. */}
+      <style>{PANEL_CSS}</style>
+      <p style={hintStyle}>{strings.desktopHint}</p>
+      {discovery.status === 'offline' && <p style={hintStyle}>{strings.desktopOfflineHint}</p>}
+      {online && (
         <div style={rowStyle}>
-          <button type="button" disabled={launchState === 'busy'} onClick={() => void onLaunch()}>
-            {launchState === 'busy' ? strings.launchStarting : strings.launchButton}
-          </button>
-          {launchState === 'not-installed' && (
-            <span style={{ opacity: 0.75 }}>
-              {strings.launchNotInstalled}{' '}
-              <a href={DESKTOP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
-                {strings.launchDownloadLabel}
-              </a>
-            </span>
-          )}
-          {launchState === 'failed' && (
-            <span style={{ opacity: 0.75 }}>{strings.launchFailed}</span>
-          )}
-        </div>
-      )}
-      <div
-        role="group"
-        aria-label={strings.appearanceLabel}
-        style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}
-      >
-        {online
-          ? discovery.pets.map((pet) => {
+          <span style={labelStyle}>{strings.appearanceLabel}</span>
+          <div
+            role="group"
+            aria-label={strings.appearanceLabel}
+            style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}
+          >
+            {discovery.pets.map((pet) => {
               const selected = config.petId === pet.id
               const imported = !PETS.some((builtin) => builtin.id === pet.id)
               return (
@@ -254,8 +334,8 @@ export function PetSettingsPanel({
                         borderRadius: '6px',
                         fontSize: '9px',
                         lineHeight: '14px',
-                        background: 'var(--dsw-color-primary, #4b6bfb)',
-                        color: 'var(--dsw-color-surface, #fff)',
+                        background: 'var(--dsw-alias-button-primary-fill, #4b6bfb)',
+                        color: 'var(--dsw-alias-label-primary-foreground, #fff)',
                         pointerEvents: 'none',
                       }}
                     >
@@ -264,39 +344,53 @@ export function PetSettingsPanel({
                   )}
                 </button>
               )
-            })
-          : PETS.map((pet) => (
+            })}
+          </div>
+        </div>
+      )}
+      <label style={rowStyle}>
+        <span style={labelStyle}>{strings.nameLabel}</span>
+        <span>
+          <input
+            type="text"
+            className="dsh-pet-input"
+            value={config.name}
+            onChange={(event) => settings.update({ name: event.target.value })}
+          />
+        </span>
+      </label>
+      <div style={rowStyle}>
+        <span style={labelStyle}>{strings.companionLabel}</span>
+        <span style={actionsStyle}>
+          {connected && <span style={hintStyle}>{strings.companionConnected}</span>}
+          {showSummon && (
+            <>
               <button
-                key={pet.id}
                 type="button"
-                title={pet.label[locale]}
-                aria-pressed={config.petId === pet.id}
-                onClick={() => settings.update({ petId: pet.id })}
-                style={tileStyle(config.petId === pet.id)}
-                // Sprite markup is generated by pets.ts, never from user data.
-                // biome-ignore lint/security/noDangerouslySetInnerHtml: see pets.ts
-                dangerouslySetInnerHTML={{
-                  __html: pet.svg(config.petId === pet.id ? 'pet' : 'idle'),
-                }}
-              />
-            ))}
+                className="dsh-pet-control primary"
+                disabled={launchState === 'busy'}
+                onClick={onSummon}
+              >
+                {launchState === 'busy' ? strings.launchStarting : strings.launchButton}
+              </button>
+              {launchState === 'not-installed' && (
+                <span style={hintStyle}>
+                  {strings.launchNotInstalled}{' '}
+                  <a
+                    href={DESKTOP_DOWNLOAD_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="dsh-pet-link"
+                  >
+                    {strings.launchDownloadLabel}
+                  </a>
+                </span>
+              )}
+              {launchState === 'failed' && <span style={hintStyle}>{strings.launchFailed}</span>}
+            </>
+          )}
+        </span>
       </div>
-      <label style={rowStyle}>
-        {strings.nameLabel}
-        <input
-          type="text"
-          value={config.name}
-          onChange={(event) => settings.update({ name: event.target.value })}
-        />
-      </label>
-      <label style={rowStyle}>
-        {strings.companionLabel}
-        <input
-          type="checkbox"
-          checked={config.companionEnabled}
-          onChange={(event) => onCompanionChange(event.target.checked)}
-        />
-      </label>
     </section>
   )
 }

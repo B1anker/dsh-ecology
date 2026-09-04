@@ -9,9 +9,9 @@
  *
  * The status half of the snapshot matters as much as the roster: the panel is
  * single-source — when the desktop app answers, its roster is the whole
- * picker; only a proven-unreachable desktop (`offline`) falls back to the
- * built-in SVG roster. `unknown` (no fetch settled yet) renders the fallback
- * without the "not connected" hint, so a slow answer doesn't flash it.
+ * picker; before that (`unknown`, or a proven-unreachable `offline`) the
+ * picker renders nothing, because a page-side stand-in roster would promise
+ * a choice the desktop cannot honor.
  *
  * Discovery is pull-based and lazy: nothing fetches until the panel calls
  * {@link DesktopPetsStore.refresh} on mount (and its light retry after a

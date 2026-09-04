@@ -103,7 +103,7 @@ describe('gating', () => {
     expect(stub.calls[0]?.init?.headers).toEqual({ 'Content-Type': 'application/json' })
     expect(JSON.parse(String(stub.calls[0]?.init?.body))).toEqual({
       mood: 'idle',
-      petId: 'blob',
+      petId: 'deepseek-chan',
       name: 'Mochi',
     })
     bridge.dispose()
@@ -148,7 +148,7 @@ describe('state pushes', () => {
     expect(stub.calls).toHaveLength(2)
     expect(JSON.parse(String(stub.calls[1]?.init?.body))).toEqual({
       mood: 'working',
-      petId: 'blob',
+      petId: 'deepseek-chan',
       name: 'Mochi',
     })
     bridge.dispose()
@@ -215,6 +215,62 @@ describe('fire-and-forget', () => {
 
     expect(() => settings.update({ name: 'Momo' })).not.toThrow()
     expect(stub.calls).toHaveLength(2) // the announcement plus the rename
+    bridge.dispose()
+  })
+})
+
+describe('redelivery', () => {
+  test('a failed send is not remembered: toggling the bridge re-delivers the same state', async () => {
+    let fail = true
+    const { stub, settings, bridge } = wire({
+      impl: () =>
+        fail ? Promise.reject(new Error('connection refused')) : Promise.resolve(new Response()),
+    })
+    expect(stub.calls).toHaveLength(1) // the announcement attempt, into the void
+    await new Promise((resolve) => setTimeout(resolve, 0)) // let the rejection land
+    fail = false
+
+    // companionEnabled is not part of the payload, so off→on rebuilds the
+    // exact body that just failed: a poisoned dedupe would skip the resend.
+    settings.update({ companionEnabled: false })
+    settings.update({ companionEnabled: true })
+
+    expect(stub.calls).toHaveLength(2)
+    expect(stub.calls[1]?.init?.body).toBe(stub.calls[0]?.init?.body)
+    bridge.dispose()
+  })
+
+  test('a non-ok response counts as not delivered either', async () => {
+    const { stub, settings, bridge } = wire({
+      impl: () => Promise.resolve(new Response(null, { status: 500 })),
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    settings.update({ companionEnabled: false })
+    settings.update({ companionEnabled: true })
+
+    expect(stub.calls).toHaveLength(2)
+    bridge.dispose()
+  })
+
+  test('announce() resends the current state even when nothing changed', async () => {
+    const { stub, bridge } = wire()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(stub.calls).toHaveLength(1)
+
+    bridge.announce()
+
+    expect(stub.calls).toHaveLength(2)
+    expect(stub.calls[1]?.init?.body).toBe(stub.calls[0]?.init?.body)
+    bridge.dispose()
+  })
+
+  test('announce() with the toggle off still sends nothing', () => {
+    const { stub, bridge } = wire({ companionEnabled: false })
+
+    bridge.announce()
+
+    expect(stub.calls).toHaveLength(0)
     bridge.dispose()
   })
 })
