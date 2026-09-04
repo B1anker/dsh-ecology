@@ -6,8 +6,9 @@
 //! frame at a time via image_src — flipped at the manifest's cadence
 //! (src/manifest.zig), driven by the DSH Web plugin's POSTs to the
 //! loopback state server (src/server.zig). Click toggles a 1.25x zoom,
-//! right-click carries Quit, and dragging is app-owned: on_drag starts
-//! the gesture, then a 60Hz poll timer follows NSEvent.mouseLocation
+//! right-click carries Quit (in the driving page's language — the bridge
+//! mirrors its locale through /state), and dragging is app-owned: on_drag
+//! starts the gesture, then a 60Hz poll timer follows NSEvent.mouseLocation
 //! absolutely (src/appkit.zig) until the physical left button releases.
 //!
 //! WebView-free: no frontend/, no WebViewSource — a pure Zig-core UiApp

@@ -23,6 +23,7 @@
 const std = @import("std");
 const native_sdk = @import("native_sdk");
 const model_mod = @import("model.zig");
+const state = @import("state.zig");
 
 const canvas = native_sdk.canvas;
 
@@ -30,9 +31,22 @@ pub const Model = model_mod.Model;
 pub const Msg = model_mod.Msg;
 pub const Ui = canvas.Ui(Msg);
 
-const quit_menu = [_]Ui.ContextMenuItem{
+const quit_menu_en = [_]Ui.ContextMenuItem{
     .{ .label = "Quit DSH Pet", .msg = .quit },
 };
+
+const quit_menu_zh = [_]Ui.ContextMenuItem{
+    .{ .label = "退出 DSH Pet", .msg = .quit },
+};
+
+/// The one context menu, in the driving page's language (model.locale is
+/// mirrored from the bridge and persisted across restarts).
+pub fn quitMenu(locale: state.Locale) []const Ui.ContextMenuItem {
+    return switch (locale) {
+        .zh => &quit_menu_zh,
+        .en => &quit_menu_en,
+    };
+}
 
 pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
     const size: f32 = if (model.zoomed) model_mod.sprite_zoomed_size else model_mod.sprite_size;
@@ -51,7 +65,7 @@ pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
         .cross = .center,
         .on_press = .press,
         .on_drag = Msg{ .drag = .{ .sourceId = 1 } },
-        .context_menu = &quit_menu,
+        .context_menu = quitMenu(model.locale),
         .style = .{ .quiet_hover = true },
         .semantics = .{ .label = "Pet" },
     }, .{
@@ -64,4 +78,13 @@ pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
             .semantics = .{ .label = "Pet sprite" },
         }),
     });
+}
+
+test "the quit menu follows the mirrored page locale" {
+    const en = quitMenu(.en);
+    try std.testing.expectEqualStrings("Quit DSH Pet", en[0].label);
+    const zh = quitMenu(.zh);
+    try std.testing.expectEqualStrings("退出 DSH Pet", zh[0].label);
+    // Same message either way: the locale changes the label, never the act.
+    try std.testing.expect(std.meta.eql(en[0].msg, zh[0].msg));
 }

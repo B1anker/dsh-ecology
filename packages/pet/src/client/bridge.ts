@@ -17,6 +17,7 @@
  */
 
 import { MOODS } from '../desktop.js'
+import { detectLocale, type Locale } from './i18n.js'
 import type { Mood, PetStateMachine } from './mood.js'
 import type { PetSettingsStore } from './settings.js'
 
@@ -179,6 +180,11 @@ export interface DesktopBridgeState {
   mood: Mood
   petId: string
   name: string
+  /**
+   * The page's locale, so the desktop app's own chrome (the right-click
+   * Quit item) speaks the same language as the DSH page that drives it.
+   */
+  locale: Locale
 }
 
 export interface DesktopBridgeOptions {
@@ -237,6 +243,7 @@ export class DesktopBridge {
       mood: this.machine.getSnapshot(),
       petId: config.petId,
       name: config.name,
+      locale: detectLocale(navigator.language),
     }
     const body = JSON.stringify(state)
     if (body === this.lastSent) return

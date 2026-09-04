@@ -105,8 +105,22 @@ describe('gating', () => {
       mood: 'idle',
       petId: 'deepseek-chan',
       name: 'Mochi',
+      locale: 'en',
     })
     bridge.dispose()
+  })
+
+  test('a zh page sends its locale so the desktop chrome speaks Chinese', () => {
+    const original = window.navigator.language
+    Object.defineProperty(window.navigator, 'language', { value: 'zh-CN', configurable: true })
+    try {
+      const { stub, bridge } = wire()
+
+      expect(JSON.parse(String(stub.calls[0]?.init?.body))).toMatchObject({ locale: 'zh' })
+      bridge.dispose()
+    } finally {
+      Object.defineProperty(window.navigator, 'language', { value: original, configurable: true })
+    }
   })
 
   test('flipping the toggle on later announces the current state at that moment', () => {
@@ -150,6 +164,7 @@ describe('state pushes', () => {
       mood: 'working',
       petId: 'deepseek-chan',
       name: 'Mochi',
+      locale: 'en',
     })
     bridge.dispose()
   })
@@ -164,6 +179,7 @@ describe('state pushes', () => {
       mood: 'idle',
       petId: 'cat',
       name: '豆豆',
+      locale: 'en',
     })
     bridge.dispose()
   })

@@ -139,6 +139,11 @@ pub const Model = struct {
     pet_id_len: usize = 0,
     pet_name_storage: [state.max_field_bytes]u8 = undefined,
     pet_name_len: usize = 0,
+    /// The driving page's language, mirrored from the bridge so the app's
+    /// own chrome (the right-click Quit item) speaks it. Persisted with
+    /// the rest of the state, so a restart greets in the right language
+    /// even before the plugin's first POST.
+    locale: state.Locale = .en,
     /// App-owned window drag state (see appkit.zig's doc comment for why
     /// the built-in window_drag channel cannot serve this app). Also
     /// drives the display-layer mood override (see effectiveMood).
@@ -214,6 +219,7 @@ pub const Model = struct {
                 applied.mood = mood;
             }
         }
+        if (decoded.locale) |locale| model.locale = locale;
         return applied;
     }
 
@@ -447,6 +453,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     .mood = @constCast(@tagName(model.mood)),
                     .pet_id = @constCast(model.petId()),
                     .name = @constCast(model.petName()),
+                    .locale = @constCast(@tagName(model.locale)),
                 }));
                 std.debug.print("dsh-pet-desktop: state #{d} mood={s} pet={s} name={s}\n", .{ model.state_updates, @tagName(model.mood), model.petId(), model.petName() });
             },
@@ -741,6 +748,20 @@ test "applyStateLine copies out of drain scratch and reports mood and pet change
     try std.testing.expectEqualStrings("cat", model.petId());
 }
 
+test "applyStateLine mirrors the page locale, and a locale-less line keeps it" {
+    var model: Model = .{};
+    try std.testing.expectEqual(state.Locale.en, model.locale);
+
+    var line_buffer: [256]u8 = undefined;
+    _ = model.applyStateLine(state.encodeStateLine(&line_buffer, .{ .locale = @constCast("zh") }));
+    try std.testing.expectEqual(state.Locale.zh, model.locale);
+
+    // Lines without the field (older plugins, pre-locale saves) never
+    // reset an established language.
+    _ = model.applyStateLine(state.encodeStateLine(&line_buffer, .{ .mood = @constCast("idle") }));
+    try std.testing.expectEqual(state.Locale.zh, model.locale);
+}
+
 test "a saved state line restores the last pet and mood without lighting the bridge lamp" {
     var model: Model = .{};
     restoreSavedState(&model, "sleeping\tcat\tMochi");
@@ -769,4 +790,5 @@ test {
     _ = @import("server.zig");
     _ = @import("manifest.zig");
     _ = @import("persist.zig");
+    _ = @import("view.zig");
 }

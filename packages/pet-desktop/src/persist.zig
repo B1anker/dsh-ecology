@@ -2,11 +2,13 @@
 //! saved to disk so a restarted app greets the user as the pet they last
 //! picked — and in the mood it last wore — instead of the fallback pet.
 //!
-//! The saved payload IS the channel line (`mood\tpetId\tname`, state.zig),
-//! so restore reuses the exact decode the live bridge uses and the two paths
-//! can never disagree about the format. Writes are whole-snapshot (encoded
-//! from the model after each applied update), never the raw partial line —
-//! a mood-only update would otherwise erase the saved pet id.
+//! The saved payload IS the channel line (`mood\tpetId\tname\tlocale`,
+//! state.zig — the locale field is absent on saves from older builds),
+//! so restore reuses the exact decode the live bridge uses and the two
+//! paths can never disagree about the format. Writes are whole-snapshot
+//! (encoded from the model after each applied update), never the raw
+//! partial line — a mood-only update would otherwise erase the saved pet
+//! id.
 //!
 //! Pure std, no framework imports, every effect behind an explicit
 //! Io + Dir + path so tests serve out of a tmpDir, never a real home.
