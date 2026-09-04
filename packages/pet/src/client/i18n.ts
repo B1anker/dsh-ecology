@@ -24,8 +24,10 @@ export interface Strings {
   nameLabel: string
   /** Settings panel: desktop-companion bridge switch. */
   companionLabel: string
-  /** Badge marking an imported desktop pet in the appearance picker. */
+  /** Badge marking an imported (non-built-in) desktop pet in the picker. */
   desktopPetBadge: string
+  /** Settings panel: the desktop app is unreachable, showing the fallback roster. */
+  desktopOfflineHint: string
 }
 
 const DICTIONARIES: Record<Locale, Strings> = {
@@ -35,7 +37,8 @@ const DICTIONARIES: Record<Locale, Strings> = {
     desktopHint: '宠物显示在桌面 App 里，不在本页面上。',
     nameLabel: '名字',
     companionLabel: '桌面伴侣',
-    desktopPetBadge: '桌面',
+    desktopPetBadge: '导入',
+    desktopOfflineHint: '桌面 App 未连接，暂时只显示内置形象。',
   },
   en: {
     settingsSection: 'Pet',
@@ -43,7 +46,8 @@ const DICTIONARIES: Record<Locale, Strings> = {
     desktopHint: 'The pet lives in the desktop app, not on this page.',
     nameLabel: 'Name',
     companionLabel: 'Desktop companion',
-    desktopPetBadge: 'Desktop',
+    desktopPetBadge: 'Imported',
+    desktopOfflineHint: 'Desktop app not connected — showing the built-in pets for now.',
   },
 }
 
