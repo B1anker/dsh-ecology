@@ -1,0 +1,103 @@
+{
+  "name": "@seaveyon/dsh-git-worktree",
+  "version": "0.1.0",
+  "description": "Safe, session-aware Git worktree tools for DeepSeek Harness",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "git",
+    "worktree"
+  ],
+  "license": "MIT",
+  "author": "B1anker",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "default": "./dist/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "uiWorkspace",
+        "workspaces",
+        "sessions",
+        "locale"
+      ],
+      "external": [
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "react",
+        "react-dom/client"
+      ],
+      "immediately": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/B1anker/dsh-ecology.git",
+    "directory": "packages/git-worktree"
+  },
+  "homepage": "https://github.com/B1anker/dsh-ecology/tree/main/packages/git-worktree#readme",
+  "bugs": {
+    "url": "https://github.com/B1anker/dsh-ecology/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-tools": "0.1.2-rc.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.1.2-rc.1",
+    "@rslib/core": "^0.23.2",
+    "@rstest/coverage-v8": "^0.11.9",
+    "@rstest/core": "^0.11.9",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "build": "rslib build",
+    "dev": "rslib build --watch",
+    "test": "rslib build && rstest run",
+    "test:unit": "rstest run",
+    "test:coverage": "rstest run --coverage",
+    "test:watch": "rstest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pack:check": "bun run build && npm pack --dry-run"
+  }
+}
