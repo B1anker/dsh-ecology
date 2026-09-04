@@ -144,6 +144,11 @@ pub const Model = struct {
     /// the rest of the state, so a restart greets in the right language
     /// even before the plugin's first POST.
     locale: state.Locale = .en,
+    /// Pointer hovering over the window: the pet hops (pet strip + a
+    /// vertical bounce, see jumpOffset) until the pointer leaves.
+    /// Display-layer only, like the drag override — the bridge mood is
+    /// untouched. Dragging wins over hovering (a carried pet runs).
+    hovering: bool = false,
     /// App-owned window drag state (see appkit.zig's doc comment for why
     /// the built-in window_drag channel cannot serve this app). Also
     /// drives the display-layer mood override (see effectiveMood).
@@ -236,12 +241,15 @@ pub const Model = struct {
 
     /// The mood the sprite actually draws: while the window is being
     /// dragged the pet runs (working strip), whatever the bridge last
-    /// said. Display-layer override only — `model.mood` keeps tracking
-    /// bridge state, so a /state update landing mid-drag is neither
-    /// lost nor clobbered when the drag ends; the next sprite() call
-    /// after endDrag reflects it.
+    /// said; while the pointer hovers it hops with excitement (pet
+    /// strip). Display-layer overrides only — `model.mood` keeps tracking
+    /// bridge state, so a /state update landing mid-drag or mid-hover is
+    /// neither lost nor clobbered when the gesture ends; the next
+    /// sprite() call reflects it.
     pub fn effectiveMood(model: *const Model) Mood {
-        return if (model.dragging) .working else model.mood;
+        if (model.dragging) return .working;
+        if (model.hovering) return .pet;
+        return model.mood;
     }
 
     /// True while a rightward drag should mirror the sprite: the run
@@ -249,6 +257,14 @@ pub const Model = struct {
     /// drawn facing left natively.
     pub fn flipSprite(model: *const Model) bool {
         return model.dragging and model.facing_right;
+    }
+
+    /// The sprite's vertical lift this frame: hopping only while hovered
+    /// (and not mid-drag — a carried pet runs instead), zero otherwise.
+    pub fn jumpOffset(model: *const Model) f32 {
+        if (!model.hovering or model.dragging) return 0;
+        const m = manifest.current() orelse return 0;
+        return jumpOffsetForFrame(model.frame_index, m.strip(model.active_pet, .pet).frames);
     }
 
     pub fn sprite(model: *const Model) Sprite {
@@ -278,6 +294,8 @@ pub const Msg = union(enum) {
     state_event: native_sdk.EffectChannelEvent,
     drag: DragRecord,
     press,
+    hover_enter,
+    hover_leave,
     quit,
 };
 
@@ -467,6 +485,23 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 std.debug.print("dsh-pet-desktop: state channel rejected\n", .{});
             },
         },
+        .hover_enter => {
+            if (model.hovering) return;
+            model.hovering = true;
+            // A mid-drag enter/leave changes the flag but not the strip:
+            // the carry keeps the run override, and endDrag's re-arm
+            // already reads the hover-aware effectiveMood.
+            if (model.dragging) return;
+            model.frame_index = 0;
+            startFrameTimer(fx, currentIntervalMs(model));
+        },
+        .hover_leave => {
+            if (!model.hovering) return;
+            model.hovering = false;
+            if (model.dragging) return;
+            model.frame_index = 0;
+            startFrameTimer(fx, currentIntervalMs(model));
+        },
         .press => {
             // A press arriving while the poll still owns the gesture is
             // the drag's own release echo (it precedes the poll's
@@ -604,14 +639,28 @@ fn endDrag(model: *Model, fx: *Effects, reason: [*:0]const u8) void {
     model.dragging = false;
     fx.cancelTimer(drag_poll_timer_key);
     model.drag_end_ms = monotonicMs();
-    // Drop the run override: restart at frame 0 on the bridge mood's
-    // own cadence (dragging is already false, so currentIntervalMs
-    // reads model.mood again — including any /state update that
-    // arrived mid-drag).
+    // Drop the run override: restart at frame 0 on the effective mood's
+    // own cadence (dragging is already false, so currentIntervalMs reads
+    // the hover-aware effectiveMood again — including any /state update
+    // that arrived mid-drag).
     model.frame_index = 0;
     startFrameTimer(fx, currentIntervalMs(model));
     const elapsed_ms = model.drag_end_ms - model.drag_start_ms;
     std.debug.print("dsh-pet-desktop: drag end ({s}) events={d} polls={d} spurious_ends={d} elapsed_ms={d}\n", .{ reason, model.drag_events, model.poll_ticks, model.spurious_ends, elapsed_ms });
+}
+
+/// Crest height of the hover hop, in points. The window keeps 32pt of
+/// transparent margin around the 128pt sprite, so 12pt of lift never
+/// clips (the same margin the 1.25x zoom lives inside).
+pub const jump_height_pt: f32 = 12;
+
+/// One hop per strip cycle: a sine hump across the pet strip's frame
+/// positions — feet on the ground at both ends, airborne mid-cycle.
+/// Pure, so the hop math is testable without a loaded manifest.
+pub fn jumpOffsetForFrame(frame_index: u32, frames: u32) f32 {
+    if (frames < 2) return 0;
+    const phase = @as(f32, @floatFromInt(frame_index % frames)) / @as(f32, @floatFromInt(frames));
+    return -jump_height_pt * @sin(std.math.pi * phase);
 }
 
 /// Absolute drag mapping. NSEvent.mouseLocation and
@@ -773,6 +822,38 @@ test "a saved state line restores the last pet and mood without lighting the bri
     try std.testing.expect(model.state_updates == 0);
     // The effective mood follows the restore (no drag override involved).
     try std.testing.expectEqual(Mood.sleeping, model.effectiveMood());
+}
+
+test "hover overrides the drawn mood with pet; dragging still wins" {
+    var model: Model = .{};
+    model.mood = .sleeping;
+    try std.testing.expectEqual(Mood.sleeping, model.effectiveMood());
+
+    model.hovering = true;
+    try std.testing.expectEqual(Mood.pet, model.effectiveMood());
+
+    // A carried pet runs, hovered or not — and the bridge mood is intact.
+    model.dragging = true;
+    try std.testing.expectEqual(Mood.working, model.effectiveMood());
+    try std.testing.expectEqual(Mood.sleeping, model.mood);
+
+    model.dragging = false;
+    model.hovering = false;
+    try std.testing.expectEqual(Mood.sleeping, model.effectiveMood());
+}
+
+test "the hover hop lifts mid-cycle and lands at both ends" {
+    try std.testing.expectEqual(@as(f32, 0), jumpOffsetForFrame(0, 4));
+    try std.testing.expectApproxEqAbs(@as(f32, -jump_height_pt), jumpOffsetForFrame(2, 4), 0.001);
+    // The cycle wraps: frame 4 is frame 0 again — feet back on the ground.
+    try std.testing.expectEqual(@as(f32, 0), jumpOffsetForFrame(4, 4));
+    // A degenerate strip never divides by zero and never hops.
+    try std.testing.expectEqual(@as(f32, 0), jumpOffsetForFrame(0, 1));
+    // No manifest in this test process: the model-level read stays 0 even
+    // while hovered.
+    var model: Model = .{};
+    model.hovering = true;
+    try std.testing.expectEqual(@as(f32, 0), model.jumpOffset());
 }
 
 test "a saved line naming an unknown pet keeps the fallback index" {

@@ -54,16 +54,20 @@ pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
     // Rightward drags mirror the (natively left-facing) run strip. The
     // sprite is always centered in the fixed-width window — zooming
     // grows it symmetrically — so the mirror pivot is simply the
-    // window's own width: x' = window_size - x.
+    // window's own width: x' = window_size - x. ty carries the hover
+    // hop's lift (0 when standing).
+    const lift = model.jumpOffset();
     const flip: canvas.Affine = if (model.flipSprite())
-        .{ .a = -1, .tx = model_mod.window_size }
+        .{ .a = -1, .tx = model_mod.window_size, .ty = lift }
     else
-        .{};
+        .{ .ty = lift };
     return ui.column(.{
         .grow = 1,
         .main = .center,
         .cross = .center,
         .on_press = .press,
+        .on_hover_enter = .hover_enter,
+        .on_hover_leave = .hover_leave,
         .on_drag = Msg{ .drag = .{ .sourceId = 1 } },
         .context_menu = quitMenu(model.locale),
         .style = .{ .quiet_hover = true },
