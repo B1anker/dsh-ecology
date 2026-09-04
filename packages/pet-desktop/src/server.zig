@@ -87,11 +87,11 @@ fn serverMain(handle: native_sdk.ChannelHandle) void {
 
     const address = std.Io.net.IpAddress.parseIp4(host, port) catch return;
     var listener = std.Io.net.IpAddress.listen(&address, io, .{ .reuse_address = true }) catch |err| {
-        std.debug.print("dsh-pet: state server listen {s}:{d} failed: {s}\n", .{ host, port, @errorName(err) });
+        std.debug.print("dsh-pet-desktop: state server listen {s}:{d} failed: {s}\n", .{ host, port, @errorName(err) });
         return;
     };
     defer listener.deinit(io);
-    std.debug.print("dsh-pet: state server listening on http://{s}:{d}/state\n", .{ host, port });
+    std.debug.print("dsh-pet-desktop: state server listening on http://{s}:{d}/state\n", .{ host, port });
 
     while (true) {
         const stream = listener.accept(io) catch return;

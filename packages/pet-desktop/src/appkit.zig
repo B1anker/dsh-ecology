@@ -99,10 +99,10 @@ pub fn frame() ?NSRect {
 /// One-line geometry dump for the run log.
 pub fn logFrame(tag: [*:0]const u8) void {
     const f = frame() orelse {
-        std.debug.print("dsh-pet: [{s}] window not found\n", .{tag});
+        std.debug.print("dsh-pet-desktop: [{s}] window not found\n", .{tag});
         return;
     };
-    std.debug.print("dsh-pet: [{s}] frame=({d:.1},{d:.1} {d:.1}x{d:.1})\n", .{ tag, f.origin.x, f.origin.y, f.size.width, f.size.height });
+    std.debug.print("dsh-pet-desktop: [{s}] frame=({d:.1},{d:.1} {d:.1}x{d:.1})\n", .{ tag, f.origin.x, f.origin.y, f.size.width, f.size.height });
 }
 
 /// The pointer's absolute screen position (AppKit bottom-left origin,
@@ -148,6 +148,6 @@ pub fn placeBottomRight(margin: f64, content_size: f64) void {
         .x = visible.origin.x + visible.size.width - content_size - margin,
         .y = visible.origin.y + margin,
     };
-    std.debug.print("dsh-pet: place bottom-right ({d:.1},{d:.1}) visibleFrame=({d:.1},{d:.1} {d:.1}x{d:.1})\n", .{ target.x, target.y, visible.origin.x, visible.origin.y, visible.size.width, visible.size.height });
+    std.debug.print("dsh-pet-desktop: place bottom-right ({d:.1},{d:.1}) visibleFrame=({d:.1},{d:.1} {d:.1}x{d:.1})\n", .{ target.x, target.y, visible.origin.x, visible.origin.y, visible.size.width, visible.size.height });
     setOrigin(target);
 }
