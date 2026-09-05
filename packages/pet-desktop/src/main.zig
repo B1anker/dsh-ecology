@@ -9,8 +9,8 @@
 //! hovering hops with excitement (pet strip + a sine bounce), right-click
 //! carries Quit (in the driving page's language — the bridge mirrors its
 //! locale through /state), and dragging is app-owned: on_drag starts the
-//! gesture, then a 60Hz poll timer follows NSEvent.mouseLocation
-//! absolutely (src/appkit.zig) until the physical left button releases.
+//! gesture, then a 60Hz poll timer follows the absolute pointer position
+//! (src/windowing.zig) until the physical left button releases.
 //!
 //! WebView-free: no frontend/, no WebViewSource — a pure Zig-core UiApp
 //! (modeled on /tmp/zero-native/examples/calculator).
@@ -27,6 +27,7 @@ const geometry = native_sdk.geometry;
 const model_mod = @import("model.zig");
 const view_mod = @import("view.zig");
 const assets = @import("assets.zig");
+const runlog = @import("runlog.zig");
 
 pub const Model = model_mod.Model;
 pub const Msg = model_mod.Msg;
@@ -94,6 +95,9 @@ fn tokensFromModel(model: *const Model) canvas.DesignTokens {
 }
 
 pub fn main(init: std.process.Init) !void {
+    // Before the first print: a double-clicked windowed run has no std
+    // handles, so its diagnostics would go nowhere (runlog.zig).
+    runlog.redirectIfDetached();
     const app_state = try std.heap.page_allocator.create(PetApp);
     defer std.heap.page_allocator.destroy(app_state);
     app_state.* = PetApp.init(std.heap.page_allocator, .{}, petOptions());

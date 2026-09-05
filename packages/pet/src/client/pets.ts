@@ -22,4 +22,8 @@ export interface PetDefinition {
 /** The built-in roster, in picker order. Must match the desktop manifest. */
 export const PETS: readonly PetDefinition[] = [
   { id: 'deepseek-chan', label: { zh: 'DeepSeek 酱', en: 'DeepSeek-chan' } },
+  {
+    id: 'ai-sleepy-silver-wolf',
+    label: { zh: '贪睡银狼', en: 'Sleepy Silver Wolf' },
+  },
 ]

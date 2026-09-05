@@ -1,6 +1,7 @@
-//! In-process AppKit bridge for the chromeless pet window (macOS-only:
-//! the app only builds for macOS and already links AppKit/libobjc for
-//! the platform host — no sidecar, no host patch).
+//! In-process AppKit bridge for the chromeless pet window — the macOS
+//! backend behind src/windowing.zig (the Windows backend is
+//! src/win32.zig). In-process because the AppKit platform host already
+//! links AppKit/libobjc: no sidecar, no host patch.
 //!
 //! Why this exists: the built-in `window_drag` channel hands the gesture
 //! to the platform ONLY when the hit walk finds no press-claiming widget
@@ -71,6 +72,16 @@ const window_title = "DSH Pet";
 /// generic "exec" icon.)
 const activation_policy_accessory: i64 = 1;
 
+/// No-ops here: the Windows backend raises the process timer resolution
+/// for the duration of a drag because SetTimer rounds onto a 15.625ms
+/// grid (win32.zig's beginPreciseTimers explains). Mach timers already
+/// deliver the app timer's request, so there is nothing to raise —
+/// which is what the `true` reports: millisecond timers are available.
+pub fn beginPreciseTimers() bool {
+    return true;
+}
+pub fn endPreciseTimers() void {}
+
 /// Drop the app from the Dock and the Cmd+Tab switcher. Runtime-settable
 /// and instant; called once from boot, before the window reveals.
 pub fn hideFromDock() void {
@@ -111,15 +122,6 @@ pub fn origin() ?NSPoint {
 pub fn frame() ?NSRect {
     const window = petWindow() orelse return null;
     return call0(NSRect, window, sel("frame"));
-}
-
-/// One-line geometry dump for the run log.
-pub fn logFrame(tag: [*:0]const u8) void {
-    const f = frame() orelse {
-        std.debug.print("dsh-pet-desktop: [{s}] window not found\n", .{tag});
-        return;
-    };
-    std.debug.print("dsh-pet-desktop: [{s}] frame=({d:.1},{d:.1} {d:.1}x{d:.1})\n", .{ tag, f.origin.x, f.origin.y, f.size.width, f.size.height });
 }
 
 /// The pointer's absolute screen position (AppKit bottom-left origin,

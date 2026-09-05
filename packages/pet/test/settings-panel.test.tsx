@@ -47,8 +47,11 @@ function desktopPetFixture(id: string) {
   }
 }
 
-/** The desktop manifest's shape in production: built-ins plus imports. */
+/** The desktop manifest's shape in production: the two stock built-ins. */
 const DESKTOP_ROSTER = ['deepseek-chan', 'ai-sleepy-silver-wolf']
+
+/** A pet imported into the desktop app (a Codex conversion, say). */
+const IMPORTED = 'codex-fox'
 
 function desktopPetsStore(ids: string[]): DesktopPetsStore {
   const fetchFn = () =>
@@ -112,7 +115,7 @@ describe('single-source picker (desktop online)', () => {
 
     const buttons = pickerButtons()
     expect(buttons).toHaveLength(2)
-    expect(buttons.map((b) => b.title)).toEqual(['DeepSeek-chan', 'Ai Sleepy Silver Wolf'])
+    expect(buttons.map((b) => b.title)).toEqual(['DeepSeek-chan', 'Sleepy Silver Wolf'])
     // Every preview is a raster strip off the bridge server, including the
     // built-in — the page no longer ships an SVG stand-in path at all.
     expect(container.querySelectorAll('[data-dsh-pet-raster]')).toHaveLength(2)
@@ -120,29 +123,31 @@ describe('single-source picker (desktop online)', () => {
   })
 
   test('imported pets wear the badge; built-ins served by the desktop do not', async () => {
-    const desktopPets = desktopPetsStore(DESKTOP_ROSTER)
+    const desktopPets = desktopPetsStore([...DESKTOP_ROSTER, IMPORTED])
     mount(desktopPets)
     await flushRefresh(desktopPets)
 
     const buttons = pickerButtons()
-    const wolf = buttons.find((b) => b.title === 'Ai Sleepy Silver Wolf')!
-    expect(wolf.textContent).toContain('Imported')
+    expect(buttons.find((b) => b.title === 'Codex Fox')!.textContent).toContain('Imported')
     expect(buttons.find((b) => b.title === 'DeepSeek-chan')!.textContent).not.toContain('Imported')
+    expect(buttons.find((b) => b.title === 'Sleepy Silver Wolf')!.textContent).not.toContain(
+      'Imported',
+    )
   })
 
   test('selecting an imported pet persists its id and previews the pet mood', async () => {
-    const desktopPets = desktopPetsStore(DESKTOP_ROSTER)
+    const desktopPets = desktopPetsStore([...DESKTOP_ROSTER, IMPORTED])
     const { settings } = mount(desktopPets)
     await flushRefresh(desktopPets)
 
-    const wolf = pickerButtons().find((b) => b.title === 'Ai Sleepy Silver Wolf')!
+    const fox = pickerButtons().find((b) => b.title === 'Codex Fox')!
     act(() => {
-      wolf.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      fox.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
-    expect(settings.getSnapshot().petId).toBe('ai-sleepy-silver-wolf')
-    expect(wolf.getAttribute('aria-pressed')).toBe('true')
-    expect(wolf.querySelector('[data-dsh-pet-raster]')?.getAttribute('data-mood')).toBe('pet')
+    expect(settings.getSnapshot().petId).toBe('codex-fox')
+    expect(fox.getAttribute('aria-pressed')).toBe('true')
+    expect(fox.querySelector('[data-dsh-pet-raster]')?.getAttribute('data-mood')).toBe('pet')
   })
 
   test('a stored petId stays selected once the desktop answers', async () => {
@@ -173,11 +178,9 @@ describe('single-source picker (desktop online)', () => {
       await flushRefresh(desktopPets)
 
       const buttons = pickerButtons()
-      expect(buttons.map((b) => b.title)).toEqual(['DeepSeek 酱', 'Ai Sleepy Silver Wolf'])
-      expect(buttons.find((b) => b.title === 'Ai Sleepy Silver Wolf')!.textContent).toContain(
-        '导入',
-      )
+      expect(buttons.map((b) => b.title)).toEqual(['DeepSeek 酱', '贪睡银狼'])
       expect(buttons.find((b) => b.title === 'DeepSeek 酱')!.textContent).not.toContain('导入')
+      expect(buttons.find((b) => b.title === '贪睡银狼')!.textContent).not.toContain('导入')
     } finally {
       if (original !== undefined) Object.defineProperty(Navigator.prototype, 'language', original)
     }
@@ -204,7 +207,7 @@ describe('discovery retry', () => {
 
     expect(calls).toBe(2)
     expect(pickerButtons()).toHaveLength(2)
-    expect(pickerButtons().some((b) => b.title === 'Ai Sleepy Silver Wolf')).toBe(true)
+    expect(pickerButtons().some((b) => b.title === 'Sleepy Silver Wolf')).toBe(true)
   })
 
   test('retries stop after the cap and the offline hint stays', async () => {

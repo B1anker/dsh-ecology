@@ -4,8 +4,10 @@
 //! external-source channel -> state_event Msgs), and the press/quit
 //! intents.
 //!
-//! Sprite playback: one registry slot per (pet, mood) strip — 8 moods,
-//! one active pet, so 8 of the 16 image-registry slots are in use.
+//! Sprite playback: one registry slot per (pet, mood) strip — 8 moods
+//! plus the pre-mirrored run strip (slot 8 of the stride, see
+//! manifest.mirrored_run_slot), one active pet, so 9 of the 16
+//! image-registry slots are in use.
 //! Strips register under stable ids (`manifest.imageId`); switching
 //! petId unregisters the old pet's LOADED strips synchronously
 //! (`fx.unregisterImage` is registry surgery, no terminal) and leaves
@@ -25,8 +27,10 @@
 
 const std = @import("std");
 const native_sdk = @import("native_sdk");
-const appkit = @import("appkit.zig");
+const windowing = @import("windowing.zig");
 const assets = @import("assets.zig");
+const diag = @import("diag.zig");
+const runlog = @import("runlog.zig");
 const manifest = @import("manifest.zig");
 const persist = @import("persist.zig");
 const server = @import("server.zig");
@@ -39,25 +43,75 @@ pub const Mood = state.Mood;
 
 pub const Effects = native_sdk.Effects(Msg);
 
-/// Monotonic milliseconds for drag-rate instrumentation (Zig 0.16 has no
-/// std.time.nanoTimestamp; read CLOCK_MONOTONIC directly — macOS-only app).
+/// Monotonic milliseconds for drag-rate instrumentation and the
+/// post-drag press-suppression window. Zig 0.16 has no
+/// std.time.nanoTimestamp — clock reads go through an Io — so one
+/// process-lifetime Threaded io serves every call (all callers are the
+/// UI thread or a single test thread; the lazy init needs no
+/// synchronization).
+var clock_io: ?std.Io.Threaded = null;
+
 fn monotonicMs() i128 {
-    var ts: std.posix.timespec = undefined;
-    switch (std.posix.errno(std.posix.system.clock_gettime(.MONOTONIC, &ts))) {
-        .SUCCESS => return @as(i128, ts.sec) * std.time.ms_per_s + @divTrunc(ts.nsec, std.time.ns_per_ms),
-        else => return 0,
-    }
+    if (clock_io == null) clock_io = .init(std.heap.page_allocator, .{});
+    return @divTrunc(std.Io.Timestamp.now(clock_io.?.io(), .boot).nanoseconds, std.time.ns_per_ms);
 }
 
 /// The one repeating timer: flips the current strip's frame at the
 /// current (pet, mood)'s manifest cadence.
 pub const frame_timer_key: u64 = 1;
 
-/// Drag-follow poll timer: 60Hz absolute repositioning independent of
-/// the on_drag event stream (which dies when the pointer outruns the
-/// 128pt sprite and leaves the window's hit region).
+/// Drag-follow poll timer: absolute repositioning independent of the
+/// on_drag event stream (which dies when the pointer outruns the 128pt
+/// sprite and leaves the window's hit region), plus the physical
+/// button-up detection that ends the gesture. It is the FALLBACK clock
+/// for following, not the primary one — see
+/// drag_move_min_interval_ms.
 pub const drag_poll_timer_key: u64 = 4;
-pub const drag_poll_interval_ms: u32 = 16;
+
+/// 10, not the 16 the follow actually wants, because SetTimer cannot
+/// deliver 16.
+///
+/// SetTimer arms against the LEGACY system timer grid (15.625ms), and
+/// only fires on a grid tick at or past the requested period. A 16ms
+/// request misses tick 1 by 0.4ms, so it lands on tick 2, then beats
+/// against the grid from there: measured 25.0ms mean — 40Hz, with the
+/// step length flipping between one and two slots. That irregular 40Hz
+/// IS the Windows drag jitter (61Hz following logged smooth, 38Hz
+/// jittery).
+///
+/// timeBeginPeriod(1) was supposed to shrink the grid under the request
+/// instead; on hardware it changed nothing (still 40.2Hz). So shrink
+/// the REQUEST under the grid: any period below one slot is due at
+/// every tick, so the poll fires once per tick — a regular ~64Hz — and
+/// 10 is the floor SetTimer accepts (USER_TIMER_MINIMUM; smaller is
+/// silently raised to it). On a grid that timeBeginPeriod does shrink,
+/// 10ms is honored as 10ms and drag_move_min_interval_ms below is what
+/// paces the moves. Either way the follow gets a clock at or above 60Hz
+/// instead of under it.
+pub const drag_poll_interval_ms: u32 = 10;
+
+/// Minimum spacing between drag repositions, so both follow paths
+/// share one cadence near the present grid (~61Hz).
+///
+/// Following rides the INPUT stream, not this timer, because a timer
+/// cannot be trusted to pace it: the SDK hands app timers a plain
+/// SetTimer, and WM_TIMER is the lowest-priority message class —
+/// generated only once input and posted messages have drained. Windows
+/// delivers pointer motion at ~550/sec during a drag, and under that
+/// flood the poll measured 25.0ms per tick against its requested 16
+/// (423 ticks / 10576ms), alternating between one and two slots of the
+/// 15.625ms legacy grid with a 51ms worst case. At the 2000-4300px/sec
+/// the pet actually gets swung around, that is position steps of
+/// 50-108px whose length flips between 1x and 2x every few frames —
+/// the Windows drag jitter. The same log's presents were a flat 61.1Hz
+/// and its pointer events a flat 549Hz, so the input stream is the one
+/// clock the message queue never starves.
+///
+/// 13ms (not 16) so the ~550Hz stream can land inside every present
+/// window instead of aliasing just past it; the gate is what keeps
+/// this from becoming a SetWindowPos per event, which overdrove the
+/// layered window in the first fix round.
+const drag_move_min_interval_ms: i128 = 13;
 
 /// The plugin state bridge's external-source channel key. Shares the
 /// keyed families' one key space, so it must not collide with the
@@ -120,6 +174,14 @@ pub const Model = struct {
     strip_status: [manifest.max_pets][manifest.mood_count]StripStatus = @splat(@splat(.unloaded)),
     strip_width: [manifest.max_pets][manifest.mood_count]u32 = @splat(@splat(0)),
     strip_height: [manifest.max_pets][manifest.mood_count]u32 = @splat(@splat(0)),
+    /// Per-pet load state of the pre-mirrored working strip (image id
+    /// slot 8, manifest.mirroredRunImageId). Its geometry IS the working
+    /// strip's — same frames, same decoded size — so sprite() keeps
+    /// reading strip_width/height of the working slot and no parallel
+    /// geometry arrays exist; the mirrored strip only draws once the
+    /// working strip itself is loaded. Same loading-survives-switch
+    /// discipline as strip_status.
+    mirrored_status: [manifest.max_pets]StripStatus = @splat(.unloaded),
     /// False when assets/sprites/manifest.json failed to read/parse at
     /// boot: the bridge still runs, the canvas just draws nothing.
     manifest_ok: bool = false,
@@ -135,6 +197,9 @@ pub const Model = struct {
     /// The channel open was rejected, or the server thread failed to
     /// spawn: the app still runs, just without the plugin bridge.
     bridge_failed: bool = false,
+    /// Latch for the unknown-petId report, so a bridge stuck on an id we
+    /// do not have writes one line per run instead of one per POST.
+    unknown_pet_reported: bool = false,
     pet_id_storage: [state.max_field_bytes]u8 = undefined,
     pet_id_len: usize = 0,
     pet_name_storage: [state.max_field_bytes]u8 = undefined,
@@ -149,12 +214,28 @@ pub const Model = struct {
     /// Display-layer only, like the drag override — the bridge mood is
     /// untouched. Dragging wins over hovering (a carried pet runs).
     hovering: bool = false,
-    /// App-owned window drag state (see appkit.zig's doc comment for why
-    /// the built-in window_drag channel cannot serve this app). Also
+    /// App-owned window drag state (see windowing.zig / appkit.zig for
+    /// why the built-in window_drag channel cannot serve this app). Also
     /// drives the display-layer mood override (see effectiveMood).
     dragging: bool = false,
     drag_events: u32 = 0,
     poll_ticks: u32 = 0,
+    /// Repositions actually issued this drag, and when the last one
+    /// went out (monotonic ms) — the pacing gate followPointer applies
+    /// to both follow paths. `drag_moves` is diagnostic only: against
+    /// the elapsed ms it reads out the achieved follow cadence, which
+    /// is the number the jitter hunt turns on.
+    drag_moves: u32 = 0,
+    last_move_ms: i128 = 0,
+    /// Move-interval histogram for the drag, bucketed by
+    /// `move_gap_buckets` and dumped once by endDrag. Accumulated in
+    /// memory on purpose: the follow runs at up to 77Hz and printing a
+    /// line per move would put unbuffered synchronous I/O in the hot
+    /// path — exactly the mistake the SDK's default event trace makes
+    /// (docs/windows-jitter-handoff.zh-CN.md §5). What matters is the
+    /// SHAPE of the distribution: a follow that alternates 16/32ms
+    /// averages a healthy-looking 47Hz while looking like a stutter.
+    move_gaps: [move_gap_buckets.len + 1]u32 = @splat(0),
     /// Mid-drag end/cancel events ignored because the physical button
     /// was still down (runtime cancels the widget drag when the pointer
     /// leaves the window; the poll timer keeps following regardless).
@@ -166,7 +247,7 @@ pub const Model = struct {
     /// the captured pointer_up still dispatches a click). Presses
     /// within this window are the drag's own release echo, not clicks.
     drag_end_ms: i128 = 0,
-    /// Absolute screen-space offset from the window's AppKit origin to
+    /// Absolute screen-space offset from the window's origin to
     /// the pointer, captured at the drag's first (post-slop) event:
     /// origin = mouseLocation - grab_offset for every later event, so
     /// positioning is an absolute 1:1 mapping with no accumulation and
@@ -259,6 +340,30 @@ pub const Model = struct {
         return model.dragging and model.facing_right;
     }
 
+    /// True when the active pet's pre-mirrored run strip is registered
+    /// and can be drawn instead of mirroring at draw time. The view
+    /// reads this to decide between the two mirror paths (the SDK's
+    /// software reference renderer — the only path a Windows transparent
+    /// window gets — drops negative scale, so the Affine fallback does
+    /// not flip there).
+    pub fn mirroredRunLoaded(model: *const Model) bool {
+        return model.mirrored_status[model.active_pet] == .loaded;
+    }
+
+    /// Which registered image backs the current frame. ASSUMPTION:
+    /// flipSprite() is only true while dragging, and dragging forces
+    /// effectiveMood() == .working — so when this returns the mirrored
+    /// id, `mood` is the working mood whose geometry the mirrored strip
+    /// shares. Without a loaded mirrored strip (pets whose assets
+    /// predate scripts/mirror-working-strips.mjs) the plain id comes
+    /// back and the view falls back to the legacy negative-scale Affine.
+    fn spriteImageId(model: *const Model, mood: Mood) canvas.ImageId {
+        if (model.flipSprite() and model.mirroredRunLoaded()) {
+            return manifest.mirroredRunImageId(model.active_pet);
+        }
+        return manifest.imageId(model.active_pet, mood);
+    }
+
     /// The sprite's vertical lift this frame: hopping only while hovered
     /// (and not mid-drag — a carried pet runs instead), zero otherwise.
     pub fn jumpOffset(model: *const Model) f32 {
@@ -281,7 +386,7 @@ pub const Model = struct {
         const frame = @min(model.frame_index, frames - 1);
         const frame_px = manifest.framePixels(height);
         return .{
-            .image = manifest.imageId(model.active_pet, mood),
+            .image = model.spriteImageId(mood),
             .src = geometry.RectF.init(manifest.frameOriginX(frame, height), 0, frame_px, frame_px),
         };
     }
@@ -336,6 +441,21 @@ fn loadPetSet(model: *Model, fx: *Effects) void {
         });
         model.strip_status[model.active_pet][mood_index] = .loading;
     }
+    // The pre-mirrored run strip rides along under stride slot 8; same
+    // one-load-per-id skip discipline as the mood strips above.
+    if (m.mirroredRunFile(model.active_pet)) |file| {
+        if (model.mirrored_status[model.active_pet] == .unloaded) {
+            var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+            if (assets.spritePath(&path_buffer, file)) |path| {
+                fx.loadImage(.{
+                    .id = manifest.mirroredRunImageId(model.active_pet),
+                    .path = path,
+                    .on_result = Effects.imageMsg(.image_done),
+                });
+                model.mirrored_status[model.active_pet] = .loading;
+            }
+        }
+    }
 }
 
 /// Swap the whole strip set on a petId change. Loaded strips of the old
@@ -352,6 +472,12 @@ fn switchPet(model: *Model, fx: *Effects, new_pet: usize) void {
             _ = fx.unregisterImage(manifest.imageId(model.active_pet, @enumFromInt(mood_index)));
             model.strip_status[model.active_pet][mood_index] = .unloaded;
         }
+    }
+    // The old pet's mirrored run strip frees with its mood strips;
+    // an in-flight one takes the stale branch in .image_done instead.
+    if (model.mirrored_status[model.active_pet] == .loaded) {
+        _ = fx.unregisterImage(manifest.mirroredRunImageId(model.active_pet));
+        model.mirrored_status[model.active_pet] = .unloaded;
     }
     model.active_pet = new_pet;
     model.frame_index = 0;
@@ -407,19 +533,43 @@ pub fn boot(model: *Model, fx: *Effects) void {
             fx.closeChannel(state_channel_key);
         };
     }
-    appkit.hideFromDock();
-    appkit.placeBottomRight(screen_margin, window_size);
-    appkit.logFrame("boot");
+    windowing.hideFromDock();
+    windowing.placeBottomRight(screen_margin, window_size);
+    windowing.logFrame("boot");
 }
 
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
     switch (msg) {
         .tick => |timer| {
             if (timer.outcome != .fired) return;
+            // The only always-running clock in the app, so it is also
+            // where the run log's size ceiling gets checked (runlog.zig
+            // throttles this to one syscall every few seconds).
+            runlog.enforceCap();
             const m = manifest.current() orelse return;
             model.frame_index = manifest.nextFrame(model.frame_index, m.strip(model.active_pet, model.effectiveMood()).frames);
         },
         .image_done => |result| {
+            // Mirrored-run ids (stride slot 8) are checked FIRST:
+            // decodeImageId rejects them by design.
+            if (manifest.mirroredRunPet(result.id)) |pet| {
+                if (result.outcome != .loaded) {
+                    model.mirrored_status[pet] = .unloaded;
+                    std.debug.print("dsh-pet-desktop: mirrored run strip load failed pet={d} outcome={s}\n", .{ pet, @tagName(result.outcome) });
+                    return;
+                }
+                if (pet != model.active_pet) {
+                    // Stale, same discipline as the strips below: release
+                    // on arrival or the slot is occupied forever.
+                    _ = fx.unregisterImage(result.id);
+                    model.mirrored_status[pet] = .unloaded;
+                    std.debug.print("dsh-pet-desktop: stale mirrored run strip released pet={d}\n", .{pet});
+                    return;
+                }
+                model.mirrored_status[pet] = .loaded;
+                std.debug.print("dsh-pet-desktop: mirrored run strip loaded pet={d} {d}x{d}\n", .{ pet, result.width, result.height });
+                return;
+            }
             const decoded = manifest.decodeImageId(result.id) orelse {
                 std.debug.print("dsh-pet-desktop: image_done for unknown id={d}\n", .{result.id});
                 return;
@@ -452,7 +602,14 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     const new_pet = blk: {
                         const m = manifest.current() orelse break :blk fallback_pet_index;
                         break :blk m.petIndex(model.petId()) orelse {
-                            std.debug.print("dsh-pet-desktop: unknown petId \"{s}\", falling back to the first manifest pet\n", .{model.petId()});
+                            // Once per run: a bridge that keeps pushing
+                            // an id we do not have would otherwise write
+                            // a line per POST (persist.zig carries the
+                            // same latch for the save it rides with).
+                            if (!model.unknown_pet_reported) {
+                                model.unknown_pet_reported = true;
+                                std.debug.print("dsh-pet-desktop: unknown petId \"{s}\", falling back to the first manifest pet (further ones stay silent)\n", .{model.petId()});
+                            }
                             break :blk fallback_pet_index;
                         };
                     };
@@ -473,7 +630,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     .name = @constCast(model.petName()),
                     .locale = @constCast(@tagName(model.locale)),
                 }));
-                std.debug.print("dsh-pet-desktop: state #{d} mood={s} pet={s} name={s}\n", .{ model.state_updates, @tagName(model.mood), model.petId(), model.petName() });
+                // Behind the diagnostics flag because this is the one
+                // print that recurs for as long as the pet is up — one
+                // line per bridge POST — and a run log with no recurring
+                // writer needs no rotation to stay bounded (runlog.zig).
+                diag.print("state #{d} mood={s} pet={s} name={s}\n", .{ model.state_updates, @tagName(model.mood), model.petId(), model.petName() });
             },
             .closed => {
                 model.bridge_live = false;
@@ -488,6 +649,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .hover_enter => {
             if (model.hovering) return;
             model.hovering = true;
+            diag.print("hover enter (dragging={})\n", .{model.dragging});
             // A mid-drag enter/leave changes the flag but not the strip:
             // the carry keeps the run override, and endDrag's re-arm
             // already reads the hover-aware effectiveMood.
@@ -498,6 +660,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .hover_leave => {
             if (!model.hovering) return;
             model.hovering = false;
+            diag.print("hover leave (dragging={})\n", .{model.dragging});
             if (model.dragging) return;
             model.frame_index = 0;
             startFrameTimer(fx, currentIntervalMs(model));
@@ -512,12 +675,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             if (model.dragging) return;
             if (model.drag_end_ms != 0 and monotonicMs() - model.drag_end_ms < 250) {
                 model.drag_end_ms = 0;
-                std.debug.print("dsh-pet-desktop: press suppressed (post-drag release)\n", .{});
+                diag.print("press suppressed (post-drag release)\n", .{});
                 return;
             }
             model.press_count += 1;
             model.zoomed = !model.zoomed;
-            std.debug.print("dsh-pet-desktop: press #{d} zoomed={}\n", .{ model.press_count, model.zoomed });
+            diag.print("press #{d} zoomed={}\n", .{ model.press_count, model.zoomed });
         },
         // The runtime slop-filters drag gestures (6px): sub-slop motion
         // never reaches us and its release stays an ordinary press, so
@@ -541,13 +704,30 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     // coordinates so the drag starts with zero jump
                     // (the pre-slop pixels never move the window), then
                     // hand following to the poll timer.
-                    const o = appkit.origin() orelse return;
-                    const ml = appkit.mouseLocation() orelse return;
+                    const o = windowing.origin() orelse return;
+                    const ml = windowing.mouseLocation() orelse return;
+                    // The follow poll runs on whatever grid SetTimer
+                    // has; the event stream that used to mask a coarse
+                    // one dies the moment the pointer outruns the
+                    // window (a direction reversal does it every time).
+                    // Raise the resolution for the gesture — endDrag
+                    // drops it again — and log whether it took, because
+                    // drag_poll_interval_ms compensates for when it
+                    // does not.
+                    const precise_timers = windowing.beginPreciseTimers();
+                    diag.print("drag start origin=({d:.1},{d:.1}) mouse=({d:.1},{d:.1}) poll_ms={d} precise_timers={}\n", .{ o.x, o.y, ml.x, ml.y, drag_poll_interval_ms, precise_timers });
                     model.dragging = true;
                     model.drag_events = 0;
                     model.poll_ticks = 0;
                     model.spurious_ends = 0;
                     model.drag_start_ms = monotonicMs();
+                    model.drag_moves = 0;
+                    model.move_gaps = @splat(0);
+                    // The grab offset makes dragOrigin reproduce the
+                    // CURRENT origin, so the gesture opens already in
+                    // position: start the pacing clock here and the
+                    // first move is a real one, not a no-op write.
+                    model.last_move_ms = model.drag_start_ms;
                     model.grab_offset_x = ml.x - o.x;
                     model.grab_offset_y = ml.y - o.y;
                     // Heading baseline: the first sample anchors the x
@@ -566,14 +746,16 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     });
                     return;
                 }
-                // Late drag events are still applied (same absolute math,
-                // extra sub-tick responsiveness) and counted: their rate
-                // collapse during fast drags is the evidence for why the
-                // poll timer owns following.
+                // Late drag events are the PRIMARY follow clock: input
+                // is the one message class the queue never starves, so
+                // pacing off it (through followPointer's gate) is what
+                // makes the cadence regular. The stream is sparse on
+                // macOS — it dies once the pointer exits the window —
+                // which is why the poll timer stays armed underneath.
                 model.drag_events += 1;
-                const ml = appkit.mouseLocation() orelse return;
+                const ml = windowing.mouseLocation() orelse return;
                 noteDragPointerX(model, ml.x);
-                appkit.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
+                followPointer(model, ml);
             },
             else => {
                 // Drag end/cancel events are ADVISORY. The runtime
@@ -583,9 +765,9 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 // the event there kills the poll loop and strands the
                 // window (the long-fast-flick escape). Only a physical
                 // button-up ends the drag; the poll tick detects it.
-                if (appkit.leftMouseDown()) {
+                if (windowing.leftMouseDown()) {
                     model.spurious_ends += 1;
-                    std.debug.print("dsh-pet-desktop: drag end/cancel ignored (button down) phase={d} events={d} polls={d}\n", .{ d.phase, model.drag_events, model.poll_ticks });
+                    diag.print("drag end/cancel ignored (button down) phase={d} events={d} polls={d}\n", .{ d.phase, model.drag_events, model.poll_ticks });
                     return;
                 }
                 endDrag(model, fx, "event");
@@ -599,17 +781,21 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             // Release detection does not depend on the up/end event
             // reaching us: poll the physical button state.
-            if (!appkit.leftMouseDown()) {
+            if (!windowing.leftMouseDown()) {
                 endDrag(model, fx, "buttons-up");
                 return;
             }
-            const ml = appkit.mouseLocation() orelse return;
+            const ml = windowing.mouseLocation() orelse return;
             noteDragPointerX(model, ml.x);
-            appkit.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
+            // Same gated follow as the event path: while the stream is
+            // alive its samples are newer than this tick's and the gate
+            // drops this one, so the two paths never fight over the
+            // cadence. Once the stream dies, this becomes the follow.
+            followPointer(model, ml);
             model.poll_ticks += 1;
             if (model.poll_ticks % 60 == 0) {
                 const elapsed_ms = monotonicMs() - model.drag_start_ms;
-                std.debug.print("dsh-pet-desktop: drag poll ticks={d} events={d} elapsed_ms={d} origin=({d:.1},{d:.1})\n", .{ model.poll_ticks, model.drag_events, elapsed_ms, ml.x - model.grab_offset_x, ml.y - model.grab_offset_y });
+                diag.print("drag poll ticks={d} events={d} moves={d} elapsed_ms={d} origin=({d:.1},{d:.1})\n", .{ model.poll_ticks, model.drag_events, model.drag_moves, elapsed_ms, ml.x - model.grab_offset_x, ml.y - model.grab_offset_y });
             }
         },
         .quit => fx.quitApp(),
@@ -638,6 +824,9 @@ fn endDrag(model: *Model, fx: *Effects, reason: [*:0]const u8) void {
     if (!model.dragging) return;
     model.dragging = false;
     fx.cancelTimer(drag_poll_timer_key);
+    // Pairs with the drag-start raise: one end per begin, or the
+    // process leaves the system timer resolution up for good.
+    windowing.endPreciseTimers();
     model.drag_end_ms = monotonicMs();
     // Drop the run override: restart at frame 0 on the effective mood's
     // own cadence (dragging is already false, so currentIntervalMs reads
@@ -646,7 +835,11 @@ fn endDrag(model: *Model, fx: *Effects, reason: [*:0]const u8) void {
     model.frame_index = 0;
     startFrameTimer(fx, currentIntervalMs(model));
     const elapsed_ms = model.drag_end_ms - model.drag_start_ms;
-    std.debug.print("dsh-pet-desktop: drag end ({s}) events={d} polls={d} spurious_ends={d} elapsed_ms={d}\n", .{ reason, model.drag_events, model.poll_ticks, model.spurious_ends, elapsed_ms });
+    diag.print("drag end ({s}) events={d} polls={d} moves={d} spurious_ends={d} elapsed_ms={d}\n", .{ reason, model.drag_events, model.poll_ticks, model.drag_moves, model.spurious_ends, elapsed_ms });
+    diag.print("move gaps ms <=8:{d} 9-12:{d} 13-15:{d} 16-18:{d} 19-24:{d} 25-33:{d} 34-50:{d} >50:{d}\n", .{
+        model.move_gaps[0], model.move_gaps[1], model.move_gaps[2], model.move_gaps[3],
+        model.move_gaps[4], model.move_gaps[5], model.move_gaps[6], model.move_gaps[7],
+    });
 }
 
 /// Crest height of the hover hop, in points. The window keeps 32pt of
@@ -663,19 +856,74 @@ pub fn jumpOffsetForFrame(frame_index: u32, frames: u32) f32 {
     return -jump_height_pt * @sin(std.math.pi * phase);
 }
 
-/// Absolute drag mapping. NSEvent.mouseLocation and
-/// NSWindow.setFrameOrigin: share ONE coordinate space (global AppKit
-/// screen space, bottom-left origin, y-up), so there is NO y-flip
-/// anywhere in the drag path: grab = ml - origin at the first post-slop
-/// event makes dragOrigin reproduce the current origin exactly (zero
-/// jump), and every later event maps pointer motion 1:1 with no
-/// accumulation and no view-local feedback.
-pub fn dragOrigin(ml: appkit.NSPoint, grab_x: f64, grab_y: f64) appkit.NSPoint {
+/// Absolute drag mapping. On each platform the pointer read and the
+/// origin write share ONE coordinate space (AppKit's bottom-left y-up
+/// on macOS, Win32's top-left y-down on Windows — see windowing.zig),
+/// so there is NO y-flip anywhere in the drag path: grab = ml - origin
+/// at the first post-slop event makes dragOrigin reproduce the current
+/// origin exactly (zero jump), and every later event maps pointer
+/// motion 1:1 with no accumulation and no view-local feedback.
+pub fn dragOrigin(ml: windowing.Point, grab_x: f64, grab_y: f64) windowing.Point {
     return .{ .x = ml.x - grab_x, .y = ml.y - grab_y };
 }
 
+/// Upper edges (inclusive, ms) of the move-interval histogram buckets;
+/// samples past the last edge land in the overflow bucket. The edges
+/// straddle the numbers this hunt turns on: 16-18 is the present grid
+/// (smooth), 25-33 is one or two slots of the 15.625ms legacy SetTimer
+/// grid (the 40Hz jitter), and anything past 33 is a starved timer.
+const move_gap_buckets = [_]i128{ 8, 12, 15, 18, 24, 33, 50 };
+
+fn noteMoveGap(model: *Model, gap_ms: i128) void {
+    // The histogram exists only to be printed, so a build without
+    // -Ddrag-diag drops the whole tally (diag.zig).
+    if (!diag.enabled) return;
+    for (move_gap_buckets, 0..) |edge, index| {
+        if (gap_ms <= edge) {
+            model.move_gaps[index] += 1;
+            return;
+        }
+    }
+    model.move_gaps[move_gap_buckets.len] += 1;
+}
+
+/// Whether the pacing gate lets another reposition through. Split out
+/// of followPointer so the cadence is testable without a live window:
+/// the move itself is a platform write, this is the whole policy.
+fn dueForMove(model: *const Model, now_ms: i128) bool {
+    return now_ms - model.last_move_ms >= drag_move_min_interval_ms;
+}
+
+/// Track the pointer with the window, paced to
+/// drag_move_min_interval_ms. Both follow paths (the drag event stream
+/// and the poll timer) funnel through here, so whichever samples first
+/// inside a window owns that move and the other is dropped — one
+/// cadence, no competing writers.
+fn followPointer(model: *Model, ml: windowing.Point) void {
+    const now = monotonicMs();
+    if (!dueForMove(model, now)) return;
+    noteMoveGap(model, now - model.last_move_ms);
+    model.last_move_ms = now;
+    model.drag_moves += 1;
+    windowing.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
+}
+
+test "the follow gate paces repositions and lets a stalled follow through" {
+    var model: Model = .{};
+    model.last_move_ms = 1000;
+    // Inside the window: the flooding input stream is dropped rather
+    // than turned into a SetWindowPos per event.
+    try std.testing.expect(!dueForMove(&model, 1000));
+    try std.testing.expect(!dueForMove(&model, 1000 + drag_move_min_interval_ms - 1));
+    // At the boundary and beyond: the next sample owns the move.
+    try std.testing.expect(dueForMove(&model, 1000 + drag_move_min_interval_ms));
+    // A starved clock (the 51ms worst case the Windows log measured)
+    // is never held back further.
+    try std.testing.expect(dueForMove(&model, 1051));
+}
+
 /// Pointer jitter below this per sample keeps the previous heading
-/// instead of flickering the mirror on every 60Hz poll.
+/// instead of flickering the mirror on every poll.
 const facing_dead_zone_px: f64 = 1.5;
 
 /// Fold one pointer x sample into the drag heading. Samples come from
@@ -684,7 +932,11 @@ fn noteDragPointerX(model: *Model, mouse_x: f64) void {
     const dx = mouse_x - model.last_drag_mouse_x;
     model.last_drag_mouse_x = mouse_x;
     if (@abs(dx) < facing_dead_zone_px) return;
-    model.facing_right = dx > 0;
+    const heading = dx > 0;
+    if (heading != model.facing_right) {
+        diag.print("facing flip right={} dx={d:.1} x={d:.1}\n", .{ heading, dx, mouse_x });
+    }
+    model.facing_right = heading;
 }
 
 test "drag heading follows the pointer x with a dead zone" {
@@ -714,9 +966,31 @@ test "drag heading follows the pointer x with a dead zone" {
     try std.testing.expect(!model.flipSprite());
 }
 
+test "a rightward drag draws the pre-mirrored run strip when it is loaded" {
+    var model: Model = .{};
+    model.dragging = true;
+    model.facing_right = true;
+    try std.testing.expect(model.flipSprite());
+    try std.testing.expectEqual(Mood.working, model.effectiveMood());
+    // Mirrored strip not loaded (or never declared): the plain working
+    // id — the view falls back to the legacy negative-scale Affine.
+    try std.testing.expect(!model.mirroredRunLoaded());
+    try std.testing.expectEqual(manifest.imageId(0, .working), model.spriteImageId(.working));
+    // Loaded: swap to the mirrored id (stride slot 8), same mood geometry.
+    model.mirrored_status[0] = .loaded;
+    try std.testing.expect(model.mirroredRunLoaded());
+    try std.testing.expectEqual(manifest.mirroredRunImageId(0), model.spriteImageId(.working));
+    // Leftward drag or no drag at all: always the plain strip.
+    model.facing_right = false;
+    try std.testing.expectEqual(manifest.imageId(0, .working), model.spriteImageId(.working));
+    model.dragging = false;
+    model.facing_right = true;
+    try std.testing.expectEqual(manifest.imageId(0, .working), model.spriteImageId(.working));
+}
+
 test "drag origin mapping is absolute, unflipped, and jump-free" {
-    const origin = appkit.NSPoint{ .x = 1360, .y = 110 };
-    const grab = appkit.NSPoint{ .x = 42, .y = 17 };
+    const origin = windowing.Point{ .x = 1360, .y = 110 };
+    const grab = windowing.Point{ .x = 42, .y = 17 };
     // First event: pointer at origin+grab reproduces the origin exactly.
     const first = dragOrigin(.{ .x = origin.x + grab.x, .y = origin.y + grab.y }, grab.x, grab.y);
     try std.testing.expectEqual(origin.x, first.x);
