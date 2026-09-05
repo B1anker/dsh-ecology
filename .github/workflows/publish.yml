@@ -258,8 +258,17 @@ jobs:
                 *win32*) exe=bin/dsh-pet-desktop.exe ;;
                 *) exe=bin/dsh-pet-desktop ;;
               esac
-              tar -tzf "$tarball_path" | grep -qx "package/$exe" \
-                || { echo "::error::$name tarball does not contain $exe"; exit 1; }
+              # Capture the listing before matching: piping tar straight into
+              # grep -q closes the pipe on the first match, tar dies to
+              # SIGPIPE, and pipefail then reports a packed binary as
+              # missing — the false negative that blocked the first run.
+              # -tv gives the mode too, so the executable bit is asserted
+              # here rather than left to npm's tar defaults.
+              entry=$(tar -tvzf "$tarball_path" | grep -F "/$exe" || true)
+              case "$entry" in
+                -rwxr-xr*x*) : ;;
+                *) echo "::error::$name tarball lacks an executable $exe"; exit 1 ;;
+              esac
               local_integrity=$(node -e 'const fs = require("node:fs"); const crypto = require("node:crypto"); process.stdout.write(`sha512-${crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64")}`)' "$tarball_path")
               published_integrity=$(npm view "$name@$version" dist.integrity 2>/dev/null || true)
               if [ -n "$published_integrity" ]; then
