@@ -9,5 +9,20 @@ const std = @import("std");
 const native_sdk = @import("native_sdk");
 
 pub fn build(b: *std.Build) void {
-    native_sdk.addApp(b, b.dependency("native_sdk", .{}), .{ .name = "dsh-pet-desktop" });
+    // Per-gesture input diagnostics (src/diag.zig): off by default so a
+    // shipped pet is silent, on for a drag-jitter hunt. `addApp` takes no
+    // hook for an extra module import, so this goes through
+    // `addAppArtifacts` — the same graph, with the exe and test compiles
+    // handed back.
+    const drag_diag = b.option(bool, "drag-diag", "Log per-gesture drag/hover/facing diagnostics") orelse false;
+    const options = b.addOptions();
+    options.addOption(bool, "drag_diag", drag_diag);
+
+    const app = native_sdk.addAppArtifacts(b, b.dependency("native_sdk", .{}), .{ .name = "dsh-pet-desktop" });
+    app.exe.root_module.addOptions("build_options", options);
+    // The tests get their own module only when the app and test optimize
+    // modes differ (they do by default: ReleaseFast vs Debug). When
+    // `-Doptimize` makes them equal this is the same module twice, which
+    // is harmless — `addImport` is a put.
+    app.tests.root_module.addOptions("build_options", options);
 }
