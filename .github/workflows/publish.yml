@@ -166,13 +166,22 @@ jobs:
           set -euo pipefail
 
           release_package() {
-            directory=$1
-            config=$2
+            # Everything is local: the pre-publish hook runs in the same
+            # shell, and without this a shared name (directory, tarball,
+            # version) would come back from it pointing at the last platform
+            # package — one run smoked win32-x64's tarball as if it were
+            # pet's, failing on exactly that.
+            local directory=$1
+            local config=$2
             # Optional pre-publish hook, run with the version as its argument
             # after the main manifest is bumped and before its tarball is
             # packed — pet uses it to publish the platform packages its
             # optionalDependencies reference.
-            pre_publish=${3:-}
+            local pre_publish=${3:-}
+            # Declared apart from the assignments on purpose: `local x=$(…)`
+            # would swallow the command's exit code under set -e.
+            local name output version tarball tarball_path
+            local local_integrity published_integrity
             name=$(node -p "require('./$directory/package.json').name")
             echo "::group::$name"
 
@@ -244,7 +253,11 @@ jobs:
           # the registry means a retry after a later step failed, a different
           # one means this checkout no longer produces what was published.
           publish_pet_platform_packages() {
-            version=$1
+            # Same discipline as release_package: without local, directory /
+            # tarball / name leak back into the caller's scope.
+            local version=$1
+            local directory name tarball tarball_path exe entry
+            local local_integrity published_integrity
             for directory in \
               packages/pet-desktop-darwin-arm64 \
               packages/pet-desktop-darwin-x64 \
