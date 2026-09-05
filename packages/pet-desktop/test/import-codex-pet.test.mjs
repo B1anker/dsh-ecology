@@ -125,7 +125,12 @@ describe('importCodexPet', () => {
         'pet',
       ])
       expect(moods.idle).toEqual({ file: 'mockpet/idle.png', frames: 2, frameDurationMs: 100 })
-      expect(moods.working).toEqual({ file: 'mockpet/working.png', frames: 2, frameDurationMs: 50 })
+      expect(moods.working).toEqual({
+        file: 'mockpet/working.png',
+        frames: 2,
+        frameDurationMs: 50,
+        mirroredFile: 'mockpet/working-mirrored.png',
+      })
       expect(moods.sleeping).toEqual({
         file: 'mockpet/sleeping.png',
         frames: 2,
@@ -144,6 +149,12 @@ describe('importCodexPet', () => {
       ]
       expect(px(128, 128)).toEqual([0, 0, 200, 255]) // sprite 0
       expect(px(384, 128)).toEqual([37, 91, 200, 255]) // sprite 1
+
+      // The mirrored run strip rides along (Windows software renderer
+      // cannot flip at draw time): same geometry as working.png.
+      const mirrored = decodePng(readFileSync(join(spritesDir, 'mockpet', 'working-mirrored.png')))
+      const working = decodePng(readFileSync(join(spritesDir, 'mockpet', 'working.png')))
+      expect([mirrored.width, mirrored.height]).toEqual([working.width, working.height])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
