@@ -97,20 +97,25 @@ pub fn setOrigin(point: Point) void {
 const spi_getworkarea: c_uint = 0x0030;
 
 /// Place the window at the primary screen's bottom-right corner with
-/// `margin` pixels of breathing room, using SPI_GETWORKAREA so the
+/// `margin` points of breathing room, using SPI_GETWORKAREA so the
 /// taskbar is respected — the Win32 counterpart of appkit.zig's
 /// visibleFrame placement. Called from init_fx, before the
-/// first-present reveal. (Windows placement is in physical pixels; the
-/// host's 192x192 window at 100% scaling matches the point size — the
-/// DPI interplay needs on-hardware verification.)
+/// first-present reveal. (Win32 works in PHYSICAL pixels while the
+/// caller thinks in points — at 150% DPI the 192pt window is 288px —
+/// so sizes and the margin go through the window's measured scale;
+/// parking by raw point values leaves the window half off-screen.)
 pub fn placeBottomRight(margin: f64, content_size: f64) void {
     var work: RECT = undefined;
     if (SystemParametersInfoA(spi_getworkarea, 0, &work, 0) == 0) return;
+    const f = frame() orelse return;
+    if (f.size.width == 0 or f.size.height == 0) return;
+    const scale = f.size.width / content_size; // physical px per point
+    const margin_px = margin * scale;
     const target = Point{
-        .x = @as(f64, @floatFromInt(work.right)) - content_size - margin,
-        .y = @as(f64, @floatFromInt(work.bottom)) - content_size - margin,
+        .x = @as(f64, @floatFromInt(work.right)) - f.size.width - margin_px,
+        .y = @as(f64, @floatFromInt(work.bottom)) - f.size.height - margin_px,
     };
-    std.debug.print("dsh-pet-desktop: place bottom-right ({d:.1},{d:.1}) workArea=({d},{d} {d}x{d})\n", .{ target.x, target.y, work.left, work.top, work.right - work.left, work.bottom - work.top });
+    std.debug.print("dsh-pet-desktop: place bottom-right ({d:.1},{d:.1}) workArea=({d},{d} {d}x{d}) scale={d:.2}\n", .{ target.x, target.y, work.left, work.top, work.right - work.left, work.bottom - work.top, scale });
     setOrigin(target);
 }
 
