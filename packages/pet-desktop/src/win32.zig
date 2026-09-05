@@ -119,6 +119,74 @@ pub fn placeBottomRight(margin: f64, content_size: f64) void {
     setOrigin(target);
 }
 
+const HMODULE = *anyopaque;
+extern "c" fn LoadLibraryA(lpLibFileName: [*:0]const u8) ?HMODULE;
+extern "c" fn GetProcAddress(hModule: HMODULE, lpProcName: [*:0]const u8) ?*anyopaque;
+
+const TimePeriodFn = *const fn (uPeriod: c_uint) callconv(.c) c_uint;
+
+/// winmm's timeBeginPeriod/timeEndPeriod, resolved at first use.
+/// Resolved dynamically rather than linked: the exe links user32 for
+/// free (the SDK's Win32 host owns the window) but not winmm, and
+/// GetProcAddress keeps this file's no-import-library property — the
+/// same reason appkit.zig reaches the Objective-C runtime with dlsym.
+/// A missing export is not an error: the drag still follows, just on
+/// the coarse timer grid.
+const TimePeriodFns = struct { begin: TimePeriodFn, end: TimePeriodFn };
+var time_period: ?TimePeriodFns = null;
+var time_period_resolved = false;
+
+fn timePeriodFns() ?TimePeriodFns {
+    if (time_period_resolved) return time_period;
+    time_period_resolved = true;
+    const winmm = LoadLibraryA("winmm.dll") orelse return null;
+    const begin = GetProcAddress(winmm, "timeBeginPeriod") orelse return null;
+    const end = GetProcAddress(winmm, "timeEndPeriod") orelse return null;
+    time_period = .{
+        .begin = @ptrCast(@alignCast(begin)),
+        .end = @ptrCast(@alignCast(end)),
+    };
+    return time_period;
+}
+
+/// The timer resolution the drag-follow poll needs, in milliseconds.
+const drag_timer_period_ms: c_uint = 1;
+
+/// Raise the process's timer resolution for the duration of a drag.
+///
+/// The SDK gives app timers a plain SetTimer, and SetTimer rounds the
+/// requested period onto the LEGACY system timer grid — 15.625ms by
+/// default. A 16ms poll therefore elapses after one or two grid slots,
+/// measured at 25.0ms mean (40Hz) against the 16 requested, with the
+/// step length flipping between 1x and 2x. That irregular 40Hz is the
+/// Windows drag jitter: the same log measured 61Hz following as smooth
+/// and 38Hz as jittery, and the app-owned 60Hz follow cannot exist on a
+/// 15.625ms grid at all.
+///
+/// timeBeginPeriod(1) is SUPPOSED to put SetTimer on a ~1ms grid. It
+/// did not: with the raise in place the poll still measured 40Hz, so
+/// the poll's own period had to come down under one grid slot instead
+/// (model.zig drag_poll_interval_ms). The raise stays because it is
+/// harmless and helps every other clock in the process, but it is no
+/// longer load-bearing — hence the reported bool, so a log says which
+/// of the two is actually in play.
+///
+/// Scoped to the gesture (not the process lifetime) because a raised
+/// global timer resolution costs system power — the documented contract
+/// is one timeEndPeriod per timeBeginPeriod, which endDrag pairs.
+pub fn beginPreciseTimers() bool {
+    const fns = timePeriodFns() orelse return false;
+    return fns.begin(drag_timer_period_ms) == timerr_noerror;
+}
+
+/// timeBeginPeriod's success code.
+const timerr_noerror: c_uint = 0;
+
+pub fn endPreciseTimers() void {
+    const fns = timePeriodFns() orelse return;
+    _ = fns.end(drag_timer_period_ms);
+}
+
 const gwl_exstyle: c_int = -20;
 const ws_ex_toolwindow: isize = 0x00000080;
 const ws_ex_appwindow: isize = 0x00040000;

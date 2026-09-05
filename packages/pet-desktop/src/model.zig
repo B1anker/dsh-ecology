@@ -29,6 +29,8 @@ const std = @import("std");
 const native_sdk = @import("native_sdk");
 const windowing = @import("windowing.zig");
 const assets = @import("assets.zig");
+const diag = @import("diag.zig");
+const runlog = @import("runlog.zig");
 const manifest = @import("manifest.zig");
 const persist = @import("persist.zig");
 const server = @import("server.zig");
@@ -58,11 +60,58 @@ fn monotonicMs() i128 {
 /// current (pet, mood)'s manifest cadence.
 pub const frame_timer_key: u64 = 1;
 
-/// Drag-follow poll timer: 60Hz absolute repositioning independent of
-/// the on_drag event stream (which dies when the pointer outruns the
-/// 128pt sprite and leaves the window's hit region).
+/// Drag-follow poll timer: absolute repositioning independent of the
+/// on_drag event stream (which dies when the pointer outruns the 128pt
+/// sprite and leaves the window's hit region), plus the physical
+/// button-up detection that ends the gesture. It is the FALLBACK clock
+/// for following, not the primary one — see
+/// drag_move_min_interval_ms.
 pub const drag_poll_timer_key: u64 = 4;
-pub const drag_poll_interval_ms: u32 = 16;
+
+/// 10, not the 16 the follow actually wants, because SetTimer cannot
+/// deliver 16.
+///
+/// SetTimer arms against the LEGACY system timer grid (15.625ms), and
+/// only fires on a grid tick at or past the requested period. A 16ms
+/// request misses tick 1 by 0.4ms, so it lands on tick 2, then beats
+/// against the grid from there: measured 25.0ms mean — 40Hz, with the
+/// step length flipping between one and two slots. That irregular 40Hz
+/// IS the Windows drag jitter (61Hz following logged smooth, 38Hz
+/// jittery).
+///
+/// timeBeginPeriod(1) was supposed to shrink the grid under the request
+/// instead; on hardware it changed nothing (still 40.2Hz). So shrink
+/// the REQUEST under the grid: any period below one slot is due at
+/// every tick, so the poll fires once per tick — a regular ~64Hz — and
+/// 10 is the floor SetTimer accepts (USER_TIMER_MINIMUM; smaller is
+/// silently raised to it). On a grid that timeBeginPeriod does shrink,
+/// 10ms is honored as 10ms and drag_move_min_interval_ms below is what
+/// paces the moves. Either way the follow gets a clock at or above 60Hz
+/// instead of under it.
+pub const drag_poll_interval_ms: u32 = 10;
+
+/// Minimum spacing between drag repositions, so both follow paths
+/// share one cadence near the present grid (~61Hz).
+///
+/// Following rides the INPUT stream, not this timer, because a timer
+/// cannot be trusted to pace it: the SDK hands app timers a plain
+/// SetTimer, and WM_TIMER is the lowest-priority message class —
+/// generated only once input and posted messages have drained. Windows
+/// delivers pointer motion at ~550/sec during a drag, and under that
+/// flood the poll measured 25.0ms per tick against its requested 16
+/// (423 ticks / 10576ms), alternating between one and two slots of the
+/// 15.625ms legacy grid with a 51ms worst case. At the 2000-4300px/sec
+/// the pet actually gets swung around, that is position steps of
+/// 50-108px whose length flips between 1x and 2x every few frames —
+/// the Windows drag jitter. The same log's presents were a flat 61.1Hz
+/// and its pointer events a flat 549Hz, so the input stream is the one
+/// clock the message queue never starves.
+///
+/// 13ms (not 16) so the ~550Hz stream can land inside every present
+/// window instead of aliasing just past it; the gate is what keeps
+/// this from becoming a SetWindowPos per event, which overdrove the
+/// layered window in the first fix round.
+const drag_move_min_interval_ms: i128 = 13;
 
 /// The plugin state bridge's external-source channel key. Shares the
 /// keyed families' one key space, so it must not collide with the
@@ -148,6 +197,9 @@ pub const Model = struct {
     /// The channel open was rejected, or the server thread failed to
     /// spawn: the app still runs, just without the plugin bridge.
     bridge_failed: bool = false,
+    /// Latch for the unknown-petId report, so a bridge stuck on an id we
+    /// do not have writes one line per run instead of one per POST.
+    unknown_pet_reported: bool = false,
     pet_id_storage: [state.max_field_bytes]u8 = undefined,
     pet_id_len: usize = 0,
     pet_name_storage: [state.max_field_bytes]u8 = undefined,
@@ -168,6 +220,22 @@ pub const Model = struct {
     dragging: bool = false,
     drag_events: u32 = 0,
     poll_ticks: u32 = 0,
+    /// Repositions actually issued this drag, and when the last one
+    /// went out (monotonic ms) — the pacing gate followPointer applies
+    /// to both follow paths. `drag_moves` is diagnostic only: against
+    /// the elapsed ms it reads out the achieved follow cadence, which
+    /// is the number the jitter hunt turns on.
+    drag_moves: u32 = 0,
+    last_move_ms: i128 = 0,
+    /// Move-interval histogram for the drag, bucketed by
+    /// `move_gap_buckets` and dumped once by endDrag. Accumulated in
+    /// memory on purpose: the follow runs at up to 77Hz and printing a
+    /// line per move would put unbuffered synchronous I/O in the hot
+    /// path — exactly the mistake the SDK's default event trace makes
+    /// (docs/windows-jitter-handoff.zh-CN.md §5). What matters is the
+    /// SHAPE of the distribution: a follow that alternates 16/32ms
+    /// averages a healthy-looking 47Hz while looking like a stutter.
+    move_gaps: [move_gap_buckets.len + 1]u32 = @splat(0),
     /// Mid-drag end/cancel events ignored because the physical button
     /// was still down (runtime cancels the widget drag when the pointer
     /// leaves the window; the poll timer keeps following regardless).
@@ -474,6 +542,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
     switch (msg) {
         .tick => |timer| {
             if (timer.outcome != .fired) return;
+            // The only always-running clock in the app, so it is also
+            // where the run log's size ceiling gets checked (runlog.zig
+            // throttles this to one syscall every few seconds).
+            runlog.enforceCap();
             const m = manifest.current() orelse return;
             model.frame_index = manifest.nextFrame(model.frame_index, m.strip(model.active_pet, model.effectiveMood()).frames);
         },
@@ -530,7 +602,14 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     const new_pet = blk: {
                         const m = manifest.current() orelse break :blk fallback_pet_index;
                         break :blk m.petIndex(model.petId()) orelse {
-                            std.debug.print("dsh-pet-desktop: unknown petId \"{s}\", falling back to the first manifest pet\n", .{model.petId()});
+                            // Once per run: a bridge that keeps pushing
+                            // an id we do not have would otherwise write
+                            // a line per POST (persist.zig carries the
+                            // same latch for the save it rides with).
+                            if (!model.unknown_pet_reported) {
+                                model.unknown_pet_reported = true;
+                                std.debug.print("dsh-pet-desktop: unknown petId \"{s}\", falling back to the first manifest pet (further ones stay silent)\n", .{model.petId()});
+                            }
                             break :blk fallback_pet_index;
                         };
                     };
@@ -551,7 +630,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     .name = @constCast(model.petName()),
                     .locale = @constCast(@tagName(model.locale)),
                 }));
-                std.debug.print("dsh-pet-desktop: state #{d} mood={s} pet={s} name={s}\n", .{ model.state_updates, @tagName(model.mood), model.petId(), model.petName() });
+                // Behind the diagnostics flag because this is the one
+                // print that recurs for as long as the pet is up — one
+                // line per bridge POST — and a run log with no recurring
+                // writer needs no rotation to stay bounded (runlog.zig).
+                diag.print("state #{d} mood={s} pet={s} name={s}\n", .{ model.state_updates, @tagName(model.mood), model.petId(), model.petName() });
             },
             .closed => {
                 model.bridge_live = false;
@@ -566,6 +649,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .hover_enter => {
             if (model.hovering) return;
             model.hovering = true;
+            diag.print("hover enter (dragging={})\n", .{model.dragging});
             // A mid-drag enter/leave changes the flag but not the strip:
             // the carry keeps the run override, and endDrag's re-arm
             // already reads the hover-aware effectiveMood.
@@ -576,6 +660,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .hover_leave => {
             if (!model.hovering) return;
             model.hovering = false;
+            diag.print("hover leave (dragging={})\n", .{model.dragging});
             if (model.dragging) return;
             model.frame_index = 0;
             startFrameTimer(fx, currentIntervalMs(model));
@@ -590,12 +675,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             if (model.dragging) return;
             if (model.drag_end_ms != 0 and monotonicMs() - model.drag_end_ms < 250) {
                 model.drag_end_ms = 0;
-                std.debug.print("dsh-pet-desktop: press suppressed (post-drag release)\n", .{});
+                diag.print("press suppressed (post-drag release)\n", .{});
                 return;
             }
             model.press_count += 1;
             model.zoomed = !model.zoomed;
-            std.debug.print("dsh-pet-desktop: press #{d} zoomed={}\n", .{ model.press_count, model.zoomed });
+            diag.print("press #{d} zoomed={}\n", .{ model.press_count, model.zoomed });
         },
         // The runtime slop-filters drag gestures (6px): sub-slop motion
         // never reaches us and its release stays an ordinary press, so
@@ -621,11 +706,28 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     // hand following to the poll timer.
                     const o = windowing.origin() orelse return;
                     const ml = windowing.mouseLocation() orelse return;
+                    // The follow poll runs on whatever grid SetTimer
+                    // has; the event stream that used to mask a coarse
+                    // one dies the moment the pointer outruns the
+                    // window (a direction reversal does it every time).
+                    // Raise the resolution for the gesture — endDrag
+                    // drops it again — and log whether it took, because
+                    // drag_poll_interval_ms compensates for when it
+                    // does not.
+                    const precise_timers = windowing.beginPreciseTimers();
+                    diag.print("drag start origin=({d:.1},{d:.1}) mouse=({d:.1},{d:.1}) poll_ms={d} precise_timers={}\n", .{ o.x, o.y, ml.x, ml.y, drag_poll_interval_ms, precise_timers });
                     model.dragging = true;
                     model.drag_events = 0;
                     model.poll_ticks = 0;
                     model.spurious_ends = 0;
                     model.drag_start_ms = monotonicMs();
+                    model.drag_moves = 0;
+                    model.move_gaps = @splat(0);
+                    // The grab offset makes dragOrigin reproduce the
+                    // CURRENT origin, so the gesture opens already in
+                    // position: start the pacing clock here and the
+                    // first move is a real one, not a no-op write.
+                    model.last_move_ms = model.drag_start_ms;
                     model.grab_offset_x = ml.x - o.x;
                     model.grab_offset_y = ml.y - o.y;
                     // Heading baseline: the first sample anchors the x
@@ -644,14 +746,16 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     });
                     return;
                 }
-                // Late drag events are still applied (same absolute math,
-                // extra sub-tick responsiveness) and counted: their rate
-                // collapse during fast drags is the evidence for why the
-                // poll timer owns following.
+                // Late drag events are the PRIMARY follow clock: input
+                // is the one message class the queue never starves, so
+                // pacing off it (through followPointer's gate) is what
+                // makes the cadence regular. The stream is sparse on
+                // macOS — it dies once the pointer exits the window —
+                // which is why the poll timer stays armed underneath.
                 model.drag_events += 1;
                 const ml = windowing.mouseLocation() orelse return;
                 noteDragPointerX(model, ml.x);
-                windowing.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
+                followPointer(model, ml);
             },
             else => {
                 // Drag end/cancel events are ADVISORY. The runtime
@@ -663,7 +767,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 // button-up ends the drag; the poll tick detects it.
                 if (windowing.leftMouseDown()) {
                     model.spurious_ends += 1;
-                    std.debug.print("dsh-pet-desktop: drag end/cancel ignored (button down) phase={d} events={d} polls={d}\n", .{ d.phase, model.drag_events, model.poll_ticks });
+                    diag.print("drag end/cancel ignored (button down) phase={d} events={d} polls={d}\n", .{ d.phase, model.drag_events, model.poll_ticks });
                     return;
                 }
                 endDrag(model, fx, "event");
@@ -683,11 +787,15 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             const ml = windowing.mouseLocation() orelse return;
             noteDragPointerX(model, ml.x);
-            windowing.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
+            // Same gated follow as the event path: while the stream is
+            // alive its samples are newer than this tick's and the gate
+            // drops this one, so the two paths never fight over the
+            // cadence. Once the stream dies, this becomes the follow.
+            followPointer(model, ml);
             model.poll_ticks += 1;
             if (model.poll_ticks % 60 == 0) {
                 const elapsed_ms = monotonicMs() - model.drag_start_ms;
-                std.debug.print("dsh-pet-desktop: drag poll ticks={d} events={d} elapsed_ms={d} origin=({d:.1},{d:.1})\n", .{ model.poll_ticks, model.drag_events, elapsed_ms, ml.x - model.grab_offset_x, ml.y - model.grab_offset_y });
+                diag.print("drag poll ticks={d} events={d} moves={d} elapsed_ms={d} origin=({d:.1},{d:.1})\n", .{ model.poll_ticks, model.drag_events, model.drag_moves, elapsed_ms, ml.x - model.grab_offset_x, ml.y - model.grab_offset_y });
             }
         },
         .quit => fx.quitApp(),
@@ -716,6 +824,9 @@ fn endDrag(model: *Model, fx: *Effects, reason: [*:0]const u8) void {
     if (!model.dragging) return;
     model.dragging = false;
     fx.cancelTimer(drag_poll_timer_key);
+    // Pairs with the drag-start raise: one end per begin, or the
+    // process leaves the system timer resolution up for good.
+    windowing.endPreciseTimers();
     model.drag_end_ms = monotonicMs();
     // Drop the run override: restart at frame 0 on the effective mood's
     // own cadence (dragging is already false, so currentIntervalMs reads
@@ -724,7 +835,11 @@ fn endDrag(model: *Model, fx: *Effects, reason: [*:0]const u8) void {
     model.frame_index = 0;
     startFrameTimer(fx, currentIntervalMs(model));
     const elapsed_ms = model.drag_end_ms - model.drag_start_ms;
-    std.debug.print("dsh-pet-desktop: drag end ({s}) events={d} polls={d} spurious_ends={d} elapsed_ms={d}\n", .{ reason, model.drag_events, model.poll_ticks, model.spurious_ends, elapsed_ms });
+    diag.print("drag end ({s}) events={d} polls={d} moves={d} spurious_ends={d} elapsed_ms={d}\n", .{ reason, model.drag_events, model.poll_ticks, model.drag_moves, model.spurious_ends, elapsed_ms });
+    diag.print("move gaps ms <=8:{d} 9-12:{d} 13-15:{d} 16-18:{d} 19-24:{d} 25-33:{d} 34-50:{d} >50:{d}\n", .{
+        model.move_gaps[0], model.move_gaps[1], model.move_gaps[2], model.move_gaps[3],
+        model.move_gaps[4], model.move_gaps[5], model.move_gaps[6], model.move_gaps[7],
+    });
 }
 
 /// Crest height of the hover hop, in points. The window keeps 32pt of
@@ -752,8 +867,63 @@ pub fn dragOrigin(ml: windowing.Point, grab_x: f64, grab_y: f64) windowing.Point
     return .{ .x = ml.x - grab_x, .y = ml.y - grab_y };
 }
 
+/// Upper edges (inclusive, ms) of the move-interval histogram buckets;
+/// samples past the last edge land in the overflow bucket. The edges
+/// straddle the numbers this hunt turns on: 16-18 is the present grid
+/// (smooth), 25-33 is one or two slots of the 15.625ms legacy SetTimer
+/// grid (the 40Hz jitter), and anything past 33 is a starved timer.
+const move_gap_buckets = [_]i128{ 8, 12, 15, 18, 24, 33, 50 };
+
+fn noteMoveGap(model: *Model, gap_ms: i128) void {
+    // The histogram exists only to be printed, so a build without
+    // -Ddrag-diag drops the whole tally (diag.zig).
+    if (!diag.enabled) return;
+    for (move_gap_buckets, 0..) |edge, index| {
+        if (gap_ms <= edge) {
+            model.move_gaps[index] += 1;
+            return;
+        }
+    }
+    model.move_gaps[move_gap_buckets.len] += 1;
+}
+
+/// Whether the pacing gate lets another reposition through. Split out
+/// of followPointer so the cadence is testable without a live window:
+/// the move itself is a platform write, this is the whole policy.
+fn dueForMove(model: *const Model, now_ms: i128) bool {
+    return now_ms - model.last_move_ms >= drag_move_min_interval_ms;
+}
+
+/// Track the pointer with the window, paced to
+/// drag_move_min_interval_ms. Both follow paths (the drag event stream
+/// and the poll timer) funnel through here, so whichever samples first
+/// inside a window owns that move and the other is dropped — one
+/// cadence, no competing writers.
+fn followPointer(model: *Model, ml: windowing.Point) void {
+    const now = monotonicMs();
+    if (!dueForMove(model, now)) return;
+    noteMoveGap(model, now - model.last_move_ms);
+    model.last_move_ms = now;
+    model.drag_moves += 1;
+    windowing.setOrigin(dragOrigin(ml, model.grab_offset_x, model.grab_offset_y));
+}
+
+test "the follow gate paces repositions and lets a stalled follow through" {
+    var model: Model = .{};
+    model.last_move_ms = 1000;
+    // Inside the window: the flooding input stream is dropped rather
+    // than turned into a SetWindowPos per event.
+    try std.testing.expect(!dueForMove(&model, 1000));
+    try std.testing.expect(!dueForMove(&model, 1000 + drag_move_min_interval_ms - 1));
+    // At the boundary and beyond: the next sample owns the move.
+    try std.testing.expect(dueForMove(&model, 1000 + drag_move_min_interval_ms));
+    // A starved clock (the 51ms worst case the Windows log measured)
+    // is never held back further.
+    try std.testing.expect(dueForMove(&model, 1051));
+}
+
 /// Pointer jitter below this per sample keeps the previous heading
-/// instead of flickering the mirror on every 60Hz poll.
+/// instead of flickering the mirror on every poll.
 const facing_dead_zone_px: f64 = 1.5;
 
 /// Fold one pointer x sample into the drag heading. Samples come from
@@ -762,7 +932,11 @@ fn noteDragPointerX(model: *Model, mouse_x: f64) void {
     const dx = mouse_x - model.last_drag_mouse_x;
     model.last_drag_mouse_x = mouse_x;
     if (@abs(dx) < facing_dead_zone_px) return;
-    model.facing_right = dx > 0;
+    const heading = dx > 0;
+    if (heading != model.facing_right) {
+        diag.print("facing flip right={} dx={d:.1} x={d:.1}\n", .{ heading, dx, mouse_x });
+    }
+    model.facing_right = heading;
 }
 
 test "drag heading follows the pointer x with a dead zone" {

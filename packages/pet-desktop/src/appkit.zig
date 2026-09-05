@@ -72,6 +72,16 @@ const window_title = "DSH Pet";
 /// generic "exec" icon.)
 const activation_policy_accessory: i64 = 1;
 
+/// No-ops here: the Windows backend raises the process timer resolution
+/// for the duration of a drag because SetTimer rounds onto a 15.625ms
+/// grid (win32.zig's beginPreciseTimers explains). Mach timers already
+/// deliver the app timer's request, so there is nothing to raise —
+/// which is what the `true` reports: millisecond timers are available.
+pub fn beginPreciseTimers() bool {
+    return true;
+}
+pub fn endPreciseTimers() void {}
+
 /// Drop the app from the Dock and the Cmd+Tab switcher. Runtime-settable
 /// and instant; called once from boot, before the window reveals.
 pub fn hideFromDock() void {

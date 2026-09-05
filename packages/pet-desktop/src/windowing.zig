@@ -76,6 +76,22 @@ pub fn setOrigin(point: Point) void {
     backend.setOrigin(.{ .x = point.x, .y = point.y });
 }
 
+/// Bracket a drag with whatever timer precision the follow poll needs.
+/// Windows raises the process timer resolution (SetTimer otherwise
+/// rounds onto a 15.625ms grid — see win32.zig's beginPreciseTimers);
+/// macOS needs nothing. Must be paired: one end per begin.
+///
+/// True when millisecond timers are available for the gesture. The
+/// follow does not depend on it — it only tells a drag log which timer
+/// grid the poll was actually running on.
+pub fn beginPreciseTimers() bool {
+    return backend.beginPreciseTimers();
+}
+
+pub fn endPreciseTimers() void {
+    backend.endPreciseTimers();
+}
+
 /// Place the window at the primary screen's bottom-right corner with
 /// `margin` points of breathing room, respecting the reserved chrome
 /// (macOS visibleFrame excludes the Dock and menu bar; the Win32 work
