@@ -1,6 +1,6 @@
 {
   "name": "@seaveyon/dsh-pet",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A virtual pet companion for the DSH Web surface: mood animations driven by live agent state, with hand-crafted built-in sprites",
   "keywords": [
     "dsh",
@@ -43,9 +43,9 @@
     "LICENSE"
   ],
   "optionalDependencies": {
-    "@seaveyon/dsh-pet-desktop-darwin-arm64": "0.2.0",
-    "@seaveyon/dsh-pet-desktop-darwin-x64": "0.2.0",
-    "@seaveyon/dsh-pet-desktop-win32-x64": "0.2.0"
+    "@seaveyon/dsh-pet-desktop-darwin-arm64": "0.3.0",
+    "@seaveyon/dsh-pet-desktop-darwin-x64": "0.3.0",
+    "@seaveyon/dsh-pet-desktop-win32-x64": "0.3.0"
   },
   "dsh": {
     "bundle": {

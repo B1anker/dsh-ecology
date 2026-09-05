@@ -1,6 +1,6 @@
 {
   "name": "@seaveyon/dsh-pet-desktop-win32-x64",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The dsh-pet desktop companion binary for Windows x64 (optional platform package of @seaveyon/dsh-pet)",
   "keywords": [
     "dsh",

@@ -1,6 +1,6 @@
 {
   "name": "@seaveyon/dsh-pet-desktop-darwin-arm64",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The dsh-pet desktop companion binary for macOS on Apple silicon (optional platform package of @seaveyon/dsh-pet)",
   "keywords": [
     "dsh",

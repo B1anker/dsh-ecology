@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/B1anker/dsh-ecology/compare/pet-v0.2.0...pet-v0.3.0) (2026-09-05)
+
+
+### Features
+
+* **pet:** ship the desktop binary as per-platform optional dependencies ([d2fb0f6](https://github.com/B1anker/dsh-ecology/commit/d2fb0f6623ca18bcf55d4e30a686568104eb5e7e))
+
 # [0.2.0](https://github.com/B1anker/dsh-ecology/compare/pet-v0.1.0...pet-v0.2.0) (2026-09-05)
 
 
