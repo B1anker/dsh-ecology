@@ -37,11 +37,11 @@ permissions:
   pull-requests: write
 
 jobs:
-  # The pet's desktop companion ships as native binaries INSIDE the
-  # @seaveyon/dsh-pet tarball (packages/pet/desktop/ is in its files), so
-  # the ubuntu publish job cannot build them. This job does — macOS arm64
-  # and x64 plus Windows x64 — and hands the staged directory over as an
-  # artifact.
+  # The pet's desktop companion ships as native binaries in three per-platform
+  # optional packages (@seaveyon/dsh-pet-desktop-<platform>-<arch>), which the
+  # ubuntu publish job cannot build. This job does — macOS arm64 and x64 plus
+  # Windows x64 — and hands the staged directory over as an artifact; the
+  # publish job then sorts one binary into each platform package's bin/.
   desktop-binary:
     runs-on: macos-latest
     steps:
@@ -94,14 +94,29 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN }}
           persist-credentials: true
 
-      # The companion binary lands where npm pack picks it up. upload/
-      # download-artifact does not preserve the executable bit, so restore
-      # it — npm pack does keep it from here into the tarball.
+      # The companion binaries land where the staging step below picks them
+      # up, and the sprite assets where npm pack picks them up (the main
+      # package still ships desktop/assets/). upload/download-artifact does
+      # not preserve the executable bit, so restore it — npm pack does keep
+      # it from here into the tarballs.
       - uses: actions/download-artifact@v4
         with:
           name: pet-desktop-binary
           path: packages/pet/desktop/
       - run: chmod +x packages/pet/desktop/dsh-pet-desktop-*
+
+      # Sort one binary into each per-platform optional package (the esbuild
+      # pattern: npm's os/cpu selectors install only the matching one). The
+      # binary loses its arch suffix here — the package name carries it, and
+      # the launcher resolves through the package's exports map. The staging
+      # directory keeps its copies too: they make the same layout available
+      # to a development checkout, and the main package's files allowlist
+      # (desktop/assets/ only) keeps them out of its tarball.
+      - name: Stage the binaries into the platform packages
+        run: |
+          install -D -m 755 packages/pet/desktop/dsh-pet-desktop-arm64 packages/pet-desktop-darwin-arm64/bin/dsh-pet-desktop
+          install -D -m 755 packages/pet/desktop/dsh-pet-desktop-x64 packages/pet-desktop-darwin-x64/bin/dsh-pet-desktop
+          install -D -m 755 packages/pet/desktop/dsh-pet-desktop-windows-x64.exe packages/pet-desktop-win32-x64/bin/dsh-pet-desktop.exe
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -153,6 +168,11 @@ jobs:
           release_package() {
             directory=$1
             config=$2
+            # Optional pre-publish hook, run with the version as its argument
+            # after the main manifest is bumped and before its tarball is
+            # packed — pet uses it to publish the platform packages its
+            # optionalDependencies reference.
+            pre_publish=${3:-}
             name=$(node -p "require('./$directory/package.json').name")
             echo "::group::$name"
 
@@ -187,6 +207,9 @@ jobs:
             # published by that exact path. No lifecycle script can change the
             # artifact between the check and the registry upload.
             node scripts/bump-version.mjs "$directory" "$version"
+            if [ -n "$pre_publish" ]; then
+              "$pre_publish" "$version"
+            fi
             tarball=$(cd "$directory" && npm pack --ignore-scripts --silent)
             tarball_path="$directory/$tarball"
             node scripts/smoke-tarball.mjs "$tarball_path"
@@ -209,11 +232,55 @@ jobs:
             echo "::endgroup::"
           }
 
+          # pet's pre-publish hook: bump, pack, and publish each per-platform
+          # binary package at the same version. They go first because pet's
+          # optionalDependencies name them by that exact version — publishing
+          # pet before them would leave a window where an install resolves a
+          # version the registry does not have. There is no smoke-tarball
+          # step here: the packages have no JavaScript surface to cold-import,
+          # only a binary whose presence and executable bit are asserted
+          # straight from the packed tarball. The integrity guard is the same
+          # resume pattern as release_package: an identical tarball already on
+          # the registry means a retry after a later step failed, a different
+          # one means this checkout no longer produces what was published.
+          publish_pet_platform_packages() {
+            version=$1
+            for directory in \
+              packages/pet-desktop-darwin-arm64 \
+              packages/pet-desktop-darwin-x64 \
+              packages/pet-desktop-win32-x64
+            do
+              name=$(node -p "require('./$directory/package.json').name")
+              node scripts/bump-version.mjs "$directory" "$version"
+              tarball=$(cd "$directory" && npm pack --ignore-scripts --silent)
+              tarball_path="$directory/$tarball"
+              case "$directory" in
+                *win32*) exe=bin/dsh-pet-desktop.exe ;;
+                *) exe=bin/dsh-pet-desktop ;;
+              esac
+              tar -tzf "$tarball_path" | grep -qx "package/$exe" \
+                || { echo "::error::$name tarball does not contain $exe"; exit 1; }
+              local_integrity=$(node -e 'const fs = require("node:fs"); const crypto = require("node:crypto"); process.stdout.write(`sha512-${crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64")}`)' "$tarball_path")
+              published_integrity=$(npm view "$name@$version" dist.integrity 2>/dev/null || true)
+              if [ -n "$published_integrity" ]; then
+                if [ "$published_integrity" != "$local_integrity" ]; then
+                  echo "::error::$name@$version already exists, but its tarball differs from this checkout; refusing to continue"
+                  exit 1
+                fi
+                echo "$name@$version's exact tarball is already on the registry; skipping its publish"
+              else
+                npm publish "$tarball_path"
+              fi
+            done
+          }
+
           release_package packages/plugin-testkit ./release/plugin-testkit.config.mjs
           release_package packages/web-login ./release/web-login.config.mjs
           # pet's first version (0.1.0, tag pet-v0.1.0) was published by hand
           # per README → "Bootstrapping a new package on npm"; its trusted
-          # publisher names this workflow file. The companion binaries land in
-          # packages/pet/desktop/ from the desktop-binary job above, so the
-          # tarball this releases carries both architectures.
-          release_package packages/pet ./release/pet.config.mjs
+          # publisher names this workflow file. The three platform packages
+          # bootstrapped the same way — see the same README section. Their
+          # binaries land in packages/pet-desktop-*/bin/ from the staging
+          # step above, and the hook publishes them at pet's version before
+          # pet's own tarball is packed.
+          release_package packages/pet ./release/pet.config.mjs publish_pet_platform_packages

@@ -23,7 +23,16 @@ export default {
     [
       '@semantic-release/git',
       {
-        assets: [`${directory}/package.json`, `${directory}/CHANGELOG.md`],
+        // The platform manifests carry the same version stamp (the publish
+        // workflow bumps them alongside pet's), so the release commit has to
+        // record them or the checkout drifts from what was published.
+        assets: [
+          `${directory}/package.json`,
+          `${directory}/CHANGELOG.md`,
+          'packages/pet-desktop-darwin-arm64/package.json',
+          'packages/pet-desktop-darwin-x64/package.json',
+          'packages/pet-desktop-win32-x64/package.json',
+        ],
         message: 'chore(release): pet ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}',
       },
     ],

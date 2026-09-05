@@ -193,13 +193,15 @@ const PACKAGES = {
       const pet = inserted.find((row) => row?.id === 'dsh-pet')
       if (pet?.name !== '@seaveyon/dsh-pet') throw new Error('bundle plugin row')
 
-      // The companion binaries ship inside the tarball — one per Mac
-      // architecture, named for the `process.arch` template the launcher
-      // (src/launch.ts) selects with. Source-checkout packs (engines-floor
-      // on ubuntu) legitimately lack desktop/ — the publish workflow stages
-      // it — but when the directory is present, both builds must be too,
-      // with the executable bit npm pack preserves only when it was set
-      // before packing.
+      // The companion binaries no longer ship in this tarball: each rides in
+      // its own per-platform optional package (@seaveyon/dsh-pet-desktop-*),
+      // published alongside by the workflow. What stays here is the shared
+      // sprite directory the spawned binary is pointed at through
+      // DSH_PET_DESKTOP_ASSETS (src/launch.ts). Source-checkout packs
+      // (engines-floor on ubuntu) legitimately lack desktop/ — the publish
+      // workflow stages it — but when the directory is present it must hold
+      // the assets and none of the old bundled-binary names, so a
+      // re-bundling regression fails here instead of doubling every install.
       let desktopNote = 'no desktop/ staged'
       const desktopDir = join(root, 'desktop')
       const hasDesktop = await stat(desktopDir).then(
@@ -207,14 +209,24 @@ const PACKAGES = {
         () => false,
       )
       if (hasDesktop) {
-        for (const arch of ['arm64', 'x64']) {
-          const name = `dsh-pet-desktop-${arch}`
-          const info = await stat(join(desktopDir, name)).catch(() => null)
-          if (info === null)
-            throw new Error(`desktop/${name} missing from a desktop-carrying tarball`)
-          if ((info.mode & 0o111) === 0) throw new Error(`desktop/${name} lost its executable bit`)
+        const assets = await stat(join(desktopDir, 'assets')).then(
+          (s) => s.isDirectory(),
+          () => false,
+        )
+        if (!assets) throw new Error('desktop/assets missing from a desktop-carrying tarball')
+        for (const name of [
+          'dsh-pet-desktop-arm64',
+          'dsh-pet-desktop-x64',
+          'dsh-pet-desktop-windows-x64.exe',
+        ]) {
+          const leaked = await stat(join(desktopDir, name)).catch(() => null)
+          if (leaked !== null) {
+            throw new Error(
+              `desktop/${name} is back in the main tarball; binaries belong to the platform packages`,
+            )
+          }
         }
-        desktopNote = 'both desktop binaries executable'
+        desktopNote = 'desktop/assets present, no bundled binaries'
       }
 
       return `public export, client bundle envelope, dsh.client manifest, discovery patch row, ${desktopNote}`

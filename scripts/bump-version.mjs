@@ -39,6 +39,18 @@ const manifest = new URL(`../${directory}/package.json`, import.meta.url)
 const pkg = JSON.parse(await readFile(manifest, 'utf8'))
 pkg.version = version
 
+// pet's desktop binary rides in per-platform optional dependencies that must
+// be published under the exact same version the main manifest references, so
+// stamping pet stamps them too. Anything else is left alone: a package that
+// happens to depend on one of them keeps its own range.
+if (directory === 'packages/pet') {
+  for (const name of Object.keys(pkg.optionalDependencies ?? {})) {
+    if (name.startsWith('@seaveyon/dsh-pet-desktop-')) {
+      pkg.optionalDependencies[name] = version
+    }
+  }
+}
+
 // Re-serialized rather than patched by regex: key order survives a round trip
 // through JSON, and the result is what Biome's formatter would have written.
 await writeFile(manifest, `${JSON.stringify(pkg, null, 2)}\n`)
