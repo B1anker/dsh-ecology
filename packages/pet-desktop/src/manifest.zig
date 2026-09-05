@@ -10,6 +10,12 @@
 //!   { "scale": 2, "frameSize": 128,
 //!     "pets": { "<petId>": { "moods": { "<mood>":
 //!       { "file": "<petId>/<mood>.png", "frames": N, "frameDurationMs": F } } } } }
+//! The working mood MAY add "mirroredFile": "<petId>/working-mirrored.png"
+//! (scripts/mirror-working-strips.mjs): a per-frame horizontally mirrored
+//! copy of the run strip, because the SDK's software reference renderer
+//! (the only path a Windows transparent window gets) drops the sign of
+//! negative-scale transforms — the app swaps the image instead of
+//! mirroring at draw time (mirrored_run_slot below).
 //! Each strip is N horizontal frames of frameSize×frameSize CSS points
 //! at scale× physical pixels (256×256 at scale 2), RGBA, loop-seamless.
 //!
@@ -38,6 +44,10 @@ pub const StripEntry = struct {
     file: []const u8 = "",
     frames: u32 = 0,
     frame_duration_ms: f64 = 0,
+    /// Optional pre-mirrored copy of this strip (only `working` carries
+    /// it — see mirrored_run_slot). Absent field = no mirrored strip;
+    /// the view then falls back to the legacy negative-scale Affine.
+    mirrored_file: ?[]const u8 = null,
 };
 
 pub const PetEntry = struct {
@@ -63,6 +73,13 @@ pub const Manifest = struct {
 
     pub fn strip(self: *const Manifest, pet_index: usize, mood: Mood) StripEntry {
         return self.pets[pet_index].strips[@intFromEnum(mood)];
+    }
+
+    /// The pet's pre-mirrored run strip file, when its working mood
+    /// declares `mirroredFile`; null otherwise (imported pets whose
+    /// strips predate scripts/mirror-working-strips.mjs).
+    pub fn mirroredRunFile(self: *const Manifest, pet_index: usize) ?[]const u8 {
+        return self.pets[pet_index].strips[@intFromEnum(Mood.working)].mirrored_file;
     }
 };
 
@@ -118,10 +135,20 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8) ParseError!Manife
                 else => return error.InvalidManifest,
             };
             if (frames == 0 or duration <= 0 or file.len == 0) return error.InvalidManifest;
+            // Optional; a present-but-malformed field fails the parse
+            // like any other, only ABSENT means "no mirrored strip".
+            const mirrored_file: ?[]const u8 = if (strip_obj.get("mirroredFile")) |value|
+                switch (value) {
+                    .string => |s| if (s.len > 0) s else null,
+                    else => return error.InvalidManifest,
+                }
+            else
+                null;
             entry.strips[@intFromEnum(mood)] = .{
                 .file = file,
                 .frames = frames,
                 .frame_duration_ms = duration,
+                .mirrored_file = mirrored_file,
             };
             seen[@intFromEnum(mood)] = true;
         }
@@ -177,7 +204,37 @@ pub fn imageId(pet_index: usize, mood: Mood) u64 {
     return image_id_base + @as(u64, pet_index) * image_id_stride + @intFromEnum(mood);
 }
 
-/// Inverse of imageId; null for ids outside the sprite namespace.
+/// Slot 8 of each pet's 16-id stride is reserved for the pre-mirrored
+/// working strip (the SDK's software reference renderer drops negative
+/// scale, so mirroring is baked into the pixels — see
+/// docs/zero-native-notes.md, 2026-09-05 entry). Slots 9..15 are unused
+/// headroom. decodeImageId must NEVER hand slot >= 8 to @enumFromInt:
+/// mood_count is 8, so a 9th slot would be out of the Mood enum.
+pub const mirrored_run_slot: u64 = 8;
+
+comptime {
+    // decodeImageId's `mood_index >= mood_count` guard rejects the
+    // mirrored slot only because the two happen to coincide — pin that.
+    std.debug.assert(mood_count == mirrored_run_slot);
+}
+
+pub fn mirroredRunImageId(pet_index: usize) u64 {
+    return image_id_base + @as(u64, pet_index) * image_id_stride + mirrored_run_slot;
+}
+
+/// The pet index iff `id` is a mirrored-run id; null for plain strip
+/// ids, the unused slots 9..15, and ids outside the sprite namespace.
+pub fn mirroredRunPet(id: u64) ?usize {
+    if (id < image_id_base) return null;
+    const offset = id - image_id_base;
+    const pet = offset / image_id_stride;
+    if (offset % image_id_stride != mirrored_run_slot or pet >= max_pets) return null;
+    return pet;
+}
+
+/// Inverse of imageId; null for ids outside the sprite namespace AND
+/// for the reserved slots >= mirrored_run_slot (the mirrored run strip
+/// is decoded by mirroredRunPet, before this is ever called).
 pub fn decodeImageId(id: u64) ?struct { pet: usize, mood: Mood } {
     if (id < image_id_base) return null;
     const offset = id - image_id_base;
@@ -220,7 +277,7 @@ test "parse a minimal manifest and index into it" {
         \\{"scale":2,"frameSize":128,"pets":{"blob":{"moods":{
         \\  "idle":{"file":"blob/idle.png","frames":24,"frameDurationMs":250},
         \\  "thinking":{"file":"blob/thinking.png","frames":24,"frameDurationMs":100},
-        \\  "working":{"file":"blob/working.png","frames":4,"frameDurationMs":87.5},
+        \\  "working":{"file":"blob/working.png","frames":4,"frameDurationMs":87.5,"mirroredFile":"blob/working-mirrored.png"},
         \\  "waiting":{"file":"blob/waiting.png","frames":18,"frameDurationMs":88.889},
         \\  "sad":{"file":"blob/sad.png","frames":4,"frameDurationMs":90},
         \\  "sleeping":{"file":"blob/sleeping.png","frames":24,"frameDurationMs":200},
@@ -247,6 +304,16 @@ test "parse a minimal manifest and index into it" {
     const strip = m.strip(0, .celebrating);
     try std.testing.expectEqual(7, strip.frames);
     try std.testing.expectEqualStrings("blob/celebrating.png", strip.file);
+    // mirroredFile: parsed when present (blob's working), null when
+    // absent (cat's working, and every other mood of both pets).
+    try std.testing.expectEqualStrings(
+        "blob/working-mirrored.png",
+        m.strip(0, .working).mirrored_file.?,
+    );
+    try std.testing.expectEqualStrings("blob/working-mirrored.png", m.mirroredRunFile(0).?);
+    try std.testing.expect(m.strip(1, .working).mirrored_file == null);
+    try std.testing.expect(m.mirroredRunFile(1) == null);
+    try std.testing.expect(m.strip(0, .idle).mirrored_file == null);
 }
 
 test "parse rejects incomplete mood sets, unknown moods, and bad values" {
@@ -303,6 +370,8 @@ test "image ids round-trip and stay clear of the timer/channel keys" {
             const decoded = decodeImageId(id).?;
             try std.testing.expectEqual(pet, decoded.pet);
             try std.testing.expectEqual(mood, decoded.mood);
+            // A plain strip id is never mistaken for the mirrored run.
+            try std.testing.expect(mirroredRunPet(id) == null);
         }
     }
     try std.testing.expect(decodeImageId(1) == null);
@@ -310,6 +379,21 @@ test "image ids round-trip and stay clear of the timer/channel keys" {
     // Distinct (pet, mood) pairs never share an id.
     try std.testing.expect(imageId(0, .idle) != imageId(1, .idle));
     try std.testing.expect(imageId(0, .idle) != imageId(0, .thinking));
+}
+
+test "mirrored run ids: slot 8 round-trips and decodeImageId rejects slots >= 8" {
+    for (0..max_pets) |pet| {
+        const id = mirroredRunImageId(pet);
+        try std.testing.expectEqual(pet, mirroredRunPet(id).?);
+        // Slot 8 is reserved, NOT a Mood: decodeImageId must refuse it
+        // (a 9th slot would @enumFromInt past the end of the enum).
+        try std.testing.expect(decodeImageId(id) == null);
+        // Slots 9..15 are unused headroom: neither decode path claims them.
+        try std.testing.expect(decodeImageId(id + 1) == null);
+        try std.testing.expect(mirroredRunPet(id + 1) == null);
+    }
+    try std.testing.expect(mirroredRunPet(1) == null);
+    try std.testing.expect(mirroredRunPet(image_id_base + max_pets * image_id_stride + mirrored_run_slot) == null);
 }
 
 test "animation arithmetic: interval rounding, frame wrap, crop stride" {

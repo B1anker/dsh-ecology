@@ -51,13 +51,25 @@ pub fn quitMenu(locale: state.Locale) []const Ui.ContextMenuItem {
 pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
     const size: f32 = if (model.zoomed) model_mod.sprite_zoomed_size else model_mod.sprite_size;
     const sprite = model.sprite();
-    // Rightward drags mirror the (natively left-facing) run strip. The
-    // sprite is always centered in the fixed-width window — zooming
+    // Rightward drags mirror the (natively left-facing) run strip, by one
+    // of two paths:
+    //  1. Preferred: model.sprite() already swapped in the pet's
+    //     pre-mirrored working strip (manifest mirroredFile, stride slot
+    //     8) — NO transform needed, so this works on every renderer.
+    //  2. Fallback (imported pets without a mirrored strip): the legacy
+    //     negative-scale Affine below. Metal honors it; the SDK's
+    //     software reference renderer — which Windows transparent windows
+    //     ALWAYS take — applies transforms via transformRect's
+    //     axis-aligned bounding box and drops the negative-scale sign
+    //     (reference.zig drawImage), so there the sprite stays unflipped,
+    //     exactly as before the mirrored strips existed. See
+    //     docs/zero-native-notes.md, the 2026-09-05 entry.
+    // The sprite is always centered in the fixed-width window — zooming
     // grows it symmetrically — so the mirror pivot is simply the
     // window's own width: x' = window_size - x. ty carries the hover
     // hop's lift (0 when standing).
     const lift = model.jumpOffset();
-    const flip: canvas.Affine = if (model.flipSprite())
+    const flip: canvas.Affine = if (model.flipSprite() and !model.mirroredRunLoaded())
         .{ .a = -1, .tx = model_mod.window_size, .ty = lift }
     else
         .{ .ty = lift };

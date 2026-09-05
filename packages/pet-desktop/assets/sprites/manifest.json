@@ -17,7 +17,8 @@
         "working": {
           "file": "deepseek-chan/working.png",
           "frames": 6,
-          "frameDurationMs": 120
+          "frameDurationMs": 120,
+          "mirroredFile": "deepseek-chan/working-mirrored.png"
         },
         "waiting": {
           "file": "deepseek-chan/waiting.png",
@@ -61,7 +62,8 @@
         "working": {
           "file": "ai-sleepy-silver-wolf/working.png",
           "frames": 6,
-          "frameDurationMs": 120
+          "frameDurationMs": 120,
+          "mirroredFile": "ai-sleepy-silver-wolf/working-mirrored.png"
         },
         "waiting": {
           "file": "ai-sleepy-silver-wolf/waiting.png",

@@ -27,6 +27,7 @@ import {
   resolveAnimations,
   spriteRect,
 } from './codex-pet.mjs'
+import { mirrorPngBytes } from './mirror.mjs'
 import { encodePng } from './png.mjs'
 
 /**
@@ -170,6 +171,13 @@ export function importCodexPet({ petDir, petId, spritesDir, decodeSheet }) {
       file: `${id}/${strip.mood}.png`,
       frames: strip.sprites.length,
       frameDurationMs: strip.frameDurationMs,
+    }
+    if (strip.mood === 'working') {
+      // The pre-mirrored run strip the app swaps in for rightward drags
+      // (the SDK's software reference renderer drops negative-scale
+      // transforms — see scripts/lib/mirror.mjs).
+      writeFileSync(join(outDir, 'working-mirrored.png'), mirrorPngBytes(png, strip.sprites.length))
+      moods.working.mirroredFile = `${id}/working-mirrored.png`
     }
     rows.push(
       `${id}/${strip.mood}.png  frames=${strip.sprites.length}  ` +

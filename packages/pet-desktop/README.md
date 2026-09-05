@@ -58,6 +58,16 @@ source of truth** for strip geometry:
     { "file": "<petId>/<mood>.png", "frames": 24, "frameDurationMs": 250 } } } } }
 ```
 
+The `working` mood additionally carries an optional `"mirroredFile":
+"<petId>/working-mirrored.png"` — a copy of the run strip with every frame
+mirrored horizontally in place (frame order unchanged). It exists because
+the SDK's software reference renderer ignores the sign of negative-scale
+transforms, and Windows transparent windows always render through that
+path — so instead of mirroring at draw time with an Affine, a rightward
+drag swaps in the pre-mirrored strip (image id slot 8, see
+`src/manifest.zig`). Pets without the field fall back to the draw-time
+Affine, which only Metal honors.
+
 Each strip is `frames` horizontal frames of `frameSize`×`frameSize` CSS points
 at `scale`× physical pixels (256×256 px at scale 2), RGBA with a transparent
 background, looping seamlessly. The app parses the manifest at boot
@@ -68,7 +78,8 @@ pixels (`frame i → x = i × 256, w = h = 256`), drawn into a 128pt widget.
 Regenerate the strips after changing the plugin's pet artwork:
 
 ```sh
-bun packages/pet-desktop/scripts/bake-sprites.mjs   # from the repo root
+bun packages/pet-desktop/scripts/bake-sprites.mjs            # from the repo root
+bun packages/pet-desktop/scripts/mirror-working-strips.mjs   # + the mirrored run strips
 ```
 
 ### Importing Codex pets
@@ -123,12 +134,14 @@ Limitations:
 
 Two framework limits shaped the wiring:
 
-- The image registry has **16 slots**; one pet's 8 mood strips occupy 8.
-  Switching petId unregisters the old pet's loaded strips synchronously
+- The image registry has **16 slots**; one pet's strips occupy 9 (the 8
+  mood strips + the mirrored run strip). Switching petId unregisters the
+  old pet's loaded strips synchronously
   (`fx.unregisterImage`) before loading the new set; strips whose load is
   still in flight are released by the `.image_done` handler on arrival
   (the stale branch — a load in flight can never be replaced implicitly).
-  Strip image ids are stable: `100 + petIndex × 16 + moodIndex`.
+  Strip image ids are stable: `100 + petIndex × 16 + moodIndex`, with
+  slot 8 reserved for the mirrored run strip.
 - The default per-slot decode target is 1 MiB; a 24-frame strip decodes to
   6144×256 RGBA = 6 MiB, so `app.zon` raises `images.max_image_pixel_bytes`
   to the 8 MiB ceiling to keep the full 256px frame stride (no downscale).
