@@ -10,6 +10,9 @@ zig-pkg/
 # The desktop companion binary, staged into the pet package at pack time
 # (packages/pet build:desktop); never committed, the release workflow rebuilds it.
 packages/pet/desktop/
+# The same binaries staged into the per-platform optional packages at publish
+# time (.github/workflows/publish.yml); never committed either.
+packages/pet-desktop-*/bin/
 
 # Local runtime secrets and state
 .env

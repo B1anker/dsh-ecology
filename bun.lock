@@ -46,7 +46,7 @@
     },
     "packages/pet": {
       "name": "@seaveyon/dsh-pet",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "devDependencies": {
         "@rsbuild/plugin-react": "^1",
         "@rslib/core": "^0.23.2",
@@ -61,9 +61,26 @@
         "react-dom": "^19.0.0",
         "typescript": "^5.9.3",
       },
+      "optionalDependencies": {
+        "@seaveyon/dsh-pet-desktop-darwin-arm64": "0.1.0",
+        "@seaveyon/dsh-pet-desktop-darwin-x64": "0.1.0",
+        "@seaveyon/dsh-pet-desktop-win32-x64": "0.1.0",
+      },
     },
     "packages/pet-desktop": {
       "name": "@seaveyon/dsh-pet-desktop",
+      "version": "0.1.0",
+    },
+    "packages/pet-desktop-darwin-arm64": {
+      "name": "@seaveyon/dsh-pet-desktop-darwin-arm64",
+      "version": "0.1.0",
+    },
+    "packages/pet-desktop-darwin-x64": {
+      "name": "@seaveyon/dsh-pet-desktop-darwin-x64",
+      "version": "0.1.0",
+    },
+    "packages/pet-desktop-win32-x64": {
+      "name": "@seaveyon/dsh-pet-desktop-win32-x64",
       "version": "0.1.0",
     },
     "packages/plugin-testkit": {
@@ -85,7 +102,7 @@
     },
     "packages/web-login": {
       "name": "@seaveyon/dsh-web-login",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "bin": {
         "dsh-web-login-hash": "./dist/hash-password.js",
         "dsh-web-login-recovery": "./dist/create-recovery.js",
@@ -365,6 +382,12 @@
     "@seaveyon/dsh-pet": ["@seaveyon/dsh-pet@workspace:packages/pet"],
 
     "@seaveyon/dsh-pet-desktop": ["@seaveyon/dsh-pet-desktop@workspace:packages/pet-desktop"],
+
+    "@seaveyon/dsh-pet-desktop-darwin-arm64": ["@seaveyon/dsh-pet-desktop-darwin-arm64@workspace:packages/pet-desktop-darwin-arm64"],
+
+    "@seaveyon/dsh-pet-desktop-darwin-x64": ["@seaveyon/dsh-pet-desktop-darwin-x64@workspace:packages/pet-desktop-darwin-x64"],
+
+    "@seaveyon/dsh-pet-desktop-win32-x64": ["@seaveyon/dsh-pet-desktop-win32-x64@workspace:packages/pet-desktop-win32-x64"],
 
     "@seaveyon/dsh-plugin-testkit": ["@seaveyon/dsh-plugin-testkit@workspace:packages/plugin-testkit"],
 

@@ -59,16 +59,20 @@ your desktop.
 
 What the host starts, in order:
 
-1. The companion binary bundled inside this npm package (macOS arm64/x64:
-   `desktop/dsh-pet-desktop-<arch>`, the launcher picks by `process.arch`;
-   Windows x64: `desktop/dsh-pet-desktop-windows-x64.exe`; plus its sprite
-   assets in `desktop/assets/`, staged by the release workflow). It is
-   version-locked to the plugin, so the bridge protocol can never drift, and
-   on macOS npm-installed files carry no quarantine attribute, so it spawns
-   without a Gatekeeper prompt.
+1. The companion binary from this install's per-platform optional package —
+   `@seaveyon/dsh-pet-desktop-darwin-arm64`, `-darwin-x64`, or `-win32-x64`,
+   of which npm's os/cpu selectors download only the one matching your
+   machine. It is version-locked to the plugin (the optionalDependencies
+   entries name the exact same version), so the bridge protocol can never
+   drift, and on macOS npm-installed files carry no quarantine attribute,
+   so it spawns without a Gatekeeper prompt. Its sprite assets stay in this
+   package (`desktop/assets/`, staged by the release workflow); the launcher
+   points the binary at them through `DSH_PET_DESKTOP_ASSETS`. In a
+   development checkout the staged `desktop/dsh-pet-desktop-*` copy
+   (`bun run build:desktop`) plays this role.
 2. An installed copy, per platform. On macOS, `DSH Pet.app` — resolved by
    bundle id first, then the standard Applications folders (development and
-   pre-bundle installs). On Windows there is no `open -b` and no installer,
+   pre-split installs). On Windows there is no `open -b` and no installer,
    so the fallback is the `DSH_PET_DESKTOP_APP` environment variable pointing
    at an exe.
 

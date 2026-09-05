@@ -182,8 +182,9 @@ plugin's settings panel; as soon as the plugin is installed it starts POSTing
 mood updates, and when this app isn't running the sends fail silently. On a
 loopback page the panel can also start this app for you: the pet plugin's
 host face serves `POST /dsh-pet/launch-desktop`, which first spawns the
-binary bundled inside the npm package, then asks Launch Services to open the
-bundle id `dev.seaveyon.dsh-pet-desktop` (falling back to
+binary from the install's per-platform optional package
+(`@seaveyon/dsh-pet-desktop-<platform>-<arch>`), then asks Launch Services to
+open the bundle id `dev.seaveyon.dsh-pet-desktop` (falling back to
 `/Applications/DSH Pet.app` and `~/Applications/DSH Pet.app`;
 `DSH_PET_DESKTOP_APP` overrides the search).
 

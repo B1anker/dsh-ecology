@@ -36,12 +36,17 @@
   },
   "files": [
     "dist/",
-    "desktop/",
+    "desktop/assets/",
     "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",
     "LICENSE"
   ],
+  "optionalDependencies": {
+    "@seaveyon/dsh-pet-desktop-darwin-arm64": "0.2.0",
+    "@seaveyon/dsh-pet-desktop-darwin-x64": "0.2.0",
+    "@seaveyon/dsh-pet-desktop-win32-x64": "0.2.0"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

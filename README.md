@@ -11,6 +11,7 @@ endorsed by DeepSeek AI.
 | [`@seaveyon/dsh-web-login`](packages/web-login) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-web-login.svg)](https://www.npmjs.com/package/@seaveyon/dsh-web-login) | Cookie-session login gate for the DSH Web surface, replacing a reverse proxy's HTTP Basic prompt with a styled sign-in page. |
 | [`@seaveyon/dsh-plugin-testkit`](packages/plugin-testkit) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-plugin-testkit.svg)](https://www.npmjs.com/package/@seaveyon/dsh-plugin-testkit) | Test doubles for the `webServer` registry, Cordis context events, a minimal tools pipeline, and the shell's client-side services, plus the conformance suites that keep them honest. |
 | [`@seaveyon/dsh-pet`](packages/pet) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-pet.svg)](https://www.npmjs.com/package/@seaveyon/dsh-pet) | A desktop pet for the DSH Web surface: hand-crafted sprites whose mood follows the live agent state, installable with one command. |
+| [`@seaveyon/dsh-pet-desktop-*`](packages/pet-desktop-darwin-arm64) | — | The pet desktop companion's native binary, one package per platform (`darwin-arm64`, `darwin-x64`, `win32-x64`), pulled in as an optional dependency of `@seaveyon/dsh-pet` so an install downloads only its own platform. Not meant for direct use. |
 
 Each package is independently versioned and published; the workspace exists to
 share one toolchain, not to release them together.
@@ -171,6 +172,17 @@ choose GitHub Actions, and fill in the owner, the repository, and the workflow
 *filename* — `publish.yml`, not its path — then allow the `npm publish` action.
 The fields are case-sensitive. Renaming the workflow file later breaks
 publishing until this setting is changed to match.
+
+`@seaveyon/dsh-pet`'s desktop binary multiplies this by three: the binaries
+live in `packages/pet-desktop-darwin-arm64`, `-darwin-x64`, and `-win32-x64`,
+published by pet's release hook at exactly pet's version. Each of those
+packages needs the same one-time bootstrap before the workflow can publish
+it — stage its binary into `bin/` (see the `build:desktop` script in
+[`packages/pet/package.json`](packages/pet/package.json) for where the builds
+come from), `npm publish --access public` from the package directory by hand
+at the version pet's `optionalDependencies` currently names, then register
+the trusted publisher naming `publish.yml`. They get no tags of their own:
+they are version-locked to pet, and `pet-v*` tags are the shared history.
 
 ## Adding a package
 
