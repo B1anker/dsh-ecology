@@ -33,6 +33,27 @@ describe('parsePnpmLockfile', () => {
 })
 
 describe('resolveDependency', () => {
+  test('resolves real v9 keys and peer suffixes without guessing a different version', () => {
+    const lock = parsePnpmLockfile(`lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      '@scope/plugin':
+        specifier: ^1.2.0
+        version: 1.2.3(react@19.0.0)
+packages:
+  '@scope/plugin@1.2.3':
+    resolution: {integrity: sha512-verified}
+  '@scope/plugin@2.0.0':
+    resolution: {integrity: sha512-other}
+`)
+    expect(resolveDependency(lock!, '@scope/plugin')).toEqual({
+      version: '1.2.3',
+      integrity: 'sha512-verified',
+    })
+    lock!.importer['@scope/plugin']!.version = '9.0.0'
+    expect(resolveDependency(lock!, '@scope/plugin')).toBeUndefined()
+  })
   test('finds the importer version first, then the package entry', () => {
     const lockfile = parsePnpmLockfile(minimalLockfile('lodash', '4.17.21'))
     expect(lockfile).not.toBeNull()

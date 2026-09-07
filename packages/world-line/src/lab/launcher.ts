@@ -59,6 +59,7 @@ export interface LaunchResult {
 }
 
 export interface LaunchOptions {
+  signal?: AbortSignal
   dshBinary: string
   args: readonly string[]
   cwd: string
@@ -104,7 +105,13 @@ export function launchDsh(options: LaunchOptions): Promise<LaunchResult> {
       settled = true
       if (deadline !== null) clearTimeout(deadline)
       if (settle !== null) clearTimeout(settle)
+      options.signal?.removeEventListener('abort', abort)
       resolve(result)
+    }
+    const abort = (): void => {
+      killTree(child, 'SIGTERM')
+      setTimeout(() => killTree(child, 'SIGKILL'), STOP_GRACE_MS).unref()
+      finish({ kind: 'spawn-error', detail: 'startup cancelled' })
     }
     const succeed = (): void => {
       if (ready === null) return
@@ -139,7 +146,7 @@ export function launchDsh(options: LaunchOptions): Promise<LaunchResult> {
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8')
+      stdout = (stdout + chunk.toString('utf8')).slice(-131072)
       if (ready !== null) return
       for (const line of stdout.split('\n')) {
         const parsed = parseReadyLine(line)
@@ -153,7 +160,7 @@ export function launchDsh(options: LaunchOptions): Promise<LaunchResult> {
       }
     })
     child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf8')
+      stderr = (stderr + chunk.toString('utf8')).slice(-131072)
     })
     child.on('error', (error: NodeJS.ErrnoException) => {
       fail('spawn-error', error.code ?? error.message)
@@ -174,6 +181,8 @@ export function launchDsh(options: LaunchOptions): Promise<LaunchResult> {
       killTree(child, 'SIGTERM')
       setTimeout(() => killTree(child, 'SIGKILL'), STOP_GRACE_MS).unref()
     }, readyTimeoutMs)
+    options.signal?.addEventListener('abort', abort, { once: true })
+    if (options.signal?.aborted) abort()
   })
 }
 
@@ -196,7 +205,7 @@ async function stopGroup(
     killTree(child, 'SIGTERM')
   }
   const exitCode = await new Promise<number | null>((resolve) => {
-    if (child.exitCode !== null) {
+    if (child.exitCode !== null || child.signalCode !== null) {
       resolve(child.exitCode)
       return
     }

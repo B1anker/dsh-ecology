@@ -5,6 +5,7 @@ import {
   IconSearchOutline16,
   IconWarningOutline16,
   Input,
+  Toast,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createElement, useEffect, useMemo, useRef, useState } from 'react'
 import type {
@@ -38,6 +39,7 @@ export function WorktreeButton({ services }: { services: Services }) {
   const [removeTarget, setRemoveTarget] = useState<RemovalTarget>()
   const [removing, setRemoving] = useState(false)
   const [removeError, setRemoveError] = useState<string>()
+  const [toast, setToast] = useState<{ id: number; text: string }>()
   const rootRef = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
@@ -49,8 +51,19 @@ export function WorktreeButton({ services }: { services: Services }) {
       setRemoveError(undefined)
       setRemoveTarget({ entry: value.entry, workspace: value.workspace })
     }
+    const receiveToast = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail
+      if (typeof detail !== 'object' || detail === null) return
+      const text = (detail as { text?: unknown }).text
+      if (typeof text !== 'string' || text.trim() === '') return
+      setToast({ id: Date.now(), text })
+    }
     window.addEventListener('dsh-git-worktree:remove', receiveRemoveRequest)
-    return () => window.removeEventListener('dsh-git-worktree:remove', receiveRemoveRequest)
+    window.addEventListener('dsh-git-worktree:toast', receiveToast)
+    return () => {
+      window.removeEventListener('dsh-git-worktree:remove', receiveRemoveRequest)
+      window.removeEventListener('dsh-git-worktree:toast', receiveToast)
+    }
   }, [])
 
   useEffect(() => {
@@ -596,12 +609,22 @@ export function WorktreeButton({ services }: { services: Services }) {
     },
   })
 
+  const toastNode =
+    toast === undefined
+      ? null
+      : createElement(Toast, {
+          key: toast.id,
+          text: toast.text,
+          holdMs: 2200,
+          onDone: () => setToast(undefined),
+        })
+
   return createElement(
     'span',
     {
       ref: rootRef,
       style: { position: 'relative', display: 'inline-flex' },
     },
-    [trigger, open ? popover : null, removeModal],
+    [trigger, open ? popover : null, removeModal, toastNode],
   )
 }

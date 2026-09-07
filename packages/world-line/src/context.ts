@@ -8,8 +8,12 @@
 export interface CliContext {
   /** Process cwd (path specs resolve against this). */
   cwd: string
-  /** Process environment (PATH, DSH_HOME lookups). */
+  /** Selected home's .env merged with the inherited process environment. */
   env: NodeJS.ProcessEnv
+  /** Separate environment for experimental child processes; official operations use env. */
+  experimentEnv?: NodeJS.ProcessEnv
+  /** Omit the official .env from experiment runtime inheritance (shell variables remain). */
+  noInheritEnv?: boolean
   /** Absolute DSH home (explicit flag > $DSH_HOME > ~/.dsh). */
   home: string
   /** The profile the invocation names. */

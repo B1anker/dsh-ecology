@@ -92,41 +92,30 @@ export function parsePnpmLockfile(text: string): PnpmLockfile | null {
 
 /**
  * Resolve one direct dependency against a parsed lockfile: the exact
- * `importer` version first, then the first `packages` key whose name prefix
- * matches. Returns undefined when the lockfile carries no resolution.
+ * `importer` version first, then its matching `packages` entry. Never guesses from another
+ * version of the same package. Returns undefined when the lockfile carries no resolution.
  */
 export function resolveDependency(
   lockfile: PnpmLockfile,
   name: string,
 ): ResolvedDependency | undefined {
-  const importerEntry = lockfile.importer[name]
-  const exact =
-    importerEntry?.version !== undefined ? packageKey(name, importerEntry.version) : undefined
-  const entry =
-    (exact !== undefined ? lockfile.packages.get(exact) : undefined) ??
-    findPrefixEntry(lockfile.packages, `/${name}@`)
-  if (entry === undefined) return undefined
-  const out: ResolvedDependency = {}
-  if (entry.version !== undefined) out.version = entry.version
+  const imported = lockfile.importer[name]?.version
+  // v9 puts the version in importer references and omits the slash and package.version.
+  const version = imported?.split('(')[0]
+  if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version))
+    return undefined
+  const keys = [
+    `${name}@${imported}`,
+    `${name}@${version}`,
+    `/${name}@${imported}`,
+    `/${name}@${version}`,
+  ]
+  const entry = keys.map((key) => lockfile.packages.get(key)).find(Boolean)
+  if (!entry) return undefined
+  const out: ResolvedDependency = { version }
   const integrity = entry.resolution?.integrity
   if (integrity !== undefined) out.integrity = integrity
   const tarball = entry.resolution?.tarball
   if (tarball !== undefined) out.url = tarball
-  return Object.keys(out).length > 0 ? out : undefined
-}
-
-/** pnpm packages-map key for a name/version pair. */
-function packageKey(name: string, version: string): string {
-  return `/${name}@${version}`
-}
-
-/** First packages key starting with `prefix`, lexicographic. */
-function findPrefixEntry(
-  packages: Map<string, ResolvedPackage>,
-  prefix: string,
-): ResolvedPackage | undefined {
-  for (const key of packages.keys()) {
-    if (key.startsWith(prefix)) return packages.get(key)
-  }
-  return undefined
+  return out
 }

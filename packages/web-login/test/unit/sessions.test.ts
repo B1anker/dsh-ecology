@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@rstest/core'
@@ -156,7 +156,7 @@ test('a private store restores unexpired sessions after restart and persists rev
   }
 })
 
-test('persistent sessions fail closed on an invalid bearer id or principal', () => {
+test('persistent sessions discard an invalid record and rewrite the current schema', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-web-login-invalid-sessions-'))
   const file = join(dir, 'sessions.json')
   try {
@@ -167,9 +167,47 @@ test('persistent sessions fail closed on an invalid bearer id or principal', () 
         sessions: [['short', { expiresAt: Date.now() + 1000, principal: PASSWORD_PRINCIPAL }]],
       }),
     )
-    expect(() =>
-      createSessionStore({ ttlMs: 1000, maxSessions: 10, persistentFile: file }),
-    ).toThrow(/invalid session record/)
+    const store = createSessionStore({
+      ttlMs: 1000,
+      maxSessions: 10,
+      persistentFile: file,
+      binding: 'current',
+    })
+    expect(store.size).toBe(0)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+      schemaVersion: 2,
+      binding: 'current',
+      sessions: [],
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('persistent sessions discard a transitional v1+binding store without failing boot', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-web-login-transitional-sessions-'))
+  const file = join(dir, 'sessions.json')
+  try {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        binding: 'stale',
+        sessions: [],
+      }),
+    )
+    const store = createSessionStore({
+      ttlMs: 1000,
+      maxSessions: 10,
+      persistentFile: file,
+      binding: 'current',
+    })
+    expect(store.size).toBe(0)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+      schemaVersion: 2,
+      binding: 'current',
+      sessions: [],
+    })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

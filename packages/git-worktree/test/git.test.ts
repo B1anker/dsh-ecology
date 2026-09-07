@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from '@rstest/core'
 import {
   assertBranchName,
@@ -155,5 +155,79 @@ describe('worktree operations', () => {
     })
     expect(groups[1]).toMatchObject({ path: root, repositoryPath: root, branch: 'main' })
     expect(groups[2]).toEqual({ path: join(cwd, '..') })
+  })
+
+  it('keeps classifying siblings when one registered workspace path is missing', async () => {
+    const cwd = await repository()
+    const created = await createWorktree({ cwd, branch: 'feat/alive' })
+    const missing = join(dirname(cwd), `${basename(cwd)}-worktrees`, 'feat--gone')
+    const groups = await classifyWorkspacePaths([created.path, cwd, missing])
+    const root = await repositoryRoot(cwd)
+    expect(groups).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: created.path, repositoryPath: root, branch: 'feat/alive' }),
+        expect.objectContaining({ path: root, repositoryPath: root, branch: 'main' }),
+        expect.objectContaining({
+          path: expect.stringMatching(/feat--gone$/),
+          repositoryPath: root,
+          status: 'removed',
+        }),
+      ]),
+    )
+    const tombstone = groups.find((entry) => entry.status === 'removed')
+    expect(tombstone).toBeDefined()
+    await access(join(tombstone!.path, '.dsh-git-worktree-removed'))
+  })
+
+  it('removes a tombstone without requiring a live Git worktree', async () => {
+    const cwd = await repository()
+    const missing = join(dirname(cwd), `${basename(cwd)}-worktrees`, 'feat--tomb')
+    const groups = await classifyWorkspacePaths([cwd, missing])
+    const removed = groups.find((entry) => entry.status === 'removed')
+    expect(removed).toBeDefined()
+    expect(removed!.repositoryPath).toBe(await repositoryRoot(cwd))
+    await removeWorktree(removed!.path)
+    await expect(access(removed!.path)).rejects.toThrow()
+  })
+
+  it('clears a leftover tombstone marker once the worktree is restored', async () => {
+    const cwd = await repository()
+    const missing = join(dirname(cwd), `${basename(cwd)}-worktrees`, 'feat--revive')
+    const first = await classifyWorkspacePaths([cwd, missing])
+    const tombstone = first.find((entry) => entry.status === 'removed')
+    expect(tombstone).toBeDefined()
+
+    await rm(tombstone!.path, { recursive: true, force: true })
+    const restored = await createWorktree({ cwd, branch: 'feat/revive' })
+    expect(restored.path).toBe(tombstone!.path)
+
+    // Simulate a leftover marker after a manual restore into the same path.
+    await writeFile(join(restored.path, '.dsh-git-worktree-removed'), 'stale\n')
+    const second = await classifyWorkspacePaths([cwd, restored.path])
+    expect(second).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: restored.path,
+          repositoryPath: await repositoryRoot(cwd),
+          status: 'active',
+          branch: 'feat/revive',
+        }),
+      ]),
+    )
+    await expect(access(join(restored.path, '.dsh-git-worktree-removed'))).rejects.toThrow()
+  })
+
+  it('infers nesting from worktree layout without Git', async () => {
+    const { inferWorkspaceGroupsLocal } = await import('../src/workspace-layout.js')
+    const cwd = await repository()
+    const created = await createWorktree({ cwd, branch: 'feat/layout' })
+    const groups = inferWorkspaceGroupsLocal([created.path, cwd, join(cwd, '..')])
+    expect(groups).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: created.path, repositoryPath: cwd, status: 'active' }),
+        expect.objectContaining({ path: cwd, repositoryPath: cwd, status: 'active' }),
+        expect.objectContaining({ path: join(cwd, '..') }),
+      ]),
+    )
   })
 })

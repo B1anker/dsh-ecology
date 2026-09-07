@@ -10,7 +10,8 @@
     "moduleResolution": "NodeNext",
     "lib": ["ES2023", "DOM"],
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    "jsx": "react-jsx"
   },
   "include": ["src", "test", "rstest.config.ts"]
 }

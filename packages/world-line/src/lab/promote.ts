@@ -161,6 +161,10 @@ export async function runLabPromote(
   const host: KnownHost = requireKnownHost(ctx)
 
   const manifest: LabManifest = await readLabManifest(ctx.home, labId)
+  if (manifest.purpose === 'mirror')
+    throw new UsageError(
+      'interactive mirrors cannot be promoted; use lab add/config verification instead',
+    )
   const labProfileName = manifest.source.profileName
   const journalKind = manifest.source.kind === 'restore' ? 'restore' : 'promotion'
   if (labProfileName !== ctx.profileName) {

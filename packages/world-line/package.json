@@ -28,14 +28,23 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./web": {
+      "types": "./dist/web/index.d.ts",
+      "default": "./dist/web/index.js"
+    },
+    "./client": {
+      "default": "./dist/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "files": [
     "dist/",
     "bin/",
     "docs/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "cordis.patch.yml"
   ],
   "repository": {
     "type": "git",
@@ -50,18 +59,25 @@
     "access": "public"
   },
   "dependencies": {
-    "js-yaml": "4.3.1"
+    "js-yaml": "4.3.1",
+    "playwright-core": "^1.62.1"
   },
   "devDependencies": {
+    "@phosphor-icons/react": "^2.1.10",
+    "@rsbuild/plugin-react": "^1",
+    "@rslib/core": "^0.23.2",
     "@rstest/core": "^0.11.9",
     "@rstest/coverage-v8": "^0.11.9",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.0.0",
-    "playwright-core": "^1.62.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19",
+    "@xyflow/react": "12.11.6",
+    "react": "^19.0.0",
     "typescript": "^5.9.3"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && rslib build",
     "dev": "tsc -p tsconfig.build.json --watch",
     "test": "bun run build && rstest run",
     "test:unit": "rstest run",
@@ -72,5 +88,15 @@
     "pack:check": "bun run build && npm pack --dry-run",
     "test:real:phase2:cli": "bun scripts/evidence-phase2-cli.mjs",
     "test:real:phase4": "bun run build && node scripts/evidence-phase4.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [],
+      "immediately": true
+    }
   }
 }

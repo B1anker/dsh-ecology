@@ -2,7 +2,9 @@
  * Bounded session store with optional private persistence.
  *
  * Sessions are opaque random ids mapped to an expiry and a principal. They may
- * be persisted in a private JSON file so normal restarts retain login.
+ * be persisted in a private JSON file so normal restarts retain login. Corrupt
+ * or unrecognized store files are discarded and rewritten in the current
+ * schema so boot is not blocked; symlink / parent-path attacks still fail closed.
  *
  * When GitHub OAuth is enabled, each session carries a principal so revocation
  * can target a GitHub user and authorization-version checks can reject stale
@@ -169,8 +171,9 @@ export function createSessionStore({
   if (persistentFile !== undefined) {
     try {
       const stats = lstatSync(persistentFile)
-      if (stats.isSymbolicLink() || !stats.isFile() || stats.size > MAX_SESSION_FILE_BYTES)
+      if (stats.isSymbolicLink() || !stats.isFile())
         throw new Error(`dsh-web-login: refusing symlink ${persistentFile}`)
+      if (stats.size > MAX_SESSION_FILE_BYTES) throw new Error('session store exceeds size limit')
       const raw = readFileSync(persistentFile, 'utf8')
       if (Buffer.byteLength(raw, 'utf8') > MAX_SESSION_FILE_BYTES)
         throw new Error('session store exceeds size limit')
@@ -216,11 +219,31 @@ export function createSessionStore({
       if (sessions.size > maxSessions) throw new Error('session store exceeds maxSessions')
       persist()
     } catch (error) {
-      if (!(error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT'))
-        throw new Error(
-          `dsh-web-login: could not load persistent sessions: ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error },
-        )
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // Missing file: start empty; first open/revoke will create it.
+      } else if (
+        error instanceof Error &&
+        (error.message.includes('refusing symlink') ||
+          error.message.includes('invalid session parent'))
+      ) {
+        throw new Error(`dsh-web-login: could not load persistent sessions: ${error.message}`, {
+          cause: error,
+        })
+      } else {
+        // Corrupt, transitional, or unrecognized content: drop everything and
+        // rewrite in the current schema so boot is not blocked by a stale file.
+        sessions.clear()
+        try {
+          persist()
+        } catch (persistError) {
+          throw new Error(
+            `dsh-web-login: could not reset persistent sessions: ${
+              persistError instanceof Error ? persistError.message : String(persistError)
+            }`,
+            { cause: persistError },
+          )
+        }
+      }
     }
   }
 

@@ -7,6 +7,7 @@ export type WorkspaceGroupEntry = {
   repositoryPath?: string
   branch?: string
   detached?: boolean
+  status?: 'active' | 'removed'
 }
 export type WorktreeConflict = {
   targetPath: string
@@ -29,7 +30,12 @@ export type Services = {
     create(input: { path: string }): Promise<Workspace>
     delete?(workspaceId: string): Promise<void>
   }
-  sessions?: { list: { getSnapshot(): { current?: string } } }
+  sessions?: {
+    list: {
+      getSnapshot(): { current?: string }
+      subscribe?(listener: () => void): () => void
+    }
+  }
   locale?: LocaleService
 }
 export type Translate = (

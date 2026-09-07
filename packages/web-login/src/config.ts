@@ -15,6 +15,7 @@
  * @module @seaveyon/dsh-web-login/config
  */
 
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { defaultAuthorizationPath, defaultRecoveryPath } from './authorization.js'
 import { type EnvLike, resolveDshHome } from './env-file.js'
@@ -29,6 +30,7 @@ export const DEFAULTS = Object.freeze({
   auditEnabled: true,
   auditFile: '',
   secureCookie: true,
+  cookieNamespace: '',
   maxBodyBytes: 4096,
   maxSessions: 10000,
   attemptLimit: 5,
@@ -104,6 +106,7 @@ export type LoginConfig = Partial<ResolvedConfig>
 
 /** Keys holding a string value. */
 type StringKey =
+  | 'cookieNamespace'
   | 'passwordHashEnv'
   | 'clientIpHeader'
   | 'title'
@@ -179,6 +182,7 @@ const RANGES: Readonly<Record<NumericKey, readonly [number, number]>> = Object.f
 })
 
 const STRING_KEYS: readonly StringKey[] = [
+  'cookieNamespace',
   'passwordHashEnv',
   'clientIpHeader',
   'title',
@@ -343,6 +347,21 @@ export function resolveConfig(config: unknown = {}, env: EnvLike = process.env):
   const authRoot = join(resolveDshHome(env), 'auth', 'dsh-web-login')
   if ((out.sessionFile as string) === '') out.sessionFile = join(authRoot, 'sessions.json')
   if ((out.auditFile as string) === '') out.auditFile = join(authRoot, 'audit.jsonl')
+
+  if (!/^[A-Za-z0-9_-]{0,64}$/.test(out.cookieNamespace as string)) {
+    throw new TypeError(
+      'dsh-web-login: cookieNamespace must be at most 64 letters, digits, underscores or hyphens',
+    )
+  }
+  const experiment = env.WORLD_LINE_LAB || env.WORLD_LINE_RESCUE
+  if (experiment) {
+    // Cookies ignore TCP ports. Mirror instances must not reuse the official
+    // name even when the cloned config contains an explicit namespace.
+    out.cookieNamespace = createHash('sha256')
+      .update(`${experiment}\0${out.cookieNamespace}`)
+      .digest('hex')
+      .slice(0, 16)
+  }
 
   return Object.freeze(out) as ResolvedConfig
 }

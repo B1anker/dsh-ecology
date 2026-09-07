@@ -29,7 +29,7 @@ import { profileDir, profileLockPath } from '../fs/paths.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
 import { readObject } from '../vault/objects.js'
 import type { KnownHost } from './gate.js'
-import { labDir, labLogDir, labProfileDir, labStoreDir, newLabId } from './layout.js'
+import { labDir, labHomeDir, labLogDir, labProfileDir, labStoreDir, newLabId } from './layout.js'
 import type { LabManifest } from './manifest.js'
 import { writeLabManifest } from './manifest.js'
 
@@ -48,12 +48,16 @@ export interface CreatedLab {
  * secret bundle at all.
  */
 export interface RestoreLabSource {
+  vaultHome?: string
+  includeHomePatch?: boolean
   snapshotId: string
   manifest: SnapshotManifest
   secrets: Map<string, Buffer> | null
 }
 
 export interface CreateLabOptions {
+  sourceHome?: string
+  parentLabId?: string
   /** When set, the lab profile is rebuilt from snapshot vault bytes. */
   source?: RestoreLabSource
 }
@@ -79,18 +83,19 @@ export async function createLab(
   options: CreateLabOptions = {},
 ): Promise<CreatedLab> {
   const now = ctx.now()
-  const sourceDir = profileDir(ctx.home, profileName)
+  const sourceHome = options.sourceHome ?? ctx.home
+  const sourceDir = profileDir(sourceHome, profileName)
   await ensureProfileDir(sourceDir)
 
   const lock = await acquireLock({
-    lockPath: profileLockPath(ctx.home, profileName),
+    lockPath: profileLockPath(sourceHome, profileName),
     purpose: `lab create from ${profileName}`,
     breakStale: ctx.breakStaleLock,
     now,
   })
   try {
     const analysis = await analyzeProfile({
-      home: ctx.home,
+      home: sourceHome,
       profileName,
       adapter: adapterDsh01x,
     })
@@ -110,7 +115,7 @@ export async function createLab(
         if (!(WHITELIST_FILE_NAMES as readonly string[]).includes(record.name)) continue
         let bytes: Buffer | null = null
         if (record.object !== null) {
-          bytes = await readObject(ctx.home, record.object)
+          bytes = await readObject(restore.vaultHome ?? ctx.home, record.object)
         } else if (record.secretStored === true && restore.secrets !== null) {
           bytes = restore.secrets.get(record.name) ?? null
         }
@@ -124,11 +129,22 @@ export async function createLab(
       }
     }
 
+    let homePatch: Buffer | null = null
+    if (restore?.includeHomePatch && restore.manifest.homePatch?.present) {
+      const record = restore.manifest.homePatch
+      homePatch = record.object
+        ? await readObject(restore.vaultHome ?? ctx.home, record.object)
+        : (restore.secrets?.get('cordis.patch.yml (home)') ?? null)
+      if (!homePatch) throw new VerificationError('快照的 home 配置未保存，无法恢复')
+    }
+
     await mkdir(labDir(ctx.home, id), { recursive: true })
     await mkdir(targetDir, { recursive: true })
     await mkdir(labStoreDir(ctx.home, id), { recursive: true })
     await mkdir(labLogDir(ctx.home, id), { recursive: true })
 
+    if (homePatch)
+      await writeFileAtomic(join(labHomeDir(ctx.home, id), 'cordis.patch.yml'), homePatch)
     const copied: string[] = []
     if (restore === undefined) {
       for (const record of analysis.files) {
@@ -160,11 +176,16 @@ export async function createLab(
       runtime: runtimeEnvironment(),
       source:
         restore === undefined
-          ? { profileName, receipt: analysis.receipt.tree }
+          ? {
+              profileName,
+              receipt: analysis.receipt.tree,
+              ...(options.parentLabId ? { parentLabId: options.parentLabId } : {}),
+            }
           : {
               profileName,
               receipt: analysis.receipt.tree,
               kind: 'restore',
+              ...(options.parentLabId ? { parentLabId: options.parentLabId } : {}),
               snapshotId: restore.snapshotId,
             },
       ...(lockfileRecord !== undefined ? { lockfileHash: lockfileRecord.sha256 } : {}),

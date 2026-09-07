@@ -169,8 +169,15 @@ describe('runLabTransaction protocol', () => {
       const { labId } = await fabricateLab(home, now)
       const recorder: FakeRecorder = { pluginArgs: [], dumpArgs: [], envs: [], stopped: 0 }
       const { deps } = makeDeps(recorder)
+      const ctx = makeCtx(home, () => now)
+      ctx.env.LOGIN_PASSWORD_HASH = 'official'
+      ctx.experimentEnv = {
+        ...ctx.env,
+        LOGIN_PASSWORD_HASH: 'experiment',
+        DSH_HOME: '/must-not-be-used',
+      }
       const outcome = await runLabTransaction({
-        ctx: makeCtx(home, () => now),
+        ctx,
         host: HOST,
         labId,
         plan: ADD_PLAN,
@@ -195,6 +202,11 @@ describe('runLabTransaction protocol', () => {
       const env = recorder.envs[0] ?? {}
       expect(env.DSH_HOME).toBe(labHomeDir(home, labId))
       expect(env.WORLD_LINE_LAB).toBe(labId)
+      for (const childEnv of recorder.envs) {
+        expect(childEnv.LOGIN_PASSWORD_HASH).toBe('experiment')
+        expect(childEnv.DSH_HOME).toBe(labHomeDir(home, labId))
+      }
+      expect(ctx.env.LOGIN_PASSWORD_HASH).toBe('official')
       expect(recorder.stopped).toBe(1)
       await expectManifestGone(home, labId)
     } finally {

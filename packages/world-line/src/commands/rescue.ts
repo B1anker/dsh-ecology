@@ -223,7 +223,7 @@ export async function runRescueStart(ctx: CliContext, allow: string[]): Promise<
     dshBinary: host.binary.path,
     args: dshBootArgs(profileName, 0),
     cwd: home,
-    env: { ...ctx.env, DSH_HOME: home, WORLD_LINE_RESCUE: id },
+    env: { ...(ctx.experimentEnv ?? ctx.env), DSH_HOME: home, WORLD_LINE_RESCUE: id },
     keepAlive: true,
   })
   if (launch.kind !== 'ready' || launch.handle === undefined) {

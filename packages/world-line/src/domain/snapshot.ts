@@ -69,6 +69,8 @@ export interface DependencyRecord {
   targetExists?: boolean
   gitHead?: string | null
   contentHash?: string | null
+  /** Fingerprint of the independent-copy set; bytes themselves are not archived. */
+  localSourceHash?: string
   resolved?: ResolvedDependency
 }
 
@@ -79,6 +81,7 @@ export interface HomePatchRecord {
   sha256?: string
   object?: string | null
   secretSkipped?: boolean
+  secretStored?: boolean
   secretKinds?: string[]
   entries?: PatchEntrySummary[]
   parseError?: string
