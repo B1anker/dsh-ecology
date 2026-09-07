@@ -1,3 +1,10 @@
+# [0.5.0](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.4.2...web-login-v0.5.0) (2026-09-07)
+
+
+### Features
+
+* **world-line:** add managed parallel DSH instances ([26f256e](https://github.com/B1anker/dsh-ecology/commit/26f256ec2549b8b5bd9098e447a91ff5a9386f50))
+
 ## [0.4.2](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.4.1...web-login-v0.4.2) (2026-09-04)
 
 
