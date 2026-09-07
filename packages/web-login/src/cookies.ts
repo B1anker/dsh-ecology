@@ -43,8 +43,11 @@ export const SESSION_COOKIE_PREFIX = '__Host-'
  * @param secure - whether the deployment sets `Secure` on its cookies.
  * @returns the cookie name to set and to read.
  */
-export function sessionCookieName(secure: boolean): string {
-  return secure ? `${SESSION_COOKIE_PREFIX}${SESSION_COOKIE_BASE}` : SESSION_COOKIE_BASE
+export function sessionCookieName(secure: boolean, namespace = ''): string {
+  if (!/^[A-Za-z0-9_-]{0,64}$/.test(namespace))
+    throw new TypeError('invalid session cookie namespace')
+  const base = namespace === '' ? SESSION_COOKIE_BASE : `${SESSION_COOKIE_BASE}_${namespace}`
+  return secure ? `${SESSION_COOKIE_PREFIX}${base}` : base
 }
 
 /**
@@ -100,6 +103,7 @@ export function readCookie(header: unknown, name: string): string | undefined {
 
 /** How the session cookie should be scoped and how long it should live. */
 export interface SessionCookieOptions {
+  namespace?: string
   maxAgeSeconds: number
   secure: boolean
 }
@@ -119,10 +123,10 @@ export interface SessionCookieOptions {
  */
 export function serializeSessionCookie(
   id: string,
-  { maxAgeSeconds, secure }: SessionCookieOptions,
+  { maxAgeSeconds, secure, namespace = '' }: SessionCookieOptions,
 ): string {
   const attrs = [
-    `${sessionCookieName(secure)}=${id}`,
+    `${sessionCookieName(secure, namespace)}=${id}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Strict',
@@ -148,7 +152,13 @@ export function serializeSessionCookie(
  * @param options - whether the cookie being cleared was marked `Secure`.
  * @returns Set-Cookie values that expire the session cookie.
  */
-export function serializeClearedCookies({ secure }: { secure: boolean }): string[] {
+export function serializeClearedCookies({
+  secure,
+  namespace = '',
+}: {
+  secure: boolean
+  namespace?: string
+}): string[] {
   /**
    * One clearing directive.
    * @param name - the cookie name to expire.
@@ -159,6 +169,7 @@ export function serializeClearedCookies({ secure }: { secure: boolean }): string
     if (secure) attrs.push('Secure')
     return attrs.join('; ')
   }
-  const current = clear(sessionCookieName(secure))
-  return secure ? [current, clear(SESSION_COOKIE_BASE)] : [current]
+  const current = clear(sessionCookieName(secure, namespace))
+  // Clear only this namespace, never a sibling instance's legacy cookie.
+  return secure ? [current, clear(sessionCookieName(false, namespace))] : [current]
 }

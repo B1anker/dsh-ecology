@@ -130,6 +130,7 @@ of silently selecting an unsafe default.
 | `passwordHashEnv` | `LOGIN_PASSWORD_HASH` | env-name syntax | Name of the environment variable holding `scrypt$<salt hex>$<key hex>`. |
 | `title` | `DSH Web` | 1–120 characters | Login-page and browser-title text. |
 | `secureCookie` | `true` | — | Adds the `Secure` attribute and the `__Host-` cookie name. Keep it enabled outside localhost HTTP development. |
+| `cookieNamespace` | empty | Up to 64 letters, digits, underscores or hyphens | Use distinct values for independent instances on the same hostname: cookies are not scoped by port. World-line labs/rescues automatically derive their own namespace from their instance ID. |
 | `sessionTtlMs` | 30 days | 1 minute–365 days | Session lifetime. |
 | `persistentSessions` | `true` | boolean | Retain sessions across restarts. |
 | `sessionFile` | `${DSH_HOME}/auth/dsh-web-login/sessions.json` | path | Private persistent-session file. |
@@ -375,3 +376,11 @@ Releases are automated from `main` and authenticated with npm
 [trusted publishing](https://docs.npmjs.com/trusted-publishers/), so each version
 carries provenance linking it to the workflow run that built it. Nothing is
 published as part of installing, testing, or checking this repository locally.
+
+When an authorized user reaches `/` without DSH's native BrowserAuth cookie,
+the gate now uses the live `connection` service to send them through DSH's own
+launch-token exchange automatically. This also repairs a missing native cookie
+for an existing web-login session. The Host/Origin fence must pass first;
+anonymous and bootstrap/recovery sessions cannot obtain this handoff. Tokens
+are returned only in a private, no-store, same-origin redirect and are not saved.
+Hosts without these connection methods retain the existing startup-link flow.

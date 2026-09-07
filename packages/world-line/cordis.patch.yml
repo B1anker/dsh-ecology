@@ -1,0 +1,6 @@
+- insert:
+    - id: world-line
+      name: '@seaveyon/dsh-world-line'
+      inject: [webServer, connection]
+      config:
+        profile: web

@@ -10,7 +10,8 @@ import {
   removeWorktree,
   resolveSessionCwd,
 } from './git.js'
-import { readJsonBody, sendJson, type WebServerService } from './web.js'
+import { fileManagerKind, revealInFileManager } from './reveal.js'
+import { readJsonBody, sendJson, type WebServerService, withHandlerTimeout } from './web.js'
 
 export {
   assertBranchName,
@@ -146,18 +147,50 @@ export function apply(ctx: {
         kind: 'exact',
         path: '/api/plugins/dsh-git-worktree/workspace-groups',
         handler: async (req, res) => {
+          await withHandlerTimeout(res, 8_000, async () => {
+            let paths: string[] | undefined
+            if (req.method === 'GET') {
+              const raw = new URL(req.url ?? '/', 'http://x').searchParams.get('paths')
+              if (raw === null) return sendJson(res, 400, { error: 'paths_required' })
+              const parsed: unknown = JSON.parse(raw)
+              if (!Array.isArray(parsed) || parsed.some((path) => typeof path !== 'string'))
+                return sendJson(res, 400, { error: 'paths_required' })
+              paths = parsed
+            } else if (req.method === 'POST') {
+              const body = await readJsonBody(req)
+              if (!Array.isArray(body.paths) || body.paths.some((path) => typeof path !== 'string'))
+                return sendJson(res, 400, { error: 'paths_required' })
+              paths = body.paths
+            } else {
+              return sendJson(res, 405, { error: 'method_not_allowed' })
+            }
+            sendJson(res, 200, { items: await classifyWorkspacePaths(paths) })
+          })
+        },
+      }),
+    'dsh-git-worktree: workspace groups endpoint',
+  )
+  ctx.effect(
+    () =>
+      server.register({
+        kind: 'exact',
+        path: '/api/plugins/dsh-git-worktree/reveal',
+        handler: async (req, res) => {
+          if (req.method === 'GET') {
+            sendJson(res, 200, { kind: fileManagerKind() })
+            return
+          }
           if (req.method !== 'POST') return sendJson(res, 405, { error: 'method_not_allowed' })
           const body = await readJsonBody(req)
-          if (!Array.isArray(body.paths) || body.paths.some((path) => typeof path !== 'string'))
-            return sendJson(res, 400, { error: 'paths_required' })
+          if (typeof body.path !== 'string') return sendJson(res, 400, { error: 'path_required' })
           try {
-            sendJson(res, 200, { items: await classifyWorkspacePaths(body.paths) })
+            sendJson(res, 200, await revealInFileManager(body.path))
           } catch (error) {
             sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
           }
         },
       }),
-    'dsh-git-worktree: workspace groups endpoint',
+    'dsh-git-worktree: reveal endpoint',
   )
   ctx.tools.register(
     defineTool({

@@ -67,7 +67,7 @@ export function WorktreeRemovalModal({
         : createElement(
             'p',
             { key: 'message', style: { margin: 0, lineHeight: '22px' } },
-            t('deleteConfirm', {
+            t(target.entry.status === 'removed' ? 'deleteRemovedConfirm' : 'deleteConfirm', {
               branch: target.entry.branch ?? workspaceTitle(target.entry.path),
             }),
           ),

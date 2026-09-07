@@ -163,9 +163,10 @@ export async function runLabTransaction(input: LabRunInput): Promise<LabRunOutco
   const problems: CompositionProblem[] = []
 
   const labEnv: NodeJS.ProcessEnv = {
-    ...ctx.env,
+    ...(ctx.experimentEnv ?? ctx.env),
     DSH_HOME: labHomeDir(ctx.home, labId),
     WORLD_LINE_LAB: labId,
+    WORLD_LINE_MANAGER_HOME: ctx.home,
   }
   const log = async (text: string): Promise<void> => {
     await mkdir(logDir, { recursive: true }).catch(() => {})

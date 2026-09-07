@@ -28,8 +28,18 @@ export const ZH: WorktreeCopy = {
   deleteWorktree: '删除 worktree',
   deleting: '正在删除…',
   deleteConfirm: '删除 worktree “{branch}”吗？这会物理删除目录及本地分支，无法恢复。',
+  deleteRemovedConfirm:
+    '移除已删除的 worktree “{branch}”吗？目录占位与工作区登记会被清掉，会话历史仍保留在「未分组」。',
   deleteFailed: '删除 worktree 失败。',
   branchTooltip: 'Worktree 分支：{branch}',
+  removedBadge: '已删除',
+  removedTooltip: '物理 worktree 已不存在，仅可查看历史会话或删除此工作区',
+  removedReadOnly: '该 worktree 已删除，仅可查看历史',
+  revealInFinder: '在 Finder 中显示',
+  revealInExplorer: '在资源管理器中显示',
+  revealInFileManager: '在文件管理器中打开',
+  revealFailed: '无法打开目录',
+  openFolder: '打开目录',
 }
 
 export const EN: WorktreeCopy = {
@@ -59,8 +69,18 @@ export const EN: WorktreeCopy = {
   deleting: 'Deleting…',
   deleteConfirm:
     'Delete worktree “{branch}”? Its directory and local branch will be permanently deleted.',
+  deleteRemovedConfirm:
+    'Remove deleted worktree “{branch}”? The placeholder and workspace entry will be cleared; session history stays under Ungrouped.',
   deleteFailed: 'Could not delete the worktree.',
   branchTooltip: 'Worktree branch: {branch}',
+  removedBadge: 'Deleted',
+  removedTooltip: 'The physical worktree is gone. You can view history or delete this workspace.',
+  removedReadOnly: 'Worktree deleted — history only',
+  revealInFinder: 'Reveal in Finder',
+  revealInExplorer: 'Show in Explorer',
+  revealInFileManager: 'Open in File Manager',
+  revealFailed: 'Could not open the directory',
+  openFolder: 'Open folder',
 }
 
 export const DICTS = { zh: ZH, en: EN } as const

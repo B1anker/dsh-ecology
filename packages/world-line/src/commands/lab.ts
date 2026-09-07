@@ -16,6 +16,7 @@ import { summarizeProbes } from '../domain/probe.js'
 import { writeFileAtomic } from '../fs/atomic.js'
 import { destroyLab, reapExpiredLabs } from '../lab/cleanup.js'
 import { createLab } from '../lab/create.js'
+import { defaultLabId } from '../lab/defaults.js'
 import { requireKnownHost } from '../lab/gate.js'
 import { labDir, labExists, labProbePath, listLabs } from '../lab/layout.js'
 import type { LabManifest, LabPlanRecord } from '../lab/manifest.js'
@@ -26,6 +27,7 @@ import type { LabPromoteResult } from '../lab/promote.js'
 import { runLabPromote } from '../lab/promote.js'
 import type { LabRunOutcome } from '../lab/run.js'
 import { rmLab, runLabTransaction } from '../lab/run.js'
+import { readService } from '../lab/service.js'
 
 type LabVerb = 'add' | 'update' | 'remove' | 'config-apply'
 
@@ -97,6 +99,9 @@ export async function runLabPromoteCommand(
 }
 
 export interface LabListEntry {
+  isDefault?: boolean
+  alias?: string
+  runtimeState?: 'running' | 'stopped'
   id: string
   profileName: string
   state: LabManifest['state']
@@ -276,14 +281,18 @@ export async function runLabList(ctx: CliContext): Promise<LabListResult> {
     } catch {
       continue // corrupt/no manifest: invisible to list, destroy can remove it
     }
+    const service = await readService(ctx.home, id).catch(() => null)
     labs.push({
+      ...(service ? { runtimeState: service.state } : {}),
       id,
+      alias: manifest.alias,
+      isDefault: (await defaultLabId(ctx.home, manifest.source.profileName)) === id,
       profileName: manifest.source.profileName,
       state: manifest.state,
       runCount: manifest.runCount,
       createdAt: manifest.createdAt,
       lastOk: manifest.lastRun?.ok ?? null,
-      port: manifest.lastRun?.port,
+      port: service?.port ?? manifest.lastRun?.port,
       expiresAt: manifest.retention.expiresAt,
     })
   }

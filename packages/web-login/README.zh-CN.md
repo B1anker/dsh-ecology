@@ -86,6 +86,7 @@ DSH 会用这个 mapping 替换该行的整个 `config`；未写出的插件设�
 | `passwordHashEnv` | `LOGIN_PASSWORD_HASH` | 合法环境变量名 | 保存 `scrypt$<salt hex>$<key hex>` 的环境变量名。 |
 | `title` | `DSH Web` | 1–120 字符 | 登录页与浏览器标题。 |
 | `secureCookie` | `true` | — | 为 Cookie 增加 `Secure` 属性并启用 `__Host-` 名称。除本机 HTTP 开发外不要关闭。 |
+| `cookieNamespace` | 空字符串 | 最多 64 个字母、数字、下划线或短横线 | 同一主机运行多个独立实例时设置不同值，避免不同端口覆盖登录 Cookie。WL Lab/rescue 自动根据实例 ID 隔离，无需手动设置。 |
 | `sessionTtlMs` | 30 天 | 1 分钟–365 天 | 会话有效期。 |
 | `persistentSessions` | `true` | 布尔值 | 是否在重启后保留会话。 |
 | `sessionFile` | `${DSH_HOME}/auth/dsh-web-login/sessions.json` | 路径 | 私有会话文件。 |
@@ -255,3 +256,9 @@ CLI 测试会启动 `dist/hash-password.js`，因此需要先构建。`bun run t
 npm allowlist 只包含构建产物、密码校验值 CLI、可安装的 bundle patch、双语 README、安全策略和 MIT 许可证。测试、`.env`、会话状态和 profile 专属配置均不会进入 tarball。
 
 发布由 `main` 分支自动触发，并使用 npm [trusted publishing](https://docs.npmjs.com/trusted-publishers/) 认证，因此每个版本都带有指向其构建 workflow 运行记录的 provenance。在本地安装、测试或执行检查都不会触发 `npm publish`。
+
+已授权用户访问首页时，如果缺少 DSH 自身的 BrowserAuth Cookie，web-login
+会通过当前 `connection` 服务自动衔接 DSH 原生认证，再返回首页。已有登录
+会话也适用，不必重新寻找启动链接。只有通过 Host/Origin 检查的已授权请求
+可以触发；匿名、未完成绑定和恢复中的临时会话不会获得此入口。跳转禁止缓存，
+不会保存启动 token。不提供相应接口的旧版 DSH 仍使用原来的启动链接流程。

@@ -8,5 +8,6 @@
     "sourceMap": true,
     "lib": ["ES2023", "DOM"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/client"]
 }

@@ -296,16 +296,24 @@ describe('lab promote', () => {
         ),
         'utf8',
       )
-      const launchFake = async () => ({
-        kind: 'ready' as const,
-        handle: {
-          pid: 1,
-          url: 'http://127.0.0.1:9/',
-          port: 9,
-          stop: async () => ({ exitCode: 0, signal: null, stdout: '', stderr: '' }),
-        },
-        detail: '',
-      })
+      ctx.env.WL_ENV_TEST = 'official'
+      ctx.experimentEnv = { ...ctx.env, WL_ENV_TEST: 'experiment', DSH_HOME: '/wrong' }
+      const launchFake: NonNullable<
+        NonNullable<Parameters<typeof runLabPromote>[1]['deps']>['launch']
+      > = async (options) => {
+        expect(options.env.WL_ENV_TEST).toBe('official')
+        expect(options.env.DSH_HOME).toBe(home)
+        return {
+          kind: 'ready' as const,
+          handle: {
+            pid: 1,
+            url: 'http://127.0.0.1:9/',
+            port: 9,
+            stop: async () => ({ exitCode: 0, signal: null, stdout: '', stderr: '' }),
+          },
+          detail: '',
+        }
+      }
       const clientProbeFake = async () => ({
         signal: {
           kind: 'ready' as const,

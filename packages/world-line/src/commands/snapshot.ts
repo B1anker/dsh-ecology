@@ -20,6 +20,7 @@ import { acquireLock } from '../fs/lock.js'
 import { profileDir, profileLockPath, secretBundlePath } from '../fs/paths.js'
 import { findDshBinary, readDshVersion } from '../host-adapters/detect.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
+import { localSourceHash } from '../lab/local-source.js'
 import { createKeyProvider } from '../vault/crypto.js'
 import { latestSnapshotFor, writeSnapshotManifest } from '../vault/manifests.js'
 import { putObject } from '../vault/objects.js'
@@ -115,6 +116,16 @@ export async function runSnapshotCreate(
               return true
             },
     })
+    const localWarnings: string[] = []
+    for (const dep of analysis.dependencies) {
+      if ((dep.kind === 'file' || dep.kind === 'link') && dep.target) {
+        try {
+          dep.localSourceHash = await localSourceHash(dep.target)
+        } catch {
+          localWarnings.push(`本地插件 ${dep.name} 无法固定源码状态，此快照不能用于分支`)
+        }
+      }
+    }
     let secretsFacts: SnapshotManifest['secretsBundle'] = null
     if (vaultKey !== null && secretSources.length > 0) {
       const { bundle, entryCount } = buildSecretBundle(vaultKey, secretSources)
@@ -144,7 +155,7 @@ export async function runSnapshotCreate(
     if (analysis.homePatch?.secretSkipped === true)
       skippedSecrets.push('$DSH_HOME/cordis.patch.yml')
 
-    const warnings: string[] = []
+    const warnings: string[] = [...localWarnings]
     if (!verdict.known) {
       warnings.push(
         redactText(

@@ -20,3 +20,6 @@ export {
   WORLD_LINE_FORMAT_VERSION,
   WORLD_LINE_VERSION,
 } from './identity.js'
+
+// DSH host plugin face; CLI imports remain available to existing consumers.
+export { apply, inject, name } from './web/index.js'

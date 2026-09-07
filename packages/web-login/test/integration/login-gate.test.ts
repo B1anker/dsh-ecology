@@ -723,3 +723,75 @@ test('disposal does not clobber a decorator installed after the gate', async () 
     else process.env[ENV_NAME] = prior
   }
 })
+
+test('two instances on one host can log in and out without overwriting each other', async () => {
+  const official = await fixture()
+  const mirror = await fixture({ cookieNamespace: 'mirror-fixture' })
+  try {
+    const a = await signIn(official.port)
+    const b = await signIn(mirror.port)
+    expect(a.cookie?.split('=')[0]).not.toBe(b.cookie?.split('=')[0])
+    // Browsers send both host cookies to both ports; each gate must select its own.
+    const cookie = `${a.cookie}; ${b.cookie}`
+    expect((await request(official.port, '/exact', { headers: { cookie } })).status).toBe(200)
+    expect((await request(mirror.port, '/exact', { headers: { cookie } })).status).toBe(200)
+    const logout = await request(mirror.port, '/logout', { method: 'POST', headers: { cookie } })
+    expect(setCookie(logout)).toMatch(/^dsh_session_mirror-fixture=;/)
+    expect((await request(official.port, '/exact', { headers: { cookie } })).status).toBe(200)
+    expect((await request(mirror.port, '/exact', { headers: { cookie } })).status).toBe(401)
+    const again = await signIn(mirror.port)
+    const refreshed = `${a.cookie}; ${again.cookie}`
+    expect(
+      (await request(official.port, '/exact', { headers: { cookie: refreshed } })).status,
+    ).toBe(200)
+    expect((await request(mirror.port, '/exact', { headers: { cookie: refreshed } })).status).toBe(
+      200,
+    )
+  } finally {
+    await mirror.close()
+    await official.close()
+  }
+})
+
+test('an authorized login repairs native BrowserAuth without sharing a token with anonymous or forbidden requests', async () => {
+  await withFixture({}, async ({ ctx, port }) => {
+    let issued = 0
+    ctx.provide('connection', {
+      requestRejection: (req: { headers: Record<string, string> }) =>
+        req.headers.origin === 'https://evil.example'
+          ? 403
+          : req.headers.cookie?.includes('native=valid')
+            ? undefined
+            : 401,
+      authenticatedUrl: (base: string) => {
+        issued++
+        return `${base}?token=host-fixture-token`
+      },
+    })
+    const anonymous = await request(port, '/', { headers: { accept: 'text/html' } })
+    expect(anonymous.headers.location).toBe('/login')
+    expect(issued).toBe(0)
+    const login = await request(port, '/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: `password=${encodeURIComponent(PASSWORD)}`,
+    })
+    const cookie = (login.headers['set-cookie'] as string[])[0]?.split(';')[0]
+    if (!cookie) throw new Error('login did not issue a session cookie')
+    const handoff = await request(port, '/', { headers: { cookie } })
+    expect(handoff.status).toBe(303)
+    expect(handoff.headers.location).toBe('/?token=host-fixture-token')
+    expect(handoff.headers['cache-control']).toBe('no-store')
+    expect(handoff.headers['referrer-policy']).toBe('no-referrer')
+    expect(issued).toBe(1)
+    await request(port, '/', { headers: { cookie, origin: 'https://evil.example' } })
+    expect(issued).toBe(1)
+    const authenticated = await request(port, '/', {
+      headers: { cookie: `${cookie}; native=valid` },
+    })
+    expect(authenticated.status).toBe(200)
+    expect(issued).toBe(1)
+    await request(port, '/?token=host-fixture-token', { headers: { cookie } })
+    expect(issued).toBe(1)
+  })
+})

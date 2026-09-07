@@ -13,12 +13,15 @@
  */
 
 import { readFile } from 'node:fs/promises'
-
+import { join } from 'node:path'
 import { FileError, InvariantError, UsageError } from '../domain/errors.js'
-import { labExists, labManifestPath, listLabs } from './layout.js'
+import { acquireLock } from '../fs/lock.js'
+import { removeLabDefault } from './defaults.js'
+import { labExists, labManifestPath, labRoot, listLabs } from './layout.js'
 import type { LabManifest } from './manifest.js'
 import { isApplying, parseLabManifestText } from './manifest.js'
 import { rmLab } from './run.js'
+import { readService } from './service.js'
 
 export interface DestroyResult {
   id: string
@@ -26,7 +29,10 @@ export interface DestroyResult {
 }
 
 /** Destroy one lab by id (explicit user action; state machine permitting). */
-export async function destroyLab(home: string, labId: string): Promise<DestroyResult> {
+async function destroyLabUnlocked(home: string, labId: string): Promise<DestroyResult> {
+  const service = await readService(home, labId)
+  if (service?.state === 'running')
+    throw new UsageError(`lab ${labId} is running; use lab stop first`)
   if (!(await labExists(home, labId))) {
     throw new UsageError(`no such lab ${labId} under this home`)
   }
@@ -47,6 +53,7 @@ export async function destroyLab(home: string, labId: string): Promise<DestroyRe
     )
   }
   await rmLab(home, labId)
+  await removeLabDefault(home, labId)
   return { id: labId, removed: true }
 }
 
@@ -90,4 +97,16 @@ export async function reapExpiredLabs(home: string, now: Date): Promise<ReapResu
     }
   }
   return { reaped, scanned: ids.length }
+}
+
+export async function destroyLab(home: string, labId: string): Promise<DestroyResult> {
+  const lock = await acquireLock({
+    lockPath: join(labRoot(home), '.service.lock'),
+    purpose: 'lab destroy',
+  })
+  try {
+    return await destroyLabUnlocked(home, labId)
+  } finally {
+    await lock.release()
+  }
 }

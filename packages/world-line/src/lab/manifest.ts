@@ -40,6 +40,8 @@ export interface LabPlanRecord {
 }
 
 export interface LabSource {
+  /** The instance whose independent home was copied at createdAt. */
+  parentLabId?: string
   /** The real profile the lab clones from, by name. */
   profileName: string
   /** Adapter-relative profile home (label only; layout derives paths). */
@@ -67,6 +69,10 @@ export interface LabRunInfo {
 }
 
 export interface LabManifest {
+  /** Interactive mirrors are not promotion candidates. */
+  purpose?: 'mirror'
+  homeInheritance?: { version: 1; apiKeys: boolean; copied: number; skippedLinks: string[] }
+  alias?: string
   manifestVersion: 1
   id: string
   createdAt: string

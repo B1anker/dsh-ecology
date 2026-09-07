@@ -240,7 +240,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   })
   const callbackGate = createConcurrencyGate(options.githubMaxConcurrentCallbacks)
 
-  const cookieName = sessionCookieName(options.secureCookie)
+  const cookieName = sessionCookieName(options.secureCookie, options.cookieNamespace)
   const redirectUri = options.githubEnabled ? `${options.publicUrl}${GITHUB_CALLBACK_PATH}` : ''
 
   /** Mutable authorization snapshot; rewritten after enroll / login touch. */
@@ -350,6 +350,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
       'set-cookie': serializeSessionCookie(id, {
         maxAgeSeconds: options.sessionTtlMs / 1000,
         secure: options.secureCookie,
+        namespace: options.cookieNamespace,
       }),
     })
     return true
@@ -376,6 +377,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
       'set-cookie': serializeSessionCookie(id, {
         maxAgeSeconds: options.sessionTtlMs / 1000,
         secure: options.secureCookie,
+        namespace: options.cookieNamespace,
       }),
     })
     return true
@@ -446,6 +448,30 @@ export function apply(ctx: PluginContext, config?: unknown): void {
 
   const decoratedRegisterFallback: WebServerService['registerFallback'] = (handler) =>
     originalRegisterFallback(async (req, res) => {
+      if (isAuthenticated(req) && req.method === 'GET' && req.url === '/') {
+        // Resolve lazily: connection itself waits for our ready service at startup.
+        const connection = ctx.get<{
+          requestRejection?: (request: IncomingMessage) => number | undefined
+          authenticatedUrl?: (baseUrl: string) => string
+        }>('connection')
+        // 401 means the Host/Origin fence passed but the native browser cookie is missing.
+        // Never hand a process token to an anonymous, bootstrap or forbidden-origin request.
+        if (
+          typeof connection?.requestRejection === 'function' &&
+          typeof connection.authenticatedUrl === 'function' &&
+          connection.requestRejection(req) === 401
+        ) {
+          const entry = new URL(connection.authenticatedUrl('http://dsh.invalid/'))
+          if (
+            entry.origin === 'http://dsh.invalid' &&
+            entry.pathname === '/' &&
+            entry.searchParams.has('token')
+          ) {
+            sendRedirect(res, 303, `/${entry.search}`, { 'referrer-policy': 'no-referrer' })
+            return
+          }
+        }
+      }
       if (
         isAuthenticated(req) ||
         ANON_STATIC_PATHS.has(requestPathname(req)) ||
@@ -747,6 +773,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
               'set-cookie': serializeSessionCookie(id, {
                 maxAgeSeconds: options.sessionTtlMs / 1000,
                 secure: options.secureCookie,
+                namespace: options.cookieNamespace,
               }),
             })
             return
@@ -755,6 +782,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
             'set-cookie': serializeSessionCookie(id, {
               maxAgeSeconds: options.sessionTtlMs / 1000,
               secure: options.secureCookie,
+              namespace: options.cookieNamespace,
             }),
           })
         },
@@ -775,7 +803,10 @@ export function apply(ctx: PluginContext, config?: unknown): void {
           sessions.revoke(readCookie(req.headers.cookie, cookieName))
           audit?.record('logout', { client: clientKey(req, options) })
           sendRedirect(res, 303, LOGIN_PATH, {
-            'set-cookie': serializeClearedCookies({ secure: options.secureCookie }),
+            'set-cookie': serializeClearedCookies({
+              secure: options.secureCookie,
+              namespace: options.cookieNamespace,
+            }),
           })
         },
       }),
@@ -1340,6 +1371,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
               'set-cookie': serializeSessionCookie(id, {
                 maxAgeSeconds: options.sessionTtlMs / 1000,
                 secure: options.secureCookie,
+                namespace: options.cookieNamespace,
               }),
             })
           },

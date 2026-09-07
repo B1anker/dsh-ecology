@@ -1,9 +1,19 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { mkdir, realpath, stat } from 'node:fs/promises'
+import { access, mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { primaryFromWorktreeLayout } from './workspace-layout.js'
+
+export { primaryFromWorktreeLayout } from './workspace-layout.js'
 
 const execFile = promisify(execFileCallback)
+
+/**
+ * Marker left in a placeholder directory after the physical Git worktree was
+ * deleted outside the plugin. The directory itself must keep existing so DSH
+ * continues to associate sessions with the workspace path.
+ */
+export const WORKTREE_TOMBSTONE_MARKER = '.dsh-git-worktree-removed'
 
 export interface Worktree {
   path: string
@@ -51,27 +61,44 @@ export interface WorkspaceGroupEntry {
   repositoryPath?: string
   branch?: string
   detached?: boolean
+  /**
+   * `removed` means the physical Git worktree is gone (or replaced by a
+   * tombstone). The sidebar keeps the row nested and read-only.
+   */
+  status?: 'active' | 'removed'
 }
 
 export class GitWorktreeError extends Error {
   override name = 'GitWorktreeError'
 }
 
+const GIT_TIMEOUT_MS = 8_000
+
 async function git(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  signal?.addEventListener('abort', onAbort, { once: true })
+  const timer = setTimeout(() => controller.abort(), GIT_TIMEOUT_MS)
   try {
     const result = await execFile('git', args, {
       cwd,
       encoding: 'utf8',
-      signal,
+      signal: controller.signal,
       maxBuffer: 1024 * 1024,
     })
     return result.stdout
   } catch (error) {
+    if (controller.signal.aborted && signal?.aborted !== true) {
+      throw new GitWorktreeError(`git ${args.join(' ')} timed out after ${GIT_TIMEOUT_MS}ms`)
+    }
     const detail =
       error instanceof Error && 'stderr' in error
         ? String((error as { stderr?: unknown }).stderr).trim()
         : ''
     throw new GitWorktreeError(detail || `git ${args.join(' ')} failed`)
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
   }
 }
 
@@ -178,7 +205,8 @@ async function overwriteWorktree(
   branch: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  if (conflict.directoryExists && conflict.directoryWorktree === undefined) {
+  const tombstone = conflict.directoryExists && (await isWorktreeTombstone(conflict.targetPath))
+  if (conflict.directoryExists && conflict.directoryWorktree === undefined && !tombstone) {
     throw new GitWorktreeError(
       `Cannot overwrite directory because it is not a worktree managed by this repository: ${conflict.targetPath}`,
     )
@@ -215,6 +243,8 @@ async function overwriteWorktree(
       ['worktree', 'remove', '--force', conflict.targetPath],
       signal,
     )
+  } else if (tombstone) {
+    await rm(conflict.targetPath, { recursive: true, force: true })
   }
   for (const candidate of removableBranches)
     await deleteLocalBranch(conflict.repositoryPath, candidate, signal)
@@ -371,34 +401,135 @@ export async function listWorktrees(
   return { repositoryPath, worktrees: parseWorktreePorcelain(output) }
 }
 
+/** Whether `path` looks like a Git working tree (linked or primary). */
+async function hasGitMetadata(path: string): Promise<boolean> {
+  try {
+    await access(join(path, '.git'))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Whether `path` is a plugin tombstone for a manually deleted worktree. */
+export async function isWorktreeTombstone(path: string): Promise<boolean> {
+  try {
+    await access(join(path, WORKTREE_TOMBSTONE_MARKER))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Drop a stale tombstone marker after the physical worktree has been restored. */
+export async function clearWorktreeTombstone(path: string): Promise<void> {
+  await rm(join(path, WORKTREE_TOMBSTONE_MARKER), { force: true })
+}
+
 /**
- * Remove a linked worktree's directory and its local branch. The primary
+ * Ensure a placeholder directory exists at a registered worktree path so DSH
+ * can keep session membership after the real Git checkout was deleted.
+ * Never stamps a marker onto a directory that still has Git metadata.
+ */
+export async function ensureWorktreeTombstone(path: string): Promise<string> {
+  const exists = await stat(path)
+    .then((info) => info.isDirectory())
+    .catch(() => false)
+  if (exists && (await hasGitMetadata(path))) {
+    return realpath(path)
+  }
+  await mkdir(path, { recursive: true })
+  const marker = join(path, WORKTREE_TOMBSTONE_MARKER)
+  try {
+    await access(marker)
+  } catch {
+    await writeFile(marker, `${new Date().toISOString()}\nremoved\n`, { flag: 'wx' })
+  }
+  return realpath(path)
+}
+
+/**
+ * Remove a linked worktree's directory and its local branch. Tombstones and
+ * already-missing paths are cleaned as ordinary directories. The primary
  * checkout can never be removed through this operation.
  */
 export async function removeWorktree(
   cwd: string,
   signal?: AbortSignal,
 ): Promise<{ repositoryPath: string; path: string; branch?: string }> {
-  const path = await realpath(cwd).catch(() => {
-    throw new GitWorktreeError(`Worktree directory does not exist: ${cwd}`)
-  })
-  const repositoryPath = await repositoryRoot(path, signal)
-  if (path === repositoryPath) {
+  const layoutPrimary = primaryFromWorktreeLayout(cwd)
+
+  const existing = await realpath(cwd).catch(() => undefined)
+  if (existing === undefined) {
+    if (layoutPrimary === undefined) {
+      throw new GitWorktreeError(`Worktree directory does not exist: ${cwd}`)
+    }
+    await git(layoutPrimary, ['worktree', 'prune'], signal).catch(() => undefined)
+    return { repositoryPath: layoutPrimary, path: cwd }
+  }
+
+  if (await isWorktreeTombstone(existing)) {
+    const repositoryPath = layoutPrimary ?? primaryFromWorktreeLayout(existing)
+    await rm(existing, { recursive: true, force: true })
+    if (repositoryPath !== undefined) {
+      await git(repositoryPath, ['worktree', 'prune'], signal).catch(() => undefined)
+    }
+    return {
+      repositoryPath: repositoryPath ?? dirname(existing),
+      path: existing,
+    }
+  }
+
+  const repositoryPath = await repositoryRoot(existing, signal)
+  if (existing === repositoryPath) {
     throw new GitWorktreeError('The primary repository checkout cannot be removed as a worktree')
   }
   const listed = await listWorktrees(repositoryPath, signal)
-  const target = listed.worktrees.find((worktree) => worktree.path === path)
+  const target = listed.worktrees.find((worktree) => worktree.path === existing)
   if (target === undefined)
-    throw new GitWorktreeError(`Not a linked worktree of this repository: ${path}`)
+    throw new GitWorktreeError(`Not a linked worktree of this repository: ${existing}`)
 
-  await git(repositoryPath, ['worktree', 'remove', '--force', path], signal)
+  await git(repositoryPath, ['worktree', 'remove', '--force', existing], signal)
   if (target.branch !== undefined) await deleteLocalBranch(repositoryPath, target.branch, signal)
-  return { repositoryPath, path, ...(target.branch === undefined ? {} : { branch: target.branch }) }
+  return {
+    repositoryPath,
+    path: existing,
+    ...(target.branch === undefined ? {} : { branch: target.branch }),
+  }
+}
+
+/**
+ * Infer a primary checkout from this plugin's generated layout
+ * (`{repo}-worktrees/{branch}`) when Git cannot classify the path — for
+ * example a stale DSH workspace whose directory was already removed.
+ */
+function normalizePathKey(path: string): string {
+  // macOS exposes /var as /private/var via realpath; registered workspace
+  // paths often keep the shorter form.
+  return path.replace(/^\/private\/var\//, '/var/')
+}
+
+function inferRepositoryPathFromLayout(
+  path: string,
+  knownRepositoryPaths: ReadonlySet<string>,
+): string | undefined {
+  const expectedPrimary = primaryFromWorktreeLayout(path)
+  if (expectedPrimary === undefined) return undefined
+  const normalized = normalizePathKey(expectedPrimary)
+  for (const known of knownRepositoryPaths) {
+    if (normalizePathKey(known) === normalized) return known
+  }
+  return undefined
 }
 
 /**
  * Classify arbitrary registered workspace paths into their Git worktree
  * families. Non-Git paths remain entries without a repository owner.
+ * One missing or unreadable path must not fail the whole batch: the sidebar
+ * still needs to nest every reachable worktree.
+ *
+ * Missing generated worktrees are replaced with a tombstone directory so DSH
+ * keeps session membership, while the entry is marked `removed` for the UI.
  * @param paths - Existing DSH workspace paths.
  * @param signal - Optional cancellation propagated to Git.
  * @returns A stable path-sorted classification usable by a sidebar tree.
@@ -407,23 +538,76 @@ export async function classifyWorkspacePaths(
   paths: readonly string[],
   signal?: AbortSignal,
 ): Promise<WorkspaceGroupEntry[]> {
-  return Promise.all(
-    paths.map(async (path) => {
+  const classified = await Promise.all(
+    paths.map(async (path): Promise<WorkspaceGroupEntry> => {
       try {
         const canonicalPath = await realpath(path)
+        if (await isWorktreeTombstone(canonicalPath)) {
+          // A restored Git worktree may still carry a leftover marker from the
+          // deleted state — clear it and treat the path as active again.
+          try {
+            const repositoryPath = await repositoryRoot(canonicalPath, signal)
+            const worktrees = await listWorktrees(canonicalPath, signal)
+            const current = worktrees.worktrees.find((worktree) => worktree.path === canonicalPath)
+            if (current !== undefined) {
+              await clearWorktreeTombstone(canonicalPath)
+              return {
+                path: canonicalPath,
+                repositoryPath,
+                status: 'active',
+                ...(current.branch !== undefined ? { branch: current.branch } : {}),
+                ...(current.detached ? { detached: true } : {}),
+              }
+            }
+          } catch {
+            // Still only a placeholder directory.
+          }
+          return { path: canonicalPath, status: 'removed' }
+        }
         const repositoryPath = await repositoryRoot(canonicalPath, signal)
         const worktrees = await listWorktrees(canonicalPath, signal)
         const current = worktrees.worktrees.find((worktree) => worktree.path === canonicalPath)
         return {
           path: canonicalPath,
           repositoryPath,
+          status: 'active',
           ...(current?.branch !== undefined ? { branch: current.branch } : {}),
           ...(current?.detached === true ? { detached: true } : {}),
         }
-      } catch (error) {
-        if (error instanceof GitWorktreeError) return { path }
-        throw error
+      } catch {
+        // Stale workspace rows, non-Git folders, and transient FS errors all
+        // degrade to an ungrouped entry so siblings can still nest.
+        return { path }
       }
+    }),
+  )
+
+  const knownRepositoryPaths = new Set(
+    classified.flatMap((entry) =>
+      entry.repositoryPath === undefined ? [] : [entry.repositoryPath],
+    ),
+  )
+
+  return Promise.all(
+    classified.map(async (entry) => {
+      const inferred =
+        entry.repositoryPath ?? inferRepositoryPathFromLayout(entry.path, knownRepositoryPaths)
+      if (entry.status === 'removed') {
+        return inferred === undefined ? entry : { ...entry, repositoryPath: inferred }
+      }
+      if (entry.repositoryPath !== undefined) return entry
+
+      // Only tombstone paths that look like this plugin's generated layout and
+      // whose primary checkout is still registered — never invent placeholders
+      // for unrelated missing folders.
+      if (inferred === undefined || primaryFromWorktreeLayout(entry.path) === undefined) {
+        return entry
+      }
+
+      // Classify is a hot sidebar path — never prune here. Prune runs on
+      // explicit remove so concurrent refresh storms cannot lock the repo.
+      const tombstonePath = await ensureWorktreeTombstone(entry.path)
+      return { path: tombstonePath, repositoryPath: inferred, status: 'removed' }
     }),
   )
 }

@@ -1,3 +1,5 @@
+import { resolveLabId, runLabAlias } from './lab/aliases.js'
+import { runLabDefault } from './lab/defaults.js'
 /**
  * `dsh-world-line` CLI (WORLD-LINE-SPEC §3): argument parsing, dispatch,
  * exit-code mapping, and the machine-readable envelope.
@@ -29,6 +31,7 @@ import {
   runLabRemove,
   runLabUpdate,
 } from './commands/lab.js'
+import { type LabStartResult, runLabStart, runLabStop } from './commands/lab-service.js'
 import type { ReportResult } from './commands/report.js'
 import { runReport } from './commands/report.js'
 import type { RescueListItem, RescueStartResult, RescueStopResult } from './commands/rescue.js'
@@ -53,6 +56,7 @@ import {
 import type { CliContext } from './context.js'
 import { UsageError, WlError } from './domain/errors.js'
 import { redactText } from './domain/redaction.js'
+import { loadDshEnvironment, loadExperimentEnvironment } from './environment.js'
 import { resolveDshHome } from './fs/paths.js'
 import { DEFAULT_PROFILE, ENVELOPE_SCHEMA_VERSION, WORLD_LINE_VERSION } from './identity.js'
 
@@ -67,10 +71,24 @@ global options:
   --dsh-home <path>   DSH home (default: $DSH_HOME, else ~/.dsh)
   --profile <name>    profile to manage (default: ${DEFAULT_PROFILE})
   --json              machine-readable envelope on stdout
+  --no-inherit-env    omit the official .env from lab/restore/rescue runtime
   -h, --help          show this help
   -V, --version       print the package version and exit
 
+environment:
+  Official commands: shell > <dsh-home>/.env.
+  Lab/restore-lab/rescue: shell > ~/.dsh-wl/.env > <dsh-home>/.env.
+  --no-inherit-env removes the last layer for experiments; shell values remain.
+  Files are optional and are not copied into labs; lab DSH_HOME stays isolated.
+
 commands (Phase 0-4 milestone):
+  lab start [id|alias]           reuse or resume a mirror (default: current profile)
+    --new                       create a new isolated mirror
+                                  [--no-inherit-env] omit the official .env for this runtime
+                                  [--no-inherit-api-keys] omit stored API keys from the mirror
+  lab default [id|alias] [--clear]  show, set or clear the default mirror
+  lab alias <id|alias> <name>    assign a unique name within this DSH home
+  lab stop <lab-id>              stop the background instance, retaining its files
   doctor                          read-only diagnostics (exit 1 when a check fails)
   snapshot create [--label <t>]   capture the profile into the time machine
                                   [--break-stale-lock] confirm a stale writer lock
@@ -125,6 +143,7 @@ export function parseInvocation(
   let profileName = DEFAULT_PROFILE
   let json = false
   let breakStaleLock = false
+  let noInheritEnv = false
   const positionals: string[] = []
 
   // Peek the next token as a flag value. Space-separated values may appear
@@ -145,6 +164,10 @@ export function parseInvocation(
     }
     if (token === '--json') {
       json = true
+      continue
+    }
+    if (token === '--no-inherit-env') {
+      noInheritEnv = true
       continue
     }
     if (token === '--break-stale-lock') {
@@ -186,6 +209,7 @@ export function parseInvocation(
       profileName,
       json,
       breakStaleLock,
+      noInheritEnv,
       now: io.now ?? (() => new Date()),
     },
     command,
@@ -306,9 +330,56 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
     }
     case 'lab': {
       const sub = args[0]
+      if (sub === 'default') {
+        const { rest, options } = consumeOptions(args.slice(1), { clear: 'boolean' })
+        const [reference, ...extra] = rest
+        expectNoArgs('lab default', extra)
+        return {
+          command: 'lab default',
+          data: await runLabDefault(ctx, reference, options.clear === true),
+        }
+      }
+      if (sub === 'alias') {
+        const [reference, alias, ...rest] = args.slice(1)
+        expectNoArgs('lab alias', rest)
+        if (!reference || !alias) throw new UsageError('lab alias needs a lab id and a name')
+        return { command: 'lab alias', data: await runLabAlias(ctx, reference, alias) }
+      }
+      if (sub === 'fork') {
+        const [from, alias, ...rest] = args.slice(1)
+        expectNoArgs('lab fork', rest)
+        if (!from || !alias)
+          throw new UsageError('lab fork needs a source id or alias and a new alias')
+        return { command: 'lab start', data: await runLabStart(ctx, { new: true, from, alias }) }
+      }
+      if (sub === 'start') {
+        const { rest, options } = consumeOptions(args.slice(1), {
+          'no-inherit-api-keys': 'boolean',
+          new: 'boolean',
+        })
+        const [reference, ...extra] = rest
+        expectNoArgs('lab start', extra)
+        return {
+          command: 'lab start',
+          data: await runLabStart(ctx, {
+            inheritApiKeys: options['no-inherit-api-keys'] !== true,
+            id: reference,
+            new: options.new === true,
+          }),
+        }
+      }
+      if (sub === 'stop') {
+        const [id, ...rest] = args.slice(1)
+        expectNoArgs('lab stop', rest)
+        if (!id) throw new UsageError('lab stop needs a lab id')
+        return {
+          command: 'lab stop',
+          data: await runLabStop(ctx, await resolveLabId(ctx.home, id)),
+        }
+      }
       if (sub === undefined) {
         throw new UsageError(
-          'lab needs a subcommand (add|update|remove|config|list|inspect|destroy)',
+          'lab needs a subcommand (start|fork|stop|alias|default|add|update|remove|config|list|inspect|destroy)',
         )
       }
       if (sub === 'list') {
@@ -319,13 +390,19 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
         const [labId] = args.slice(1)
         if (args.length > 2) throw new UsageError('lab inspect takes one lab id')
         if (labId === undefined) throw new UsageError('lab inspect needs a lab id')
-        return { command: 'lab inspect', data: await runLabInspect(ctx, labId) }
+        return {
+          command: 'lab inspect',
+          data: await runLabInspect(ctx, await resolveLabId(ctx.home, labId)),
+        }
       }
       if (sub === 'destroy') {
         const [labId] = args.slice(1)
         if (args.length > 2) throw new UsageError('lab destroy takes one lab id')
         if (labId === undefined) throw new UsageError('lab destroy needs a lab id')
-        return { command: 'lab destroy', data: await runLabDestroy(ctx, labId) }
+        return {
+          command: 'lab destroy',
+          data: await runLabDestroy(ctx, await resolveLabId(ctx.home, labId)),
+        }
       }
       if (sub === 'promote') {
         const [labId, ...rest] = args.slice(1)
@@ -337,7 +414,7 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
         expectNoArgs('lab promote', optionsRest)
         return {
           command: 'lab promote',
-          data: await runLabPromoteCommand(ctx, labId, {
+          data: await runLabPromoteCommand(ctx, await resolveLabId(ctx.home, labId), {
             ...(options['accept-inconclusive'] === true ? { acceptInconclusive: true } : {}),
             ...(options.restart === true ? { restart: true } : {}),
           }),
@@ -368,6 +445,8 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
           }),
         }
       }
+      if (!['add', 'update', 'remove'].includes(sub))
+        throw new UsageError(`unknown lab subcommand ${JSON.stringify(sub)}`)
       const { rest, options } = consumeOptions(args.slice(1), {
         keep: 'boolean',
         'allow-scripts': 'boolean',
@@ -475,6 +554,20 @@ function renderHuman(command: string, data: unknown): string {
       return renderLabVerb(data as LabActionResult)
     case 'lab list':
       return renderLabList(data as LabListResult)
+    case 'lab default': {
+      const result = data as { profile: string; id: string | null; alias: string | null }
+      return `profile   ${result.profile}\ndefault   ${result.id ?? '(unset)'}${result.alias ? ` (${result.alias})` : ''}\n`
+    }
+    case 'lab alias': {
+      const result = data as { id: string; alias: string }
+      return `lab       ${result.id}\nalias     ${result.alias}\n`
+    }
+    case 'lab start': {
+      const result = data as LabStartResult
+      return `lab       ${result.id}\nstate     running (background)\nurl       ${result.url}\nstop      wl lab stop ${result.id}\n`
+    }
+    case 'lab stop':
+      return `lab       ${(data as { id: string }).id}\nstate     stopped (files retained)\n`
     case 'lab inspect':
       return renderLabInspect(data as LabInspectResult)
     case 'lab destroy':
@@ -512,13 +605,15 @@ reaped    ${result.reaped.length} expired lab(s)
   }
   const rows = result.labs.map((lab) => [
     lab.id,
+    lab.alias ?? '-',
+    lab.isDefault ? '*' : '-',
     lab.profileName,
-    lab.state,
+    lab.runtimeState ?? lab.state,
     `${lab.runCount} runs`,
     lab.lastOk === null ? '-' : lab.lastOk ? 'ok' : 'failed',
     lab.port !== undefined ? String(lab.port) : '-',
   ])
-  const widths = [0, 1, 2, 3, 4, 5].map((column) =>
+  const widths = [0, 1, 2, 3, 4, 5, 6, 7].map((column) =>
     Math.max(...rows.map((row) => (row[column] ?? '').length), 'profile'.length),
   )
   const render = (cells: string[]): string =>
@@ -527,7 +622,7 @@ reaped    ${result.reaped.length} expired lab(s)
       .join('  ')
       .trimEnd()
   const lines = [
-    render(['id', 'profile', 'state', 'runs', 'verdict', 'port']),
+    render(['id', 'alias', 'default', 'profile', 'state', 'runs', 'verdict', 'port']),
     ...rows.map((row) => render(row)),
   ]
   if (result.reaped.length > 0) {
@@ -919,6 +1014,21 @@ export async function runCli(
 
   const { context, command, args } = invocation
   try {
+    const experimental =
+      command === 'restore' ||
+      (command === 'rescue' && args[0] === 'start') ||
+      (command === 'lab' && ['start', 'add', 'update', 'remove', 'config'].includes(args[0] ?? ''))
+    if (context.noInheritEnv && !experimental) {
+      throw new UsageError(
+        '--no-inherit-env applies to lab start/add/update/remove/config, restore, or rescue start',
+      )
+    }
+    context.env = await loadDshEnvironment(context.home, context.env)
+    if (experimental) {
+      context.experimentEnv = await loadExperimentEnvironment(context.env, env, {
+        inherit: !context.noInheritEnv,
+      })
+    }
     const result = await dispatch(context, command, args)
     if (context.json) {
       out(
