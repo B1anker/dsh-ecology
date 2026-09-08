@@ -7,9 +7,10 @@
  */
 
 import { mkdir, writeFile } from 'node:fs/promises'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
-
-import { describe, expect, test } from '@rstest/core'
+import { pid } from 'node:process'
+import { describe, expect, rs, test } from '@rstest/core'
 import {
   filterPatchBlocks,
   newRescueId,
@@ -17,12 +18,14 @@ import {
   rescueDir,
   rescueExists,
   rescueHomeDir,
+  runRescueEnter,
   runRescueList,
   runRescueStart,
   runRescueStop,
 } from '../../src/commands/rescue.js'
 import type { CliContext } from '../../src/context.js'
 import { UsageError } from '../../src/domain/errors.js'
+import { worldLines } from '../../src/web/index.js'
 import {
   destroyTempHome,
   installFakeDsh,
@@ -157,12 +160,63 @@ describe('rescue records and stop', () => {
         home,
         env: { PATH: `${fakeBin}:${process.env.PATH ?? ''}`, WORLD_LINE_DISABLE_KEYCHAIN: '1' },
       })
-      expect(run.exitCode).toBe(1)
-      expect(run.stdout).toContain('FAILED')
+      expect(run.exitCode).not.toBe(0)
+      expect(run.stderr).toContain('lab start --clean')
       const { readdir } = await import('node:fs/promises')
       const rescues = await readdir(join(home, 'world-line', 'rescues')).catch(() => [])
       expect(rescues).toEqual([])
     } finally {
+      await destroyTempHome(home)
+    }
+  })
+})
+
+test('bundle selection keeps disabling overrides instead of re-enabling its rows', () => {
+  const patch = '- id: plugin-row\n  disabled: true\n'
+  expect(filterPatchBlocks(patch, ['plugin-row'], true).patch).toContain('disabled: true')
+  expect(filterPatchBlocks(patch, ['plugin-row']).patch).toBe('[]\n')
+})
+
+describe('rescue entry capability', () => {
+  test('lists rescue on canvas without exposing credentials; entry rejects mismatched targets', async () => {
+    const home = await makeTempHome()
+    const alive = rs.spyOn(process, 'kill').mockImplementation((target, signal) => {
+      if (target === pid && signal === 0) return true
+      throw new Error('unexpected process signal')
+    })
+    try {
+      await writeProfile(home, 'web')
+      const ctx = makeCtx(home, '')
+      const id = newRescueId(ctx.now())
+      const dir = rescueDir(home, id)
+      await mkdir(dir, { recursive: true })
+      await writeFile(
+        join(dir, 'rescue.json'),
+        JSON.stringify({
+          kind: 'rescue',
+          id,
+          profileName: 'web',
+          state: 'running',
+          pid,
+          port: 51999,
+        }),
+      )
+      const url = 'http://127.0.0.1:51999/?token=private-test-token'
+      await writeFile(join(dir, 'entry.json'), JSON.stringify({ url, hostname: hostname(), pid }))
+      expect(await runRescueEnter(ctx, id)).toEqual({ id, url })
+      const canvas = await worldLines(ctx)
+      expect(canvas.lines.find((line) => line.id === id)?.kind).toBe('rescue')
+      expect(JSON.stringify(canvas)).not.toContain('private-test-token')
+      expect(JSON.stringify(await runRescueList(ctx))).not.toContain('private-test-token')
+      await expect(runRescueEnter({ ...ctx, profileName: 'other' }, id)).rejects.toThrow('profile')
+      await writeFile(
+        join(dir, 'entry.json'),
+        JSON.stringify({ url: 'https://example.com/', hostname: hostname(), pid }),
+      )
+      await expect(runRescueEnter(ctx, id)).rejects.toThrow('无效')
+      await expect(runRescueEnter(ctx, '../bad')).rejects.toThrow('无效')
+    } finally {
+      alive.mockRestore()
       await destroyTempHome(home)
     }
   })

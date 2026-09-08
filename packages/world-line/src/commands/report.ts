@@ -1,3 +1,4 @@
+import { artifactInventory, artifactRoot } from '../lab/artifacts.js'
 /**
  * `dsh-world-line report <lab-id|snapshot-id>` (WORLD-LINE-SPEC §3, Phase 4):
  * one redacted diagnostics bundle per target, written to
@@ -15,7 +16,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { CliContext } from '../context.js'
@@ -71,7 +72,17 @@ export function newReportId(now: Date): string {
 async function readTail(file: string, lines: number): Promise<string | null> {
   let text: string
   try {
-    text = await readFile(file, 'utf8')
+    const handle = await open(file, 'r')
+    try {
+      const info = await handle.stat()
+      const length = Math.min(info.size, 32768)
+      const buffer = Buffer.alloc(length)
+      const result = await handle.read(buffer, 0, length, Math.max(0, info.size - length))
+      text = buffer.subarray(0, result.bytesRead).toString('utf8')
+      if (info.size > length) text = text.slice(text.indexOf('\n') + 1)
+    } finally {
+      await handle.close()
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     return `(unreadable: ${redactText(String(error))})`
@@ -129,10 +140,40 @@ async function collectLabSections(
     notes.push(`probe records unreadable for lab ${labId}: ${redactText(String(error))}`)
   }
 
+  try {
+    const observations = JSON.parse(
+      await readFile(join(labLogDir(home, labId), 'browser-observations.json'), 'utf8'),
+    )
+    sections.push({
+      title: '浏览器证据与覆盖范围',
+      text: redactText(JSON.stringify(observations, null, 2)),
+    })
+  } catch {
+    /* Legacy runs do not have structured observations. */
+  }
   for (const name of ['dsh.log', 'browser.log']) {
     const tail = await readTail(join(labLogDir(home, labId), name), LOG_TAIL_LINES)
     if (tail === null) continue
     sections.push({ title: `log tail: ${name}`, text: redactText(tail) })
+  }
+
+  // Raw trace/screenshots are private; only a validated local inventory enters the report.
+  try {
+    const root = await artifactRoot(home, labId)
+    const inventory = (await artifactInventory(root)).slice(0, 30).map((row) => ({
+      ...row,
+      private: true,
+      files: row.files.map((file) => ({ ...file, path: join(root, row.id, file.name) })),
+    }))
+    if (inventory.length) {
+      sections.push({ title: 'private browser artifacts', facts: inventory })
+      notes.push(
+        '浏览器 trace 和截图可能包含页面内容、凭据及网络数据，尚未脱敏，仅保存在本机。复制/下载此报告不包含工件内容；分享前请单独检查。',
+      )
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+      notes.push('部分浏览器工件无法读取；未包含原始工件内容。')
   }
 
   if (profileName !== null) {

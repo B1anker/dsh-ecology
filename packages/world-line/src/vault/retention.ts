@@ -9,8 +9,8 @@
  *
  * Vault objects are content-addressed and deduplicated across manifests, so
  * deletion here removes snapshot manifests and their secret bundles only —
- * object collection is out of scope until a full reference count exists
- * (documented in docs/phase4-design.md).
+ * object collection is handled separately by maintenance.ts using root reachability,
+ * revision-checked quarantine, and a delayed purge; no reference counters are needed.
  */
 
 import type { SnapshotManifest } from '../domain/snapshot.js'

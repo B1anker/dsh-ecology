@@ -6,10 +6,18 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { appendFile } from 'node:fs/promises'
+import { mkdir, open, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { acquireLock } from '../fs/lock.js'
+import { syncDir } from './swap.js'
 
 export interface PromotionJournalEntry {
+  reviewAcceptance?: {
+    acceptedAt: string
+    policyVersion: 2
+    unresolvedChecks: string[]
+    labId: string
+  }
   id: string
   /** `promotion` (lab promote) or `restore` (restore --promote). */
   kind: 'promotion' | 'restore'
@@ -42,9 +50,50 @@ export function newJournalId(now: Date, kind: 'promotion' | 'restore' = 'promoti
   return `${kind}-${stamp}-${randomBytes(4).toString('hex')}`
 }
 
-/** Append one line to the journal (best-effort, never throws on write). */
-export async function appendJournal(home: string, entry: PromotionJournalEntry): Promise<void> {
-  const { mkdir } = await import('node:fs/promises')
-  await mkdir(join(home, 'world-line'), { recursive: true })
-  await appendFile(journalPath(home), `${JSON.stringify(entry)}\n`, 'utf8')
+/** Durable, idempotent append. A torn or conflicting journal requires inspection. */
+export async function appendJournal(
+  home: string,
+  entry: PromotionJournalEntry,
+  breakStale = false,
+): Promise<void> {
+  const dir = join(home, 'world-line')
+  await mkdir(dir, { recursive: true })
+  const lock = await acquireLock({
+    lockPath: join(dir, 'locks', 'journal.lock'),
+    purpose: 'append promotion journal',
+    breakStale,
+  })
+  try {
+    const raw = await readFile(journalPath(home), 'utf8').catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
+      throw error
+    })
+    if (raw && !raw.endsWith('\n'))
+      throw new Error('incomplete promotion journal tail; inspection required')
+    for (const line of raw.split('\n').filter(Boolean)) {
+      const prior = JSON.parse(line) as PromotionJournalEntry
+      if (prior.id === entry.id) {
+        if (JSON.stringify(prior) !== JSON.stringify(entry))
+          throw new Error('conflicting promotion journal entry')
+        const handle = await open(journalPath(home), 'r')
+        try {
+          await handle.sync()
+        } finally {
+          await handle.close()
+        }
+        await syncDir(dir)
+        return
+      }
+    }
+    const handle = await open(journalPath(home), 'a', 0o600)
+    try {
+      await handle.writeFile(`${JSON.stringify(entry)}\n`)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+    await syncDir(dir)
+  } finally {
+    await lock.release()
+  }
 }

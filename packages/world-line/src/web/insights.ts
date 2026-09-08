@@ -78,7 +78,7 @@ export async function snapshotDetail(ctx: CliContext, snapshotId: string): Promi
     ],
   }
 }
-async function currentManifest(ctx: CliContext, id: string) {
+export async function currentManifest(ctx: CliContext, id: string) {
   const analysis = await analyzeProfile({
     home: ctx.home,
     profileName: ctx.profileName,

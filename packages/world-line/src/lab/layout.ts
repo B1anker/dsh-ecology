@@ -4,7 +4,7 @@
  *
  *   home/          — a full DSH home the host boots with DSH_HOME=…
  *                    (profiles/<name> inside it holds the clone)
- *   pnpm-store/    — the lab-scoped package-manager store
+ *   pnpm-store/    — legacy lab-scoped package-manager store
  *   logs/          — dsh boot transcripts
  *   manifest.json  — the §5 lab manifest
  *   probe.json     — full ProbeResult list of the last run

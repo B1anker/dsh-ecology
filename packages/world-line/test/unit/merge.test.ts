@@ -40,6 +40,7 @@ const outcome = {
   stderr: '',
 } as const
 const runtime: Partial<LabRunDeps> = {
+  coreCheck: async () => {},
   capture: async () => outcome,
   launch: async () => ({
     kind: 'ready',

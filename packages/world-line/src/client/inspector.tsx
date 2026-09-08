@@ -1,7 +1,10 @@
+import { ArrowCounterClockwise } from '@phosphor-icons/react/dist/csr/ArrowCounterClockwise'
 import { ArrowsLeftRight } from '@phosphor-icons/react/dist/csr/ArrowsLeftRight'
 import { Camera } from '@phosphor-icons/react/dist/csr/Camera'
 import { CircleNotch } from '@phosphor-icons/react/dist/csr/CircleNotch'
+import { FileText } from '@phosphor-icons/react/dist/csr/FileText'
 import { GitBranch } from '@phosphor-icons/react/dist/csr/GitBranch'
+import { UploadSimple } from '@phosphor-icons/react/dist/csr/UploadSimple'
 import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useEffect, useState } from 'react'
 import type { SnapshotDetail, WorldComparison, WorldEvent } from '../domain/insight-types.js'
@@ -21,6 +24,9 @@ export function Inspector({
   onEvent,
   onFork,
   onSnapshot,
+  onPromote,
+  onReport,
+  onRestore,
   close,
   api,
   busy,
@@ -33,6 +39,9 @@ export function Inspector({
   onEvent(event: WorldEvent): void
   onFork(id: string, at?: number, snapshotId?: string): void
   onSnapshot(id: string): void
+  onPromote(id: string): void
+  onReport(id: string): void
+  onRestore(id: string, snapshotId: string): void
   close(): void
   api(body: unknown, signal?: AbortSignal): Promise<any>
   busy: boolean
@@ -214,6 +223,27 @@ export function Inspector({
         <>
           <div className="wl-toolbar">
             <p className="wl-muted">{history.length} 个记录 · ◆ 快照可分支</p>
+            {line?.kind === 'verification' && (
+              <>
+                <button
+                  className="wl-button"
+                  disabled={busy || line.verdict !== 'passed'}
+                  title={
+                    line.verdict === 'passed'
+                      ? '将验证结果合回来源环境'
+                      : '仅完整验证通过的实验可以合入'
+                  }
+                  onClick={() => onPromote(id)}
+                >
+                  <UploadSimple size={15} />
+                  Promote
+                </button>
+                <button className="wl-button" disabled={busy} onClick={() => onReport(id)}>
+                  <FileText size={15} />
+                  生成报告
+                </button>
+              </>
+            )}
             <button
               className="wl-button"
               disabled={busy || !line || line.state === 'applying'}
@@ -241,6 +271,15 @@ export function Inspector({
                   >
                     <GitBranch size={15} />
                     从此快照创建世界线
+                  </button>
+                  <button
+                    className="wl-button"
+                    disabled={busy || !detail.restorable}
+                    title="在验证实验中还原此快照，验证通过后自动合入正式环境"
+                    onClick={() => onRestore(id, detail.id)}
+                  >
+                    <ArrowCounterClockwise size={15} />
+                    恢复到此快照
                   </button>
                   <details>
                     <summary>

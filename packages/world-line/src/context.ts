@@ -6,6 +6,8 @@
 
 /** The resolved invocation context handed to every command. */
 export interface CliContext {
+  /** Set by the authenticated same-origin management route only; never deserialized. */
+  authenticatedWebAction?: boolean
   /** Process cwd (path specs resolve against this). */
   cwd: string
   /** Selected home's .env merged with the inherited process environment. */

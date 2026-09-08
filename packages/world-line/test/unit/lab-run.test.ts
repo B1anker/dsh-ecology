@@ -110,6 +110,7 @@ function makeDeps(recorder: FakeRecorder): {
 } {
   const behavior = { pluginExit: 0, dumpExit: 0 }
   const deps: LabRunDeps = {
+    coreCheck: async () => {},
     capture: async (file, args, options) => {
       recorder.envs.push({ ...options.env })
       const text = [...args]
@@ -371,4 +372,187 @@ describe('runLabTransaction protocol', () => {
       await destroyTempHome(home)
     }
   })
+
+  test('onProbe receives every probe in order, compose probes included', async () => {
+    const home = await makeTempHome()
+    try {
+      const now = new Date('2026-09-04T10:00:00.000Z')
+      const { labId } = await fabricateLab(home, now)
+      const recorder: FakeRecorder = { pluginArgs: [], dumpArgs: [], envs: [], stopped: 0 }
+      const { deps } = makeDeps(recorder)
+      const seen: string[] = []
+      const outcome = await runLabTransaction({
+        ctx: makeCtx(home, () => now),
+        host: HOST,
+        labId,
+        plan: ADD_PLAN,
+        keep: true,
+        onProbe: (entry) => seen.push(`${entry.check}:${entry.status}`),
+        deps,
+      })
+      expect(outcome.ok).toBe(true)
+      // The callback stream is exactly the persisted ladder, in order.
+      expect(seen).toEqual(outcome.probes.map((entry) => `${entry.check}:${entry.status}`))
+      expect(seen).toEqual([
+        'plugin-add:pass',
+        'compose:pass',
+        'compose:pass',
+        'compose:pass',
+        'http-ready:pass',
+        'host-boot:pass',
+      ])
+    } finally {
+      await destroyTempHome(home)
+    }
+  })
+
+  test('a run without onProbe records the identical ladder', async () => {
+    const home = await makeTempHome()
+    try {
+      const now = new Date('2026-09-04T10:00:00.000Z')
+      const { labId } = await fabricateLab(home, now)
+      const recorder: FakeRecorder = { pluginArgs: [], dumpArgs: [], envs: [], stopped: 0 }
+      const { deps } = makeDeps(recorder)
+      const outcome = await runLabTransaction({
+        ctx: makeCtx(home, () => now),
+        host: HOST,
+        labId,
+        plan: ADD_PLAN,
+        keep: true,
+        deps,
+      })
+      expect(outcome.ok).toBe(true)
+      expect(outcome.probes.map((entry) => `${entry.check}:${entry.status}`)).toEqual([
+        'plugin-add:pass',
+        'compose:pass',
+        'compose:pass',
+        'compose:pass',
+        'http-ready:pass',
+        'host-boot:pass',
+      ])
+    } finally {
+      await destroyTempHome(home)
+    }
+  })
+})
+
+test('login-required evidence cannot be accepted as an inconclusive promotion pass', async () => {
+  const home = await makeTempHome()
+  try {
+    const now = new Date('2026-09-04T10:00:00.000Z')
+    const { labId } = await fabricateLab(home, now)
+    const { deps } = makeDeps({ pluginArgs: [], dumpArgs: [], envs: [], stopped: 0 })
+    deps.browserLaunch = async () => ({
+      close: async () => {},
+      newContext: async () => ({
+        newPage: async () => ({
+          goto: async () => {},
+          waitForTimeout: async () => {},
+          on: () => {},
+          evaluate: async <T>() =>
+            ({
+              loginRequired: true,
+              mountChildren: 0,
+              buttons: [],
+              roles: [],
+              bodyHas: [],
+              bootGlobals: [],
+              bootEntries: 0,
+            }) as T,
+        }),
+      }),
+    })
+    const outcome = await runLabTransaction({
+      ctx: makeCtx(home, () => now),
+      host: HOST,
+      labId,
+      plan: ADD_PLAN,
+      clientProbes: true,
+      acceptClientInconclusive: true,
+      deps,
+    })
+    expect(outcome.ok).toBe(false)
+    expect(outcome.probes.find((probe) => probe.check === 'browser-boot')?.status).toBe(
+      'inconclusive',
+    )
+  } finally {
+    await destroyTempHome(home)
+  }
+})
+
+test('reverification preserves the installed plan and never replays package commands', async () => {
+  const home = await makeTempHome()
+  try {
+    const now = new Date('2026-09-04T10:00:00.000Z')
+    const { labId } = await fabricateLab(home, now)
+    const recorder = {
+      pluginArgs: [] as string[][],
+      dumpArgs: [] as string[][],
+      envs: [] as NodeJS.ProcessEnv[],
+      stopped: 0,
+    }
+    const { deps } = makeDeps(recorder)
+    const ctx = makeCtx(home, () => now)
+    await runLabTransaction({ ctx, host: HOST, labId, plan: ADD_PLAN, keep: true, deps })
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await runLabTransaction({
+        ctx,
+        host: HOST,
+        labId,
+        plan: ADD_PLAN,
+        keep: true,
+        verifyOnly: true,
+        deps,
+      })
+      expect(result.ok).toBe(true)
+      expect(recorder.pluginArgs).toHaveLength(1)
+      expect((await readLabManifest(home, labId)).plan).toEqual(ADD_PLAN)
+    }
+  } finally {
+    await destroyTempHome(home)
+  }
+})
+
+test('reverification refuses incomplete installation before changing the lab', async () => {
+  const home = await makeTempHome()
+  try {
+    const now = new Date('2026-09-04T10:00:00.000Z')
+    const { labId } = await fabricateLab(home, now)
+    const { deps } = makeDeps({ pluginArgs: [], dumpArgs: [], envs: [], stopped: 0 })
+    await expect(
+      runLabTransaction({
+        ctx: makeCtx(home, () => now),
+        host: HOST,
+        labId,
+        plan: ADD_PLAN,
+        verifyOnly: true,
+        deps,
+      }),
+    ).rejects.toThrow('原安装步骤未完成')
+    expect((await readLabManifest(home, labId)).runCount).toBe(0)
+  } finally {
+    await destroyTempHome(home)
+  }
+})
+
+test('missing browser is incomplete verification rather than a successful skipped check', async () => {
+  const home = await makeTempHome()
+  try {
+    const now = new Date('2026-09-04T10:00:00.000Z')
+    const { labId } = await fabricateLab(home, now)
+    const { deps } = makeDeps({ pluginArgs: [], dumpArgs: [], envs: [], stopped: 0 })
+    deps.browserLaunch = async () => null
+    const result = await runLabTransaction({
+      ctx: makeCtx(home, () => now),
+      host: HOST,
+      labId,
+      plan: ADD_PLAN,
+      clientProbes: true,
+      deps,
+    })
+    expect(result.ok).toBe(false)
+    expect(result.clientReady).toBe('inconclusive')
+  } finally {
+    await destroyTempHome(home)
+  }
 })

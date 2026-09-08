@@ -1,23 +1,31 @@
 import { ArrowsClockwise } from '@phosphor-icons/react/dist/csr/ArrowsClockwise'
-import { ArrowsLeftRight } from '@phosphor-icons/react/dist/csr/ArrowsLeftRight'
-import { Camera } from '@phosphor-icons/react/dist/csr/Camera'
 import { CheckCircle } from '@phosphor-icons/react/dist/csr/CheckCircle'
 import { CircleNotch } from '@phosphor-icons/react/dist/csr/CircleNotch'
-import { ClockCounterClockwise } from '@phosphor-icons/react/dist/csr/ClockCounterClockwise'
+import { FirstAidKit } from '@phosphor-icons/react/dist/csr/FirstAidKit'
 import { GitBranch } from '@phosphor-icons/react/dist/csr/GitBranch'
+import { HardDrives } from '@phosphor-icons/react/dist/csr/HardDrives'
+import { ListChecks } from '@phosphor-icons/react/dist/csr/ListChecks'
 import { MagnifyingGlass } from '@phosphor-icons/react/dist/csr/MagnifyingGlass'
-import { Plus } from '@phosphor-icons/react/dist/csr/Plus'
 import { WarningCircle } from '@phosphor-icons/react/dist/csr/WarningCircle'
 import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorldEvent } from '../domain/insight-types.js'
+import { CleanOptions } from './clean-options.js'
 import { useWorldLineEntry } from './entry.js'
-import { Inspector, type InspectorState } from './inspector.js'
+import { Experiments } from './experiments.js'
+import { Inspector } from './inspector.js'
+import { useJobFeed } from './job-feed.js'
+import { LabFlow } from './lab-flow.js'
+import { Maintenance } from './maintenance.js'
 import { MergePanel } from './merge-panel.js'
+import { usePanels } from './panels.js'
 import { styles } from './styles.js'
+import { TaskNotifier } from './task-notifier.js'
 import { TimeControls } from './time-controls.js'
 import { type Line, label, Timeline } from './timeline.js'
 import { aliasValidation, cursorTime } from './timeline-model.js'
+import { WorkspaceTools } from './workspace-tools.js'
+import { mergeWorldResponse } from './world-data.js'
 
 declare const worldLineFlowCss: string
 export const name = '@seaveyon/dsh-world-line'
@@ -28,30 +36,55 @@ interface Data {
   eventWarnings: string[]
   profile: string
   currentId: string | null
+  lastKnownGood: string | null
   capabilities?: { merge: boolean }
   now: string
 }
+const requestKeys = new Map<string, string>()
+let lastWorldData: any = null
 async function api(body?: unknown, signal?: AbortSignal) {
+  const base = lastWorldData
+  const fingerprint = body ? JSON.stringify(body) : ''
+  if (body && !requestKeys.has(fingerprint)) requestKeys.set(fingerprint, crypto.randomUUID())
   const response = await fetch(
-    '/api/world-line',
+    !body && base?.revision
+      ? `/api/world-line?since=${encodeURIComponent(base.revision)}`
+      : '/api/world-line',
     body
       ? {
           method: 'POST',
           signal,
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ ...(body as object), requestId: requestKeys.get(fingerprint) }),
         }
       : { cache: 'no-store', signal },
   )
+  if (body) requestKeys.delete(fingerprint)
   if (response.status === 401 || response.status === 403)
     throw new Error('登录已失效，请返回 DSH 重新登录后再试。')
   if (!response.headers.get('content-type')?.includes('application/json'))
     throw new Error('未收到管理服务响应，请检查连接或重新登录。')
   const data = await response.json()
   if (!response.ok) throw new Error(data.error ?? `请求失败 (${response.status})`)
+  if (!body) {
+    signal?.throwIfAborted()
+    if (lastWorldData !== base) throw new Error('更新已过期，保留当前画布')
+    lastWorldData = mergeWorldResponse(base, data, base?.revision)
+    return lastWorldData
+  }
   return data
 }
-function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value: boolean): void }) {
+function WorldLine({
+  close,
+  onBusyChange,
+  onModalChange,
+  taskRequest,
+}: {
+  taskRequest?: number
+  close(): void
+  onBusyChange(value: boolean): void
+  onModalChange(open: boolean): void
+}) {
   const [data, setData] = useState<Data | null>(null),
     [error, setError] = useState(''),
     [busy, setBusy] = useState('')
@@ -69,21 +102,52 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
   const request = useRef<AbortController | null>(null),
     operation = useRef(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [commandMode, setCommandMode] = useState(false)
   const searchInput = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (searchOpen) searchInput.current?.focus()
   }, [searchOpen])
-  const [showChecks, setShowChecks] = useState(false)
-  const [inspector, setInspector] = useState<InspectorState | null>(null)
-  const [mergeId, setMergeId] = useState<string | null>(null)
+  const {
+    inspector,
+    setInspector,
+    mergeId,
+    setMergeId,
+    experimentSource,
+    setExperimentSource,
+    labFlowOpen,
+    setLabFlowOpen,
+    maintenanceOpen,
+    setMaintenanceOpen,
+    canGoBack,
+    goBack,
+    toolPanel,
+    setToolPanel,
+  } = usePanels()
+  useEffect(() => {
+    if (taskRequest) setToolPanel({ section: 'tasks', id: 'origin' })
+  }, [taskRequest])
+  const [expandedExperiment, setExpandedExperiment] = useState<string | null>(null)
   const [comparisonIds, setComparisonIds] = useState<string[]>([])
+  const [installSource, setInstallSource] = useState('origin')
+  const [panelJob, setPanelJob] = useState<string | null>(null)
   const [dialog, setDialog] = useState<{
-    type: 'create' | 'alias' | 'destroy' | 'snapshot'
+    type: 'create' | 'alias' | 'destroy' | 'snapshot' | 'restore'
     id?: string
     from?: string
     at?: number
     snapshotId?: string
   } | null>(null)
+  // A modal dialog (.wl-dialog-backdrop) stacks below the corner Navigator
+  // (z-index 40 inside .wl-page's context vs 39 outside it), so the back
+  // button would paint and click above the dialog — lift the state and hide
+  // the Navigator entirely while one is open.
+  useEffect(() => {
+    onModalChange(dialog !== null)
+    return () => onModalChange(false)
+  }, [dialog, onModalChange])
+  const [clean, setClean] = useState(false)
+  const [cleanPlugins, setCleanPlugins] = useState<string[]>([])
+  const [copyPluginConfig, setCopyPluginConfig] = useState(false)
   const [alias, setAlias] = useState(''),
     [notice, setNotice] = useState(''),
     [cursor, setCursor] = useState<number | null>(null)
@@ -177,15 +241,48 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
       if (frame.firstElementChild) resize.observe(frame.firstElementChild)
     }
     const key = (event: KeyboardEvent) => {
+      if (
+        !event.isComposing &&
+        !(
+          event.target instanceof HTMLElement &&
+          event.target.closest(
+            'input,textarea,select,[role=combobox],[role=listbox],[contenteditable=true]',
+          )
+        ) &&
+        (event.key === '/' || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k'))
+      ) {
+        event.preventDefault()
+        setCommandMode(event.key !== '/')
+        setQuery('')
+        setSearchOpen(true)
+        return
+      }
       if (event.key === 'Escape') {
+        if (searchOpen) {
+          setSearchOpen(false)
+          return
+        }
         if (busy) return
+        if (toolPanel) {
+          setToolPanel(null)
+          return
+        }
         if (mergeId) {
           setMergeId(null)
           return
         }
+        if (labFlowOpen) {
+          closeLabFlow()
+          return
+        }
+        if (maintenanceOpen) {
+          closeMaintenance()
+          return
+        }
         if (dialog) {
           if (!busy) setDialog(null)
-        } else if (inspector) setInspector(null)
+        } else if (experimentSource) setExperimentSource(null)
+        else if (inspector) setInspector(null)
         else close()
       }
     }
@@ -197,12 +294,29 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
       window.removeEventListener('resize', scheduleSync)
       document.removeEventListener('keydown', key)
     }
-  }, [close, dialog, busy, inspector, mergeId])
-  const current = data?.lines.find((line) => line.id === selected)
+  }, [
+    close,
+    dialog,
+    busy,
+    inspector,
+    mergeId,
+    labFlowOpen,
+    maintenanceOpen,
+    experimentSource,
+    toolPanel,
+    searchOpen,
+  ])
+  const canvasLines = (data?.lines ?? []).filter(
+    (line) =>
+      line.kind !== 'verification' || line.id === expandedExperiment || line.id === data?.currentId,
+  )
+  const canvasIds = new Set(['origin', ...canvasLines.map((line) => line.id)])
   const earliest =
     Math.min(
-      ...(data?.lines.map((line) => Date.parse(line.createdAt)) ?? []),
-      ...(data?.events?.map((event) => Date.parse(event.at)) ?? []),
+      ...canvasLines.map((line) => Date.parse(line.createdAt)),
+      ...(data?.events
+        ?.filter((event) => canvasIds.has(event.lineId))
+        .map((event) => Date.parse(event.at)) ?? []),
       Date.now(),
     ) - 60000
   const latest = Math.max(Date.parse(data?.now ?? new Date().toISOString()), earliest + 1)
@@ -222,7 +336,12 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
     ? [
         origin,
         ...data.lines
-          .filter((line) => showChecks || line.kind === 'mirror' || line.id === data.currentId)
+          .filter(
+            (line) =>
+              line.kind !== 'verification' ||
+              line.id === expandedExperiment ||
+              line.id === data.currentId,
+          )
           .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt))
           .map((line) => ({ ...line, parentId: line.parentId ?? 'origin' })),
       ]
@@ -256,7 +375,10 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
           dialog?.type === 'alias' ? dialog.id : undefined,
           !!busy,
         )
-  const openCreate = (from?: string, at?: number, snapshotId?: string) => {
+  const openCreate = (from?: string, at?: number, snapshotId?: string, cleanStart = false) => {
+    setClean(cleanStart)
+    setCleanPlugins([])
+    setCopyPluginConfig(false)
     setDialog({ type: 'create', from: from === 'origin' ? undefined : from, at, snapshotId })
     setAlias('')
     setError('')
@@ -302,7 +424,8 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
     try {
       const result = await api(body)
       if (result.id) setSelected(result.id)
-      if (body.action === 'create') setCursor(null)
+      if (['create', 'stop', 'start', 'restart', 'rescue-stop'].includes(String(body.action)))
+        setCursor(null)
       setDialog(null)
       if (dive) {
         if (!result.url) throw new Error('目标实例未返回进入地址，请重试。')
@@ -334,6 +457,47 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
       operation.current = false
     }
   }
+  // Job-based flows (lab-add / promote / restore): the panel polls the job
+  // action; while one runs the 10s full refresh stays paused.
+  const jobBusy = (running: boolean) => {
+    operation.current = running
+  }
+  const jobSettled = () => {
+    operation.current = false
+    void refresh()
+  }
+  const closeLabFlow = () => {
+    setLabFlowOpen(false)
+    operation.current = false
+    void refresh()
+  }
+  const closeMaintenance = () => {
+    setMaintenanceOpen(false)
+    operation.current = false
+    void refresh()
+  }
+  const startJob = async (body: Record<string, unknown>) => {
+    setError('')
+    setNotice('')
+    try {
+      const result = await api(body)
+      operation.current = true
+      setPanelJob(String(result.jobId))
+      setInspector(null)
+      setLabFlowOpen(false)
+      setMaintenanceOpen(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '任务启动失败')
+    }
+  }
+  const generateReport = async (id: string) => {
+    setToolPanel({
+      section: 'report',
+      id,
+      lineId: inspector?.type === 'history' ? inspector.id : undefined,
+    })
+  }
+
   return (
     <section className="wl-page" ref={panel} aria-label="世界线管理">
       {entry}
@@ -344,6 +508,22 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
           <span>{data?.lines.filter((line) => line.kind === 'mirror').length ?? 0}</span>
         </div>
         <div className="wl-icon-toolbar" role="toolbar" aria-label="世界线工具">
+          <button
+            className="wl-button"
+            aria-label="任务台"
+            title="任务台"
+            onClick={() => setToolPanel({ section: 'tasks', id: 'origin' })}
+          >
+            <ListChecks size={18} />
+          </button>
+          <button
+            className="wl-button"
+            aria-label="存储"
+            title="存储"
+            onClick={() => setToolPanel({ section: 'storage', id: 'origin' })}
+          >
+            <HardDrives size={18} />
+          </button>
           <button
             className="wl-button wl-icon"
             aria-label="搜索世界线"
@@ -356,19 +536,6 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
           </button>
           <button
             className="wl-button wl-icon"
-            aria-label="显示验证实验"
-            title="显示验证实验"
-            aria-pressed={showChecks}
-            onClick={() => {
-              setShowChecks(!showChecks)
-              if (showChecks && current?.kind === 'verification' && current.id !== data?.currentId)
-                setSelected(data?.currentId ?? 'origin')
-            }}
-          >
-            <CheckCircle size={18} />
-          </button>
-          <button
-            className="wl-button wl-icon"
             aria-label="刷新"
             title="刷新"
             onClick={() => void refresh()}
@@ -376,52 +543,21 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
           >
             <ArrowsClockwise size={18} className={refreshing ? 'wl-spin' : ''} />
           </button>
-          <span className="wl-tool-divider" />
           <button
             className="wl-button wl-icon"
-            aria-label="事件记录"
-            title="事件记录"
-            aria-pressed={inspector?.type === 'history'}
-            onClick={() =>
-              setInspector(
-                inspector?.type === 'history'
-                  ? null
-                  : { type: 'history', id: selected || 'origin' },
-              )
-            }
-          >
-            <ClockCounterClockwise size={18} />
-          </button>
-          <button
-            className="wl-button wl-icon"
-            aria-label="保存快照"
-            title="保存快照"
-            disabled={!!busy || !data}
-            onClick={() => openSnapshot(selected || 'origin')}
-          >
-            <Camera size={18} />
-          </button>
-          <button
-            className="wl-button wl-icon"
-            aria-label="双线对比"
-            title="双线对比 · Shift 点击两条线"
-            aria-pressed={inspector?.type === 'compare'}
+            aria-label="维护"
+            title="维护 · 诊断 / 回滚"
+            aria-pressed={maintenanceOpen}
             onClick={() => {
-              setComparisonIds((ids) => (ids.length ? ids : [selected || 'origin']))
-              setInspector(inspector?.type === 'compare' ? null : { type: 'compare' })
+              if (maintenanceOpen) closeMaintenance()
+              else {
+                setMaintenanceOpen(true)
+                setLabFlowOpen(false)
+              }
             }}
             disabled={!!busy}
           >
-            <ArrowsLeftRight size={18} />
-          </button>
-          <button
-            className="wl-button wl-icon wl-primary"
-            aria-label="新世界线"
-            title="新世界线"
-            onClick={() => openCreate()}
-            disabled={!!busy}
-          >
-            <Plus size={18} />
+            <FirstAidKit size={18} />
           </button>
         </div>
       </header>
@@ -444,12 +580,69 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
             <MagnifyingGlass size={18} />
             <input
               ref={searchInput}
-              placeholder="查找世界线"
+              placeholder={commandMode ? '搜索世界线或操作' : '查找世界线'}
               aria-label="查找世界线"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
+          {commandMode && (
+            <div
+              style={{ display: 'grid', gap: 6, maxHeight: '50vh', overflow: 'auto' }}
+              aria-label="命令结果"
+            >
+              {(['composition', 'compare', 'config', 'tasks', 'storage'] as const)
+                .filter((section) =>
+                  ({
+                    composition: '当前组成 插件 升级 卸载',
+                    compare: '历史快照比较 差异',
+                    config: '验证配置变更',
+                    tasks: '任务进度',
+                    storage: '存储 清理',
+                  })[section].includes(query),
+                )
+                .map((section) => (
+                  <button
+                    className="wl-button"
+                    key={section}
+                    onClick={() => {
+                      setToolPanel({ section, id: selected || 'origin' })
+                      setSearchOpen(false)
+                      setQuery('')
+                    }}
+                  >
+                    {
+                      {
+                        composition: '当前组成',
+                        compare: '历史比较',
+                        config: '验证配置变更',
+                        tasks: '任务台',
+                        storage: '存储',
+                      }[section]
+                    }{' '}
+                    · {selected || 'origin'}
+                  </button>
+                ))}
+              {[{ id: 'origin', alias: 'main' }, ...(data?.lines ?? [])]
+                .filter((line) =>
+                  (line.alias ?? line.id).toLowerCase().includes(query.toLowerCase()),
+                )
+                .slice(0, 30)
+                .map((line) => (
+                  <button
+                    className="wl-button"
+                    key={line.id}
+                    onClick={() => {
+                      setSelected(line.id)
+                      setSearchOpen(false)
+                      setQuery('')
+                    }}
+                  >
+                    跳转 · {line.alias ?? line.id}
+                  </button>
+                ))}
+            </div>
+          )}
           {query && (
             <button
               className="wl-button wl-icon"
@@ -504,15 +697,6 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
             <CircleNotch size={28} className="wl-spin" />
             <p>{loadError ? '连接暂时不可用，请重试' : '正在读取世界线…'}</p>
           </div>
-        ) : !data.lines.length && !data.events?.length ? (
-          <div className="wl-empty">
-            <GitBranch size={36} />
-            <h2>从这里，让世界分岔</h2>
-            <p>从当前正式环境创建独立实例，保留配置与账户绑定。</p>
-            <button className="wl-button wl-primary" onClick={() => openCreate()}>
-              创建第一条世界线
-            </button>
-          </div>
         ) : matches.length === 0 ? (
           <div className="wl-empty">
             <MagnifyingGlass size={28} />
@@ -525,6 +709,24 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
         ) : (
           <Timeline
             lines={lines}
+            experiments={data.lines.filter((line) => line.kind === 'verification')}
+            onExperiments={(id) => {
+              setExperimentSource(id)
+              setInspector(null)
+              setMergeId(null)
+              setLabFlowOpen(false)
+              setMaintenanceOpen(false)
+            }}
+            onComposition={(id) => setToolPanel({ section: 'composition', id })}
+            onInstall={(id) => {
+              setInstallSource(id)
+              setLabFlowOpen(true)
+              setMaintenanceOpen(false)
+              setInspector(null)
+              setMergeId(null)
+              setExperimentSource(null)
+              setPanelJob(null)
+            }}
             busy={!!busy}
             selected={selected}
             currentId={data.currentId}
@@ -537,14 +739,21 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
                 setAlias(target.alias ?? '')
                 setDeleteConfirmation('')
                 setDialog({ type: action, id })
-              } else void perform({ action, id })
+              } else
+                void perform({
+                  action: target.kind === 'rescue' && action === 'stop' ? 'rescue-stop' : action,
+                  id,
+                })
             }}
-            events={data.events ?? []}
+            events={(data.events ?? []).filter((event) => visible.has(event.lineId))}
             comparisonIds={inspector?.type === 'compare' ? comparisonIds : []}
             onCompare={compareSelect}
             onEvent={inspectEvent}
             onHistory={(id) => setInspector({ type: 'history', id })}
             onSnapshot={openSnapshot}
+            onPromote={(id) => void startJob({ action: 'promote', id })}
+            onVerify={(id, interactive) => void startJob({ action: 'lab-verify', id, interactive })}
+            onReport={(id) => void generateReport(id)}
             mergeAvailable={data.capabilities?.merge === true}
             onMerge={(id) => {
               setInspector(null)
@@ -552,13 +761,56 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
             }}
             onSelect={setSelected}
             onEnter={(id) =>
-              id === 'origin' ? close() : void perform({ action: 'start', id }, true)
+              id === 'origin'
+                ? close()
+                : void perform(
+                    { action: id.startsWith('rescue-') ? 'rescue-enter' : 'start', id },
+                    true,
+                  )
             }
             onTimeChange={setCursor}
             onFork={openCreate}
             time={time}
             start={earliest}
             end={latest}
+          />
+        )}
+        {canGoBack && (
+          <button
+            className="wl-button"
+            style={{ position: 'absolute', right: 32, bottom: 20, zIndex: 50 }}
+            onClick={goBack}
+          >
+            返回上个面板
+          </button>
+        )}
+        {data && experimentSource && !labFlowOpen && !maintenanceOpen && (
+          <Experiments
+            key={experimentSource}
+            sourceName={
+              experimentSource === 'origin'
+                ? `main · ${data.profile}`
+                : label(data.lines.find((line) => line.id === experimentSource) ?? origin)
+            }
+            lines={data.lines.filter(
+              (line) =>
+                line.kind === 'verification' && (line.parentId ?? 'origin') === experimentSource,
+            )}
+            busy={!!busy}
+            expanded={expandedExperiment}
+            close={() => setExperimentSource(null)}
+            onLocate={(id) => {
+              setExpandedExperiment(id)
+              setSelected(id)
+              setQuery('')
+              setCursor(null)
+            }}
+            onCollapse={() => {
+              setExpandedExperiment(null)
+              setSelected(experimentSource)
+            }}
+            onVerify={(id) => void startJob({ action: 'lab-verify', id, interactive: true })}
+            onReport={(id) => void generateReport(id)}
           />
         )}
         {data && inspector && !mergeId && (
@@ -571,6 +823,12 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
             onEvent={inspectEvent}
             onFork={openCreate}
             onSnapshot={openSnapshot}
+            onPromote={(id) => void startJob({ action: 'promote', id })}
+            onReport={(id) => void generateReport(id)}
+            onRestore={(id, snapshotId) => {
+              setError('')
+              setDialog({ type: 'restore', id, snapshotId })
+            }}
             close={() => setInspector(null)}
             api={api}
             busy={!!busy}
@@ -587,6 +845,65 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
               operation.current = !!message
             }}
             onCommitted={() => void refresh()}
+          />
+        )}
+        {toolPanel && (
+          <WorkspaceTools
+            key={`${toolPanel.section}:${toolPanel.id}`}
+            panel={toolPanel}
+            lines={[origin, ...(data?.lines ?? [])]}
+            api={api}
+            close={() => setToolPanel(null)}
+            navigate={setToolPanel}
+            onJob={(id) => {
+              setPanelJob(id)
+              setMaintenanceOpen(true)
+            }}
+          />
+        )}
+        {labFlowOpen && (
+          <LabFlow
+            key={installSource}
+            onCompare={(id) => setToolPanel({ section: 'compare', id })}
+            onLocate={(id) => {
+              setExpandedExperiment(id)
+              setQuery('')
+              setCursor(null)
+              setSelected(id)
+              setLabFlowOpen(false)
+              setMaintenanceOpen(false)
+              setInspector(null)
+              operation.current = false
+              void refresh()
+            }}
+            sourceId={installSource}
+            sourceName={
+              installSource === 'origin'
+                ? `main · ${data?.profile ?? 'web'}`
+                : label(
+                    data?.lines.find((line) => line.id === installSource) ?? {
+                      ...origin,
+                      id: installSource,
+                      alias: '来源世界线已不可用',
+                    },
+                  )
+            }
+            api={api}
+            close={closeLabFlow}
+            onBusy={jobBusy}
+            onSettled={jobSettled}
+            lastKnownGood={data?.lastKnownGood ?? null}
+          />
+        )}
+        {maintenanceOpen && (
+          <Maintenance
+            api={api}
+            jobId={panelJob}
+            onJobCreated={setPanelJob}
+            close={closeMaintenance}
+            onBusy={jobBusy}
+            onSettled={jobSettled}
+            lastKnownGood={data?.lastKnownGood ?? null}
           />
         )}
       </div>
@@ -633,14 +950,28 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
               if (
                 busy ||
                 (dialog.type !== 'create' && !dialogLine) ||
-                (dialog.type !== 'destroy' && aliasError) ||
+                (dialog.type !== 'destroy' && dialog.type !== 'restore' && aliasError) ||
                 (dialog.type === 'destroy' &&
                   deleteConfirmation !== (dialogLine && label(dialogLine)))
               )
                 return
+              if (dialog.type === 'restore') {
+                const snapshotId = dialog.snapshotId
+                setDialog(null)
+                void startJob({ action: 'restore', snapshotId, promote: true })
+                return
+              }
               void perform(
                 dialog.type === 'create'
-                  ? { action: 'create', alias, from: dialog.from, snapshotId: dialog.snapshotId }
+                  ? {
+                      action: 'create',
+                      alias,
+                      from: dialog.from,
+                      snapshotId: dialog.snapshotId,
+                      clean,
+                      plugins: clean ? cleanPlugins : undefined,
+                      copyPluginConfig: clean && copyPluginConfig,
+                    }
                   : dialog.type === 'snapshot'
                     ? { action: 'snapshot', id: dialog.id, label: alias }
                     : dialog.type === 'alias'
@@ -659,7 +990,9 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
                     ? '留下一个可返回的起点'
                     : dialog.type === 'alias'
                       ? '修改世界线别名'
-                      : '删除世界线'}
+                      : dialog.type === 'restore'
+                        ? '恢复到此快照'
+                        : '删除世界线'}
               </h2>
               <button
                 type="button"
@@ -671,7 +1004,41 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
                 <X size={18} />
               </button>
             </div>
-            {dialog.type === 'create' && (
+            {dialog.type === 'create' && !dialog.snapshotId && (
+              <fieldset className="wl-origin-options" disabled={!!busy}>
+                <legend>创建起点</legend>
+                <label className="wl-choice">
+                  <input
+                    type="radio"
+                    name="creation-origin"
+                    checked={!clean}
+                    onChange={() => setClean(false)}
+                  />
+                  从当前世界线复制
+                </label>
+                <label className="wl-choice">
+                  <input
+                    type="radio"
+                    name="creation-origin"
+                    checked={clean}
+                    onChange={() => setClean(true)}
+                  />
+                  从干净环境开始
+                </label>
+              </fieldset>
+            )}
+            {dialog.type === 'create' && clean && (
+              <CleanOptions
+                api={api}
+                source={dialog.from ?? 'origin'}
+                value={cleanPlugins}
+                onChange={setCleanPlugins}
+                copyConfig={copyPluginConfig}
+                onCopyConfig={setCopyPluginConfig}
+                disabled={!!busy}
+              />
+            )}
+            {dialog.type === 'create' && !clean && (
               <>
                 <p>
                   从{' '}
@@ -708,7 +1075,16 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
                 」保存插件组成与配置。会话、模型设置、全局凭据和本地插件源码不包含在此快照中。配置内的敏感字段会加密保存。
               </p>
             )}
-            {dialog.type !== 'destroy' ? (
+            {dialog.type === 'restore' ? (
+              <div className="wl-delete-confirm">
+                <p>
+                  将把快照 <strong>{dialog.snapshotId}</strong>{' '}
+                  的插件与配置回滚到正式环境：先在验证实验中还原并验证，通过后才会 promote；promote
+                  前会自动保存当前状态的回退快照。
+                </p>
+                <p className="wl-muted">验证期间正式环境不受影响，进度会在维护面板中展示。</p>
+              </div>
+            ) : dialog.type !== 'destroy' ? (
               <label>
                 {dialog.type === 'snapshot' ? '快照名称' : '世界线别名'}
                 <input
@@ -784,9 +1160,11 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
                 disabled={
                   !!busy ||
                   (dialog.type !== 'create' && !dialogLine) ||
-                  (dialog.type !== 'destroy'
-                    ? !!aliasError
-                    : deleteConfirmation !== (dialogLine && label(dialogLine)))
+                  (dialog.type === 'restore'
+                    ? false
+                    : dialog.type !== 'destroy'
+                      ? !!aliasError
+                      : deleteConfirmation !== (dialogLine && label(dialogLine)))
                 }
                 type="submit"
               >
@@ -797,7 +1175,9 @@ function WorldLine({ close, onBusyChange }: { close(): void; onBusyChange(value:
                     ? '保存快照'
                     : dialog.type === 'alias'
                       ? '保存别名'
-                      : '确认删除'}
+                      : dialog.type === 'restore'
+                        ? '确认恢复'
+                        : '确认删除'}
               </button>
             </footer>
           </form>
@@ -836,7 +1216,7 @@ export function apply(ctx: {
     return value
   }
   const close = () => setOpen(false)
-  function Navigator({ locked }: { locked: boolean }) {
+  function Navigator({ locked, hidden }: { locked: boolean; hidden: boolean }) {
     const open = useOpen()
     const [identity, setIdentity] = useState<{ id: string | null; name: string }>({
       id: null,
@@ -876,6 +1256,9 @@ export function apply(ctx: {
       }
     }, [])
     const tooltip = `${open ? '返回上一页' : '世界线'} · ${loadError ? '当前位置暂不可用' : identity.id ? `当前：${identity.name}` : '主干 main'}`
+    // Hidden while a modal dialog is open: the corner button stacks above
+    // the dialog backdrop, so rendering nothing removes the misclick target.
+    if (hidden) return null
     return (
       <div className="wl-corner" data-world-line-entry="true">
         <button
@@ -917,11 +1300,28 @@ export function apply(ctx: {
   }
   function Overlay() {
     const open = useOpen()
+    const jobs = useJobFeed()
+    const [taskRequest, setTaskRequest] = useState(0)
     const [locked, setLocked] = useState(false)
+    const [modal, setModal] = useState(false)
     return (
       <>
-        <Navigator locked={locked} />
-        {open && <WorldLine close={close} onBusyChange={setLocked} />}
+        <TaskNotifier
+          jobs={jobs}
+          onOpen={() => {
+            setOpen(true)
+            setTaskRequest((n) => n + 1)
+          }}
+        />
+        <Navigator locked={locked} hidden={modal} />
+        {open && (
+          <WorldLine
+            taskRequest={taskRequest}
+            close={close}
+            onBusyChange={setLocked}
+            onModalChange={setModal}
+          />
+        )}
       </>
     )
   }

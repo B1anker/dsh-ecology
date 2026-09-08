@@ -76,7 +76,7 @@ const TEXT_SHAPES: SecretShape[] = [
 
 /** `key=value` or `key: value` where key is sensitive; value is masked. */
 const ASSIGNMENT_RE = new RegExp(
-  `(\\b(?:${SENSITIVE_KEY_FRAGMENTS.join('|')})(?:[-_.][A-Za-z0-9_-]+)*\\s*(?::|=)\\s*)(?:["']?)([^\\s,;}]+)`,
+  `((?<![\\w./-])(?:${SENSITIVE_KEY_FRAGMENTS.join('|')})(?:[-_.][A-Za-z0-9_-]+)*\\s*(?::|=)\\s*)(?:["']?)([^\\s,;}]+)`,
   'gi',
 )
 

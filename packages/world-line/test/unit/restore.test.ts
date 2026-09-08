@@ -123,6 +123,7 @@ const makeDeps: DepsMaker = (stoppedRef, failLaunch = false) => ({
             },
           },
         } satisfies LaunchResult),
+  coreCheck: async () => {},
   httpGet: async () => ({ status: 200 }),
   capture: async () => ({
     exitCode: 0,

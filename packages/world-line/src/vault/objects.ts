@@ -1,3 +1,4 @@
+import { withOperations } from '../fs/operation.js'
 /**
  * Content-addressed object store (`world-line/vault/objects/<sha256>`).
  *
@@ -30,6 +31,12 @@ export function objectFilePath(home: string, sha256: string): string {
  * new object was written.
  */
 export async function putObject(
+  home: string,
+  bytes: Uint8Array | string,
+): Promise<{ sha256: string; stored: boolean }> {
+  return withOperations([home], 'vault', () => putObjectUnlocked(home, bytes))
+}
+async function putObjectUnlocked(
   home: string,
   bytes: Uint8Array | string,
 ): Promise<{ sha256: string; stored: boolean }> {

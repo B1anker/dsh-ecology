@@ -1,3 +1,4 @@
+import { redactText } from '../domain/redaction.js'
 /**
  * The Phase 2 host launcher: start a real `dsh --profile <name> --port 0
  * --no-open` against a lab DSH home, treat the first `dsh web: http://…`
@@ -51,6 +52,7 @@ export interface RunningDsh {
 export type LaunchFailureKind = 'spawn-error' | 'exited' | 'timeout'
 
 export interface LaunchResult {
+  transcript?: { stdout: string; stderr: string }
   kind: 'ready' | LaunchFailureKind
   /** Set on ready. */
   handle?: RunningDsh
@@ -142,7 +144,11 @@ export function launchDsh(options: LaunchOptions): Promise<LaunchResult> {
     }
     const fail = (kind: LaunchFailureKind, detail: string): void => {
       if (settled) return
-      finish({ kind, detail })
+      finish({
+        kind,
+        detail: redactText(detail),
+        transcript: { stdout: redactText(stdout), stderr: redactText(stderr) },
+      })
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -169,7 +175,7 @@ export function launchDsh(options: LaunchOptions): Promise<LaunchResult> {
       if (ready !== null) return // died after ready: the caller owns teardown
       fail(
         'exited',
-        `dsh exited before ready (code ${String(code)}${signal === null ? '' : `, signal ${signal}`}) — ${lastLines(`${stdout}\n${stderr}`, 4)}`,
+        `dsh exited before ready (code ${String(code)}${signal === null ? '' : `, signal ${signal}`}) — ${startupFailureSummary(`${stdout}\n${stderr}`)}`,
       )
     })
 
@@ -184,6 +190,21 @@ export function launchDsh(options: LaunchOptions): Promise<LaunchResult> {
     options.signal?.addEventListener('abort', abort, { once: true })
     if (options.signal?.aborted) abort()
   })
+}
+
+/** Preserve the actual error, not trailing braces from nested Node causes. */
+export function startupFailureSummary(transcript: string): string {
+  const meaningful = transcript
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        /(?:Error(?: \[.*?\])?:|ERR_[A-Z_]+|Cannot find|failed to|ENOENT|EACCES)/i.test(line) &&
+        !line.startsWith('at '),
+    )
+  return redactText(
+    [...new Set(meaningful)].slice(0, 2).join(' | ') || lastLines(transcript, 8),
+  ).slice(0, 1800)
 }
 
 /** Last non-empty lines of a transcript, joined; empty string when none. */

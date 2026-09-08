@@ -9,17 +9,21 @@ interface SelectOption {
   disabled?: boolean
 }
 /** Theme-inheriting single select. Focus stays on the trigger while navigating its listbox. */
-export function Select({
+function Dropdown({
   label,
   value,
+  multiple = false,
+  placeholder = '选择世界线',
   options,
   onChange,
   disabled = false,
 }: {
   label: string
-  value: string
+  value: string[]
+  multiple?: boolean
+  placeholder?: string
   options: SelectOption[]
-  onChange(value: string): void
+  onChange(value: string[]): void
   disabled?: boolean
 }) {
   const id = useId()
@@ -27,18 +31,26 @@ export function Select({
   const list = useRef<HTMLDivElement>(null)
   const search = useRef({ text: '', at: 0 })
   const [open, setOpen] = useState(false)
-  const [active, setActive] = useState(value)
+  const [active, setActive] = useState(value[0] ?? '')
   const [position, setPosition] = useState<CSSProperties>({ visibility: 'hidden' })
   const enabled = options.filter((option) => !option.disabled)
   const show = () => {
-    setActive(enabled.find((option) => option.value === value)?.value ?? enabled[0]?.value ?? '')
+    setActive(
+      enabled.find((option) => value.includes(option.value))?.value ?? enabled[0]?.value ?? '',
+    )
     search.current.text = ''
     setOpen(true)
   }
   const choose = (choice: string) => {
     if (disabled || !enabled.some((option) => option.value === choice)) return
-    onChange(choice)
-    setOpen(false)
+    onChange(
+      multiple
+        ? value.includes(choice)
+          ? value.filter((item) => item !== choice)
+          : [...value, choice]
+        : [choice],
+    )
+    if (!multiple) setOpen(false)
     trigger.current?.focus({ preventScroll: true })
   }
   useEffect(() => {
@@ -46,26 +58,37 @@ export function Select({
   }, [disabled])
   useLayoutEffect(() => {
     if (!open) return
-    const anchor = trigger.current?.getBoundingClientRect()
-    if (!anchor) return
-    const below = window.innerHeight - anchor.bottom - 12
-    const above = anchor.top - 12
-    const upwards = below < 220 && above > below
-    const width = Math.min(Math.max(anchor.width, 200), window.innerWidth - 24)
-    setPosition({
-      position: 'fixed',
-      width,
-      left: Math.max(12, Math.min(anchor.left, window.innerWidth - width - 12)),
-      top: upwards ? undefined : anchor.bottom + 6,
-      bottom: upwards ? window.innerHeight - anchor.top + 6 : undefined,
-      maxHeight: Math.max(40, Math.min(280, (upwards ? above : below) - 6)),
-    })
+    const place = () => {
+      const anchor = trigger.current?.getBoundingClientRect()
+      if (!anchor) return
+      const below = window.innerHeight - anchor.bottom - 12
+      const above = anchor.top - 12
+      const upwards = below < 220 && above > below
+      const width = Math.min(Math.max(anchor.width, 200), window.innerWidth - 24)
+      setPosition({
+        position: 'fixed',
+        width,
+        left: Math.max(12, Math.min(anchor.left, window.innerWidth - width - 12)),
+        top: upwards ? undefined : anchor.bottom + 6,
+        bottom: upwards ? window.innerHeight - anchor.top + 6 : undefined,
+        maxHeight: Math.max(40, Math.min(280, (upwards ? above : below) - 6)),
+      })
+    }
+    place()
+    window.addEventListener('scroll', place, true)
+    return () => window.removeEventListener('scroll', place, true)
   }, [open])
   useEffect(() => {
     if (!open) return
-    list.current
-      ?.querySelector<HTMLElement>('[data-active=true]')
-      ?.scrollIntoView({ block: 'nearest' })
+    const container = list.current
+    const option = container?.querySelector<HTMLElement>('[data-active=true]')
+    if (!container || !option) return
+    // Scroll only the list, never its surrounding inspector or the canvas.
+    const top = option.offsetTop,
+      bottom = top + option.offsetHeight
+    if (top < container.scrollTop) container.scrollTop = top
+    else if (bottom > container.scrollTop + container.clientHeight)
+      container.scrollTop = bottom - container.clientHeight
   }, [open, active])
   useEffect(() => {
     if (!open) return
@@ -76,16 +99,11 @@ export function Select({
       )
         setOpen(false)
     }
-    const scroll = (event: Event) => {
-      if (!list.current?.contains(event.target as Node)) setOpen(false)
-    }
     const resize = () => setOpen(false)
     document.addEventListener('pointerdown', outside)
-    window.addEventListener('scroll', scroll, true)
     window.addEventListener('resize', resize)
     return () => {
       document.removeEventListener('pointerdown', outside)
-      window.removeEventListener('scroll', scroll, true)
       window.removeEventListener('resize', resize)
     }
   }, [open])
@@ -154,7 +172,12 @@ export function Select({
           }
         }}
       >
-        <span>{options.find((option) => option.value === value)?.label ?? '选择世界线'}</span>
+        <span>
+          {options
+            .filter((option) => value.includes(option.value))
+            .map((option) => option.label)
+            .join('、') || placeholder}
+        </span>
         <CaretDown size={14} aria-hidden="true" />
       </button>
       {open &&
@@ -165,6 +188,7 @@ export function Select({
             id={`${id}-list`}
             className="wl-select-list"
             role="listbox"
+            aria-multiselectable={multiple || undefined}
             aria-labelledby={`${id}-label`}
             style={position}
             onPointerDown={(event) => event.preventDefault()}
@@ -174,7 +198,7 @@ export function Select({
                 key={option.value}
                 id={`${id}-option-${index}`}
                 role="option"
-                aria-selected={option.value === value}
+                aria-selected={value.includes(option.value)}
                 aria-disabled={!!option.disabled}
                 data-active={option.value === active}
                 title={option.label}
@@ -185,7 +209,7 @@ export function Select({
                 onClick={() => choose(option.value)}
               >
                 <span>{option.label}</span>
-                {option.value === value && <Check size={15} aria-hidden="true" />}
+                {value.includes(option.value) && <Check size={15} aria-hidden="true" />}
               </div>
             ))}
           </div>,
@@ -193,4 +217,31 @@ export function Select({
         )}
     </div>
   )
+}
+
+export function Select(props: {
+  label: string
+  value: string
+  options: SelectOption[]
+  onChange(value: string): void
+  disabled?: boolean
+}) {
+  return (
+    <Dropdown
+      {...props}
+      value={[props.value]}
+      onChange={(values) => props.onChange(values[0] ?? '')}
+    />
+  )
+}
+
+export function MultiSelect(props: {
+  label: string
+  value: string[]
+  options: SelectOption[]
+  onChange(value: string[]): void
+  disabled?: boolean
+  placeholder?: string
+}) {
+  return <Dropdown {...props} multiple />
 }

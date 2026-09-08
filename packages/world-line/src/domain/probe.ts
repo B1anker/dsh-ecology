@@ -90,6 +90,24 @@ export function summarizeProbes(results: readonly ProbeResult[]): ProbeSummary {
         break
     }
   }
-  summary.ok = summary.failed === 0 && summary.inconclusive === 0
+  summary.ok = results.every((result) => !result.required || result.status === 'pass')
   return summary
+}
+
+/** v2 execution result; legacy records retain their recorded interpretation. */
+export function verificationState(
+  probes: readonly ProbeResult[],
+): 'passed' | 'failed' | 'awaiting_auth' | 'review' | 'incomplete' | undefined {
+  if (!probes.some((p) => p.check === 'plugin-function')) return undefined
+  if (probes.some((p) => p.required && p.status === 'fail')) return 'failed'
+  if (
+    probes.some(
+      (p) =>
+        p.check === 'browser-boot' && p.status === 'inconclusive' && /登录/.test(p.detail ?? ''),
+    )
+  )
+    return 'awaiting_auth'
+  if (probes.some((p) => p.check === 'client-observations' && p.status === 'inconclusive'))
+    return 'review'
+  return summarizeProbes(probes).ok ? 'passed' : 'incomplete'
 }

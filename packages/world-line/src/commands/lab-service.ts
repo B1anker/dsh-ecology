@@ -1,27 +1,31 @@
 import { fork } from 'node:child_process'
-import { cp, mkdir, readFile, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { cp, lstat, mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dump, load } from 'js-yaml'
-
 import type { CliContext } from '../context.js'
 import { UsageError, VerificationError } from '../domain/errors.js'
 import { redactText } from '../domain/redaction.js'
 import { analyzeProfile, type SnapshotManifest } from '../domain/snapshot.js'
 import { writeFileAtomic } from '../fs/atomic.js'
 import { acquireLock } from '../fs/lock.js'
+import { withOperations } from '../fs/operation.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
 import { assertAliasAvailable, resolveLabId } from '../lab/aliases.js'
+import { withPackageCache } from '../lab/cache-maintenance.js'
+import { createCleanLab } from '../lab/clean.js'
 import { createLab } from '../lab/create.js'
 import { defaultLabId } from '../lab/defaults.js'
 import { requireKnownHost, requirePnpm } from '../lab/gate.js'
 import { inheritHome, rebaseHomePaths } from '../lab/home-inheritance.js'
-import { labDir, labHomeDir, labProfileDir, labRoot, labStoreDir, listLabs } from '../lab/layout.js'
+import { labDir, labHomeDir, labProfileDir, labRoot, listLabs } from '../lab/layout.js'
 import { localSourceHash } from '../lab/local-source.js'
 import { readLabManifest, writeLabManifest } from '../lab/manifest.js'
 import { runCaptured } from '../lab/runner.js'
 import { controlService, readService, servicePath, serviceStatus } from '../lab/service.js'
 import { snapshotSource } from '../lab/snapshot-source.js'
+import { labStorePolicy } from '../lab/store.js'
 
 export interface LabStartResult {
   ok: true
@@ -32,7 +36,7 @@ export interface LabStartResult {
 }
 
 /** Copy local directory dependencies instead of keeping links into the real checkout. */
-async function isolateLocalDependencies(
+export async function isolateLocalDependencies(
   ctx: CliContext,
   id: string,
   sourceHome = ctx.home,
@@ -61,12 +65,21 @@ async function isolateLocalDependencies(
         spec.replace(/^(link:|file:)/, ''),
       )
       const destination = join(labDir(ctx.home, id), 'local-packages', String(index++))
+      // createLab bridges relative lock locators with temporary symlinks.
+      // Copying through that destination follows it back into the source.
+      const bridged = await lstat(destination).catch((error) => {
+        if (error.code === 'ENOENT') return null
+        throw error
+      })
+      if (bridged?.isSymbolicLink()) await rm(destination)
+
       // pnpm can retain an old link resolution even after the specifier changes.
       // Remove only this local dependency's importer entry; registry locks stay pinned.
       if (lock?.importers?.['.']?.[field]) delete lock.importers['.'][field][name]
       await mkdir(join(labDir(ctx.home, id), 'local-packages'), { recursive: true })
       if ((await stat(source)).isDirectory()) {
         await cp(source, destination, {
+          mode: constants.COPYFILE_FICLONE,
           recursive: true,
           dereference: true,
           filter: (entry) => !['node_modules', '.git', '.env'].includes(basename(entry)),
@@ -85,7 +98,7 @@ async function isolateLocalDependencies(
         }
         manifest[field][name] = `file:${destination}`
       } else {
-        await cp(source, `${destination}.tgz`)
+        await cp(source, `${destination}.tgz`, { mode: constants.COPYFILE_FICLONE })
         manifest[field][name] = `file:${destination}.tgz`
       }
     }
@@ -97,12 +110,34 @@ async function isolateLocalDependencies(
 async function startMirror(
   ctx: CliContext,
   options: {
+    clean?: boolean
+    plugins?: string[]
+    copyPluginConfig?: boolean
     inheritApiKeys?: boolean
     id?: string
     from?: string
     alias?: string
     snapshotId?: string
   } = {},
+): Promise<LabStartResult> {
+  const sourceHome = options.from ? labHomeDir(ctx.home, options.from) : ctx.home
+  const homes = options.id ? [labHomeDir(ctx.home, options.id)] : [sourceHome]
+  return withOperations(homes, ctx.profileName, () =>
+    withPackageCache(ctx.home, () => startMirrorUnlocked(ctx, options)),
+  )
+}
+async function startMirrorUnlocked(
+  ctx: CliContext,
+  options: {
+    clean?: boolean
+    plugins?: string[]
+    copyPluginConfig?: boolean
+    inheritApiKeys?: boolean
+    id?: string
+    from?: string
+    alias?: string
+    snapshotId?: string
+  },
 ): Promise<LabStartResult> {
   const host = requireKnownHost(ctx)
   const pnpm = requirePnpm(ctx.experimentEnv ?? ctx.env)
@@ -114,7 +149,18 @@ async function startMirror(
     : undefined
   const created = previous
     ? { manifest: previous }
-    : await createLab(ctx, host, ctx.profileName, { sourceHome, parentLabId: options.from, source })
+    : options.clean
+      ? await createCleanLab(ctx, host, {
+          sourceHome,
+          parentLabId: options.from,
+          plugins: options.plugins,
+          copyPluginConfig: options.copyPluginConfig,
+        })
+      : await createLab(ctx, host, ctx.profileName, {
+          sourceHome,
+          parentLabId: options.from,
+          source,
+        })
   const id = created.manifest.id
   // Interactive mirrors are not verification evidence and cannot be promoted.
   const manifest = {
@@ -125,7 +171,7 @@ async function startMirror(
   }
   await writeLabManifest(ctx.home, manifest, ctx.now())
   try {
-    if (!previous?.homeInheritance) {
+    if (!previous?.homeInheritance && manifest.source.initialization !== 'clean') {
       const inherited = await inheritHome(sourceHome, labHomeDir(ctx.home, id), {
         apiKeys: options.inheritApiKeys,
         skipPaths: source ? [`profiles/${ctx.profileName}`, 'cordis.patch.yml'] : undefined,
@@ -166,8 +212,9 @@ async function startMirror(
       }
       await isolateLocalDependencies(ctx, id, sourceHome, source?.manifest)
     }
+    const store = labStorePolicy(ctx.home, manifest)
     const env = {
-      ...(ctx.experimentEnv ?? ctx.env),
+      ...store.environment(ctx.experimentEnv ?? ctx.env),
       DSH_HOME: labHomeDir(ctx.home, id),
       WORLD_LINE_LAB: id,
       WORLD_LINE_MANAGER_HOME: ctx.home,
@@ -183,8 +230,7 @@ async function startMirror(
           !source.manifest.profile.dependencies.some((dep) => ['link', 'file'].includes(dep.kind))
             ? '--frozen-lockfile'
             : '--no-frozen-lockfile',
-          '--store-dir',
-          labStoreDir(ctx.home, id),
+          ...store.flags,
         ],
         {
           cwd: labProfileDir(ctx.home, id, ctx.profileName),
@@ -248,7 +294,9 @@ async function startMirror(
   } catch (error) {
     const service = await readService(ctx.home, id).catch(() => null)
     if (service?.state === 'running') await controlService(service, true).catch(() => {})
-    await writeLabManifest(ctx.home, { ...manifest, state: 'failed' }, ctx.now())
+    const failed = { ...manifest, state: 'failed' as const }
+    if (!previous) delete failed.alias
+    await writeLabManifest(ctx.home, failed, ctx.now())
     throw error
   }
 }
@@ -256,6 +304,9 @@ async function startMirror(
 export async function runLabStart(
   ctx: CliContext,
   options: {
+    clean?: boolean
+    plugins?: string[]
+    copyPluginConfig?: boolean
     inheritApiKeys?: boolean
     id?: string
     new?: boolean
@@ -264,6 +315,10 @@ export async function runLabStart(
     snapshotId?: string
   } = {},
 ): Promise<LabStartResult> {
+  if (options.clean && (!options.new || options.id || options.snapshotId))
+    throw new UsageError('干净环境必须新建，不能与已有实例或快照同时使用')
+  if (!options.clean && (options.plugins?.length || options.copyPluginConfig))
+    throw new UsageError('插件选择仅适用于干净环境')
   if (options.snapshotId && (!options.new || options.id))
     throw new UsageError('快照分支必须创建新实例')
   if (options.from && (!options.new || options.id))
@@ -311,7 +366,11 @@ export async function runLabStart(
       if (manifest.purpose !== 'mirror')
         throw new UsageError('lab start requires a mirror instance')
       const service = await readService(ctx.home, selected)
-      if (service?.state === 'running' && !manifest.homeInheritance) {
+      if (
+        service?.state === 'running' &&
+        !manifest.homeInheritance &&
+        manifest.source.initialization !== 'clean'
+      ) {
         await stopMirror(ctx, selected)
         return await startMirror(
           { ...ctx, profileName: manifest.source.profileName },
@@ -346,6 +405,14 @@ export async function runLabStart(
 }
 
 async function stopMirror(ctx: CliContext, id: string): Promise<{ id: string; stopped: true }> {
+  return withOperations([labHomeDir(ctx.home, id)], ctx.profileName, () =>
+    runLabStopGuarded(ctx, id),
+  )
+}
+async function runLabStopGuarded(
+  ctx: CliContext,
+  id: string,
+): Promise<{ id: string; stopped: true }> {
   await readLabManifest(ctx.home, id)
   const service = await readService(ctx.home, id)
   if (!service) throw new UsageError(`lab ${id} has no persistent instance`)

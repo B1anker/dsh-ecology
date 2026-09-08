@@ -1,5 +1,8 @@
+import { reconcilePromotion, runRecovery } from './commands/recovery.js'
 import { resolveLabId, runLabAlias } from './lab/aliases.js'
 import { runLabDefault } from './lab/defaults.js'
+import { gcApply, gcPreview, gcPurge, gcRestore, storageUsage } from './vault/maintenance.js'
+import { workflowCli, workflowCommands } from './workflows/cli.js'
 /**
  * `dsh-world-line` CLI (WORLD-LINE-SPEC §3): argument parsing, dispatch,
  * exit-code mapping, and the machine-readable envelope.
@@ -35,7 +38,7 @@ import { type LabStartResult, runLabStart, runLabStop } from './commands/lab-ser
 import type { ReportResult } from './commands/report.js'
 import { runReport } from './commands/report.js'
 import type { RescueListItem, RescueStartResult, RescueStopResult } from './commands/rescue.js'
-import { runRescueList, runRescueStart, runRescueStop } from './commands/rescue.js'
+import { runRescueList, runRescueStop } from './commands/rescue.js'
 import type { RestoreCommandResult } from './commands/restore.js'
 import { runRestoreCommand } from './commands/restore.js'
 import type { SnapshotCreateResult } from './commands/snapshot.js'
@@ -82,13 +85,26 @@ environment:
   Files are optional and are not copied into labs; lab DSH_HOME stays isolated.
 
 commands (Phase 0-4 milestone):
+  investigate create|list|show|run|answer   persistent time/plugin bisect
+  export <snapshot> --output <file>        portable environment bundle
+  import <file> --yes                     validate a bundle in a new lab
+  matrix <version...> --yes               isolated host version checks
+  upgrade policy|check|watch|results      verified upgrade suggestions
+  deployment status|stage|activate|rollback|start|stop|run|config
   lab start [id|alias]           reuse or resume a mirror (default: current profile)
     --new                       create a new isolated mirror
+    --clean                     create from core only (implies --new)
+    --plugin <package>          add an existing bundle (repeatable, --clean only)
+    --copy-plugin-config        copy selected bundle config (default off)
+    --alias <name>              name the new mirror
                                   [--no-inherit-env] omit the official .env for this runtime
                                   [--no-inherit-api-keys] omit stored API keys from the mirror
   lab default [id|alias] [--clear]  show, set or clear the default mirror
   lab alias <id|alias> <name>    assign a unique name within this DSH home
   lab stop <lab-id>              stop the background instance, retaining its files
+  recovery list                  list interrupted swaps and promotions
+  recovery reconcile <id> --yes  recover a promotion or finish its commit decision
+  recovery rollback <id> --yes    recover managed files under writer locks
   doctor                          read-only diagnostics (exit 1 when a check fails)
   snapshot create [--label <t>]   capture the profile into the time machine
                                   [--break-stale-lock] confirm a stale writer lock
@@ -114,11 +130,14 @@ commands (Phase 0-4 milestone):
   restore <snapshot-id> --promote verify then promote the snapshot state
   restore --last-known-good       restore the recorded known-good snapshot
                                   [--promote] [--restart] [--keep]
-  rescue start [--allow <row-id>]  boot a core-only temporary profile
-                                  (repeat --allow for explicit patch rows)
+  rescue start                   deprecated; use lab start --clean
   rescue list                     running/stale rescues under this home
   rescue stop <rescue-id>         terminate the process group and clean up
   timeline prune [--yes]         plan Time-Machine retention, then delete
+  vault usage                   report logical and allocated storage
+  vault gc [--yes --revision <r>] preview or quarantine unreferenced objects
+  vault restore <record-id>     restore quarantined objects
+  vault purge <record-id> --yes permanently delete after 7 days and reference checks
                                   (newest 20 / 14 per day / 12 per week)
   report <lab-id | snap-id>       write a redacted diagnostics bundle
                                   (world-line/reports/<report-id>.json)
@@ -224,7 +243,28 @@ interface CommandResult {
 
 /** Run one parsed command; returns its result or throws. */
 async function dispatch(ctx: CliContext, command: string, args: string[]): Promise<CommandResult> {
+  if (workflowCommands.has(command)) return { command, data: await workflowCli(ctx, command, args) }
   switch (command) {
+    case 'recovery': {
+      const { rest, options } = consumeOptions(args.slice(1), {
+        yes: 'boolean',
+        'runtime-stopped': 'boolean',
+      })
+      const [id, ...extra] = rest
+      expectNoArgs('recovery', extra)
+      if (args[0] === 'list' && id === undefined)
+        return { command: 'recovery', data: await runRecovery(ctx) }
+      if (args[0] === 'reconcile' && id && options.yes === true)
+        return {
+          command: 'recovery',
+          data: await reconcilePromotion(ctx, id, options['runtime-stopped'] === true),
+        }
+      if (args[0] === 'rollback' && id && options.yes === true)
+        return { command: 'recovery', data: await runRecovery(ctx, id) }
+      throw new UsageError(
+        'recovery list | recovery rollback <id> --yes | recovery reconcile <id> --yes',
+      )
+    }
     case 'doctor': {
       expectNoArgs(command, args)
       return { command, data: await runDoctor(ctx) }
@@ -241,6 +281,37 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
         return { command: 'snapshot create', data: result }
       }
       throw new UsageError(`unknown snapshot subcommand ${JSON.stringify(sub)} (available: create)`)
+    }
+    case 'vault': {
+      const { rest, options } = consumeOptions(args.slice(1), {
+        revision: 'string',
+        yes: 'boolean',
+      })
+      const sub = args[0]
+      if (sub === 'usage') {
+        expectNoArgs('vault usage', rest)
+        return { command: 'vault usage', data: await storageUsage(ctx.home) }
+      }
+      if (sub === 'gc') {
+        expectNoArgs('vault gc', rest)
+        if (options.yes === true) {
+          if (typeof options.revision !== 'string')
+            throw new UsageError('vault gc --yes requires --revision from a preview')
+          return { command: 'vault gc', data: await gcApply(ctx.home, options.revision) }
+        }
+        return { command: 'vault gc', data: await gcPreview(ctx.home) }
+      }
+      if (sub === 'restore' || sub === 'purge') {
+        const [id, ...extra] = rest
+        expectNoArgs('vault', extra)
+        if (!id) throw new UsageError('请选择隔离记录')
+        if (sub === 'purge' && options.yes !== true) throw new UsageError('永久删除需要 --yes')
+        return {
+          command: 'vault ' + sub,
+          data: sub === 'restore' ? await gcRestore(ctx.home, id) : await gcPurge(ctx.home, id),
+        }
+      }
+      throw new UsageError('vault usage|gc|restore|purge')
     }
     case 'timeline': {
       const sub = args[0]
@@ -278,15 +349,10 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
     case 'rescue': {
       const verb = args[0]
       const verbArgs = args.slice(1)
-      if (verb === 'start') {
-        const { rest, options } = consumeOptions(verbArgs, { allow: 'list' })
-        expectNoArgs('rescue start', rest)
-        const allow = (options.allow as string[] | undefined) ?? []
-        return {
-          command: 'rescue start',
-          data: await runRescueStart(ctx, allow),
-        }
-      }
+      if (verb === 'start')
+        throw new UsageError(
+          '救援创建已合并：请使用 lab start --clean [--plugin <package>]；已有实例仍可 rescue list/stop',
+        )
       if (verb === 'list') {
         expectNoArgs('rescue list', verbArgs)
         return { command: 'rescue list', data: await runRescueList(ctx) }
@@ -356,6 +422,10 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
         const { rest, options } = consumeOptions(args.slice(1), {
           'no-inherit-api-keys': 'boolean',
           new: 'boolean',
+          clean: 'boolean',
+          plugin: 'list',
+          'copy-plugin-config': 'boolean',
+          alias: 'string',
         })
         const [reference, ...extra] = rest
         expectNoArgs('lab start', extra)
@@ -364,7 +434,11 @@ async function dispatch(ctx: CliContext, command: string, args: string[]): Promi
           data: await runLabStart(ctx, {
             inheritApiKeys: options['no-inherit-api-keys'] !== true,
             id: reference,
-            new: options.new === true,
+            new: options.new === true || options.clean === true,
+            clean: options.clean === true,
+            plugins: options.plugin as string[] | undefined,
+            copyPluginConfig: options['copy-plugin-config'] === true,
+            alias: options.alias as string | undefined,
           }),
         }
       }
@@ -536,9 +610,16 @@ function expectNoArgs(command: string, args: string[]): void {
 
 /** Render a successful result for the terminal. */
 function renderHuman(command: string, data: unknown): string {
+  if (workflowCommands.has(command)) return JSON.stringify(data, null, 2) + '\n'
   switch (command) {
     case 'doctor':
       return renderDoctor(data as DoctorResult)
+    case 'recovery':
+    case 'vault usage':
+    case 'vault gc':
+    case 'vault restore':
+    case 'vault purge':
+      return JSON.stringify(data, null, 2)
     case 'snapshot create':
       return renderSnapshotCreate(data as SnapshotCreateResult)
     case 'timeline list':
@@ -684,7 +765,7 @@ function renderRescueStart(result: RescueStartResult): string {
   return (
     [
       `rescue    ${result.id} running`,
-      `profile   ${result.profileName} (core policy + explicit allow rows)`,
+      `profile   ${result.profileName} (core policy + selected bundles and patch rows)`,
       `host      dsh ${result.hostVersion} on 127.0.0.1:${result.port ?? '?'} (pid ${result.pid ?? '?'})`,
       'official  profile and cordis.patch.yml untouched',
     ].join('\n') + '\n'
@@ -1015,6 +1096,7 @@ export async function runCli(
   const { context, command, args } = invocation
   try {
     const experimental =
+      workflowCommands.has(command) ||
       command === 'restore' ||
       (command === 'rescue' && args[0] === 'start') ||
       (command === 'lab' && ['start', 'add', 'update', 'remove', 'config'].includes(args[0] ?? ''))

@@ -1,3 +1,4 @@
+import { withOperations } from '../fs/operation.js'
 /**
  * Snapshot manifest persistence (`world-line/vault/snapshots/<id>.json`).
  *
@@ -25,6 +26,12 @@ export function assertSnapshotId(id: string): void {
 
 /** Persist one immutable snapshot manifest; refuses id collisions. */
 export async function writeSnapshotManifest(
+  home: string,
+  manifest: SnapshotManifest,
+): Promise<void> {
+  return withOperations([home], 'vault', () => writeSnapshotManifestUnlocked(home, manifest))
+}
+async function writeSnapshotManifestUnlocked(
   home: string,
   manifest: SnapshotManifest,
 ): Promise<void> {
