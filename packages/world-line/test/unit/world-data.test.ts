@@ -8,7 +8,7 @@ describe('canvas response consistency', () => {
       { id: 'a', state: 'running' },
       { id: 'b', state: 'running' },
     ],
-    events: [{ id: 'e' }],
+    events: [{ id: 'e', at: '2026-09-08T08:15:33.801Z' }],
   }
   test('stop deltas retain other worlds and history without mutating baseline', () => {
     const next = mergeWorldResponse(
@@ -43,4 +43,32 @@ describe('canvas response consistency', () => {
     expect(next.lines).toBe(base.lines)
     expect(next.events).toBe(base.events)
   })
+})
+
+test('unfinished verification timestamps cannot poison full or delta canvas responses', () => {
+  const created = { id: 'created', at: '2026-09-08T08:15:33.801Z' }
+  const unfinished = { id: 'verification', at: '' }
+  const full = mergeWorldResponse(null, {
+    revision: 'r1',
+    lines: [],
+    events: [created, unfinished],
+  })
+  expect(full.events).toEqual([created])
+  const next = mergeWorldResponse(
+    full,
+    {
+      revision: 'r2',
+      delta: {
+        lines: { remove: [], upsert: [] },
+        events: { remove: [], upsert: [unfinished, { id: 'bad', at: 'invalid' }] },
+      },
+    },
+    'r1',
+  )
+  expect(next.events).toEqual([created])
+  expect(
+    new Date(
+      Math.min(...next.events.map((event: { at: string }) => Date.parse(event.at))),
+    ).toISOString(),
+  ).toBe(created.at)
 })

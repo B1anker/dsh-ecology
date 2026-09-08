@@ -161,7 +161,7 @@ export async function worldLines(ctx: CliContext, currentId?: string) {
           ? `配置来源 ${manifest.source.snapshotId}`
           : '独立实例从这里开始',
       })
-      if (manifest.lastRun)
+      if (manifest.lastRun && Number.isFinite(Date.parse(manifest.lastRun.finishedAt)))
         events.push({
           id: `${id}:verification:${manifest.lastRun.finishedAt}`,
           lineId: id,

@@ -1,3 +1,8 @@
+/** Ignore unfinished or damaged events before date/coordinate rendering. */
+export function validWorldEvents<T extends { at: string }>(events: T[]): T[] {
+  return events.filter((event) => Number.isFinite(Date.parse(event.at)))
+}
+
 /** Apply a response only to the snapshot whose revision was requested. */
 export function mergeWorldResponse(previous: any, incoming: any, requestedRevision?: string) {
   if (!incoming || typeof incoming !== 'object') throw new Error('世界线响应无效，已保留画布')
@@ -18,10 +23,10 @@ export function mergeWorldResponse(previous: any, incoming: any, requestedRevisi
       ...previous,
       ...metadata,
       lines: merge(previous.lines, delta.lines),
-      events: merge(previous.events, delta.events),
+      events: validWorldEvents(merge(previous.events, delta.events)),
     }
   }
   if (!Array.isArray(incoming.lines) || !Array.isArray(incoming.events))
     throw new Error('世界线数据不完整，已保留画布')
-  return incoming
+  return { ...incoming, events: validWorldEvents(incoming.events) }
 }

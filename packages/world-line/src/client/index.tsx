@@ -855,6 +855,18 @@ function WorldLine({
             api={api}
             close={() => setToolPanel(null)}
             navigate={setToolPanel}
+            onSnapshot={(id) => {
+              setToolPanel(null)
+              openSnapshot(id)
+            }}
+            onCompareLines={(id) => {
+              setToolPanel(null)
+              const other = [origin, ...(data?.lines ?? [])].find(
+                (line) => line.id !== id && line.kind !== 'verification',
+              )
+              setComparisonIds(other ? [id, other.id] : [id])
+              setInspector({ type: 'compare' })
+            }}
             onJob={(id) => {
               setPanelJob(id)
               setMaintenanceOpen(true)
