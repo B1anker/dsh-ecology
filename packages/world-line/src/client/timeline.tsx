@@ -5,6 +5,7 @@ import { Circle } from '@phosphor-icons/react/dist/csr/Circle'
 import { ClockCounterClockwise } from '@phosphor-icons/react/dist/csr/ClockCounterClockwise'
 import { CornersOut } from '@phosphor-icons/react/dist/csr/CornersOut'
 import { DotsThree } from '@phosphor-icons/react/dist/csr/DotsThree'
+import { FileText } from '@phosphor-icons/react/dist/csr/FileText'
 import { GitBranch } from '@phosphor-icons/react/dist/csr/GitBranch'
 import { GitMerge } from '@phosphor-icons/react/dist/csr/GitMerge'
 import { Minus } from '@phosphor-icons/react/dist/csr/Minus'
@@ -14,6 +15,7 @@ import { SlidersHorizontal } from '@phosphor-icons/react/dist/csr/SlidersHorizon
 import { Star } from '@phosphor-icons/react/dist/csr/Star'
 import { Stop } from '@phosphor-icons/react/dist/csr/Stop'
 import { Trash } from '@phosphor-icons/react/dist/csr/Trash'
+import { UploadSimple } from '@phosphor-icons/react/dist/csr/UploadSimple'
 import {
   BaseEdge,
   type Edge,
@@ -48,6 +50,8 @@ export { type Line, label, stateLabel } from './timeline-model.js'
 
 type TrackData = {
   line: Line
+  experiments: Line[]
+  showExperiments(): void
   width: number
   time: number
   cursorX: number | null
@@ -56,12 +60,13 @@ type TrackData = {
   busy: boolean
   compared: boolean
   markers: { x: number; events: WorldEvent[] }[]
+  enter(): void
   inspect(event: WorldEvent): void
   openEvent(mouse: MouseEvent<HTMLElement>, event: WorldEvent): void
   open(event: MouseEvent<HTMLElement>, line: Line): void
 }
 type Track = Node<TrackData, 'worldline'>
-type Branch = Edge<{ active: boolean; color: string }, 'branch'>
+type Branch = Edge<{ active: boolean; color: string; stopped: boolean }, 'branch'>
 function TrackNode({ id, data }: NodeProps<Track>) {
   const update = useUpdateNodeInternals()
   const handles = data.forks.map((fork) => `${fork.id}:${fork.x}`).join(',')
@@ -129,7 +134,13 @@ function TrackNode({ id, data }: NodeProps<Track>) {
           )
         })}
         {line.state === 'running' && <span className="wl-flow-energy" />}
-        {data.cursorX !== null && <span className="wl-time-point" style={{ left: data.cursorX }} />}
+        {data.cursorX !== null && (
+          <span
+            className="wl-time-point"
+            data-overlap={data.markers.some((marker) => Math.abs(marker.x - data.cursorX!) < 20)}
+            style={{ left: data.cursorX }}
+          />
+        )}
         <span className="wl-flow-date">
           {line.kind === 'origin' ? '来源' : line.parentId ? '分支' : '创建'} ·{' '}
           {new Date(line.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -148,6 +159,7 @@ function TrackNode({ id, data }: NodeProps<Track>) {
             className={line.state === 'running' ? 'wl-live-dot' : ''}
           />
           {stateLabel(line.state)}
+          {line.initialization === 'clean' ? ' · 从干净环境创建' : ''}
           {line.port ? ` · ${line.port}` : ''}
         </span>
         <span className="wl-muted">
@@ -155,9 +167,15 @@ function TrackNode({ id, data }: NodeProps<Track>) {
             ? '正式环境'
             : line.verdict === 'passed'
               ? '验证通过'
-              : line.verdict === 'failed'
-                ? '验证失败'
-                : '未校验'}
+              : line.verdict === 'review'
+                ? '异常待确认'
+                : line.verdict === 'awaiting_auth'
+                  ? '等待登录'
+                  : line.verdict === 'incomplete'
+                    ? '基础检查完成'
+                    : line.verdict === 'failed'
+                      ? '验证失败'
+                      : '未校验'}
         </span>
       </div>
       <button
@@ -186,6 +204,7 @@ function BranchEdge({ sourceX, sourceY, targetX, targetY, data, ...props }: Edge
       interactionWidth={24}
       style={{
         stroke: data?.color,
+        strokeDasharray: data?.stopped ? '6 4' : undefined,
         opacity: data?.active ? 1 : 0.7,
         strokeWidth: data?.active ? 2 : 1.5,
         strokeLinecap: 'round',
@@ -211,6 +230,10 @@ const timestamp = (at: number) =>
 
 export function Timeline({
   lines,
+  experiments,
+  onExperiments,
+  onInstall,
+  onComposition,
   selected,
   onSelect,
   onFork,
@@ -223,6 +246,9 @@ export function Timeline({
   onEvent,
   onHistory,
   onSnapshot,
+  onPromote,
+  onVerify,
+  onReport,
   onMerge,
   mergeAvailable,
   currentId,
@@ -232,6 +258,10 @@ export function Timeline({
   busy = false,
 }: {
   lines: Line[]
+  experiments: Line[]
+  onExperiments(id: string): void
+  onInstall(id: string): void
+  onComposition(id: string): void
   selected: string
   events: WorldEvent[]
   comparisonIds: string[]
@@ -239,13 +269,16 @@ export function Timeline({
   onEvent(event: WorldEvent): void
   onHistory(id: string): void
   onSnapshot(id: string): void
+  onPromote(id: string): void
+  onVerify(id: string, interactive: boolean): void
+  onReport(id: string): void
   onMerge(id: string): void
   mergeAvailable: boolean
   onSelect(id: string): void
-  onFork(id: string, at?: number, snapshotId?: string): void
+  onFork(id: string, at?: number, snapshotId?: string, clean?: boolean): void
   onEnter(id: string): void
   onTimeChange(at: number): void
-  onManage(action: 'default' | 'alias' | 'stop' | 'destroy', id: string): void
+  onManage(action: 'restart' | 'start' | 'default' | 'alias' | 'stop' | 'destroy', id: string): void
   currentId: string | null
   time: number
   start: number
@@ -280,7 +313,12 @@ export function Timeline({
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => {
-        void instance.current?.fitView(fitOptions)
+        if (
+          container.current &&
+          container.current.clientWidth > 0 &&
+          container.current.clientHeight > 0
+        )
+          void instance.current?.fitView({ ...fitOptions, duration: 0 })
       })
     })
     if (container.current) observer.observe(container.current)
@@ -328,6 +366,19 @@ export function Timeline({
     event.preventDefault()
     event.stopPropagation()
     if (busy) return
+    const source =
+      'currentTarget' in event && event.currentTarget instanceof HTMLElement
+        ? event.currentTarget
+        : document.activeElement
+    const focusable =
+      source instanceof HTMLElement
+        ? (source.closest<HTMLElement>('button,[tabindex]') ??
+          source.querySelector<HTMLElement>('button,[tabindex]'))
+        : null
+    if (focusable) {
+      document.querySelector('[data-wl-panel-trigger]')?.removeAttribute('data-wl-panel-trigger')
+      focusable.setAttribute('data-wl-panel-trigger', 'true')
+    }
     const bounds = container.current?.getBoundingClientRect()
     if (!bounds) return
     const position = instance.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY })
@@ -348,22 +399,46 @@ export function Timeline({
     return {
       id: line.id,
       type: 'worldline',
+      // Controlled node refreshes must not lose their dimensions between ResizeObserver deliveries.
+      width: TRACK_END + 72 - born + 220,
+      height: 76,
+      handles: [
+        { type: 'target', position: Position.Left, x: 0, y: 35.5, width: 1, height: 1 },
+        ...lines
+          .filter((child) => child.parentId === line.id)
+          .map((child) => ({
+            id: child.id,
+            type: 'source' as const,
+            position: Position.Bottom,
+            x: Math.max(0, timeX(Date.parse(child.forkedAt ?? child.createdAt)) - born - 40) - 0.5,
+            y: 35.5,
+            width: 1,
+            height: 1,
+          })),
+      ],
       position: { x: born, y: 90 + index * ROW_HEIGHT },
       selected: selected === line.id,
       draggable: false,
       connectable: false,
       deletable: false,
-      ariaLabel: `世界线 ${label(line)}，${stateLabel(line.state)}，Shift+F10 打开时间点菜单`,
+      ariaLabel: `世界线 ${label(line)}，${stateLabel(line.state)}${line.initialization === 'clean' ? ' · 从干净环境创建' : ''}，Shift+F10 打开时间点菜单`,
       data: {
         line,
         time,
         compared: comparisonIds.includes(line.id),
         markers,
+        enter: () => onEnter(line.id),
         inspect: onEvent,
         openEvent: (mouse, event) => open(mouse, line, Date.parse(event.at), event),
         width: TRACK_END + 72 - born,
         cursorX:
-          selected === line.id && time >= Date.parse(line.createdAt) ? timeX(time) - born : null,
+          selected === line.id && time >= Date.parse(line.createdAt)
+            ? (markers.find((marker) =>
+                marker.events.some((event) => Date.parse(event.at) === time),
+              )?.x ??
+              markers.find((marker) => Math.abs(marker.x - (timeX(time) - born)) < 20)?.x ??
+              timeX(time) - born)
+            : null,
         forks: lines
           .filter((child) => child.parentId === line.id)
           .map((child) => ({
@@ -372,6 +447,8 @@ export function Timeline({
           })),
         active: selected === line.id,
         busy,
+        experiments: experiments.filter((item) => (item.parentId ?? 'origin') === line.id),
+        showExperiments: () => onExperiments(line.id),
         open: (event, target) => open(event, target, Math.max(Date.parse(target.createdAt), time)),
       },
     }
@@ -386,153 +463,256 @@ export function Timeline({
       type: 'branch',
       deletable: false,
       selectable: false,
-      data: { active: selected === line.id, color: lineColor(line.id) },
+      data: {
+        active: selected === line.id,
+        color: lineColor(line.id),
+        stopped: line.state === 'stopped',
+      },
     }))
   const lineIds = lines.map((line) => line.id).join(',')
   useEffect(() => {
-    void instance.current?.fitView(fitOptions)
+    const frame = requestAnimationFrame(() => {
+      if (
+        container.current &&
+        container.current.clientWidth > 0 &&
+        container.current.clientHeight > 0
+      )
+        void instance.current?.fitView({ ...fitOptions, duration: 0 })
+    })
+    return () => cancelAnimationFrame(frame)
   }, [lineIds])
   const menuLine = lines.find((line) => line.id === menu?.id)
-  const menuItems: MenuAction[] =
+  const flatMenuItems: MenuAction[] =
     menu && menuLine
       ? [
           {
             id: 'enter',
-            label: menuLine.kind === 'origin' ? '返回 DSH' : '进入世界线',
+            label:
+              menuLine.kind === 'origin'
+                ? '返回 DSH'
+                : menuLine.kind === 'rescue'
+                  ? '进入救援实例'
+                  : menuLine.state !== 'running'
+                    ? '启动世界线'
+                    : '进入世界线',
             icon: <ArrowRight size={16} />,
             disabled: busy || menuLine.kind === 'verification' || menuLine.state === 'applying',
-            run: () => onEnter(menuLine.id),
+            run: () =>
+              menuLine.kind === 'mirror' && menuLine.state !== 'running'
+                ? onManage('start', menuLine.id)
+                : onEnter(menuLine.id),
           },
-          {
-            id: 'branch',
-            label: '世界线分支',
-            icon: <GitBranch size={16} />,
-            children: [
-              {
-                id: 'fork',
-                label: '创建旁路分支',
-                icon: <GitBranch size={16} />,
-                disabled: busy || menuLine.state === 'applying',
-                hint: '复制当前状态，不恢复历史数据',
-                run: () => onFork(menuLine.id, menu.at),
-              },
-              ...(menu.event?.snapshotId
-                ? [
-                    {
-                      id: 'snapshot-fork',
-                      label: '从此快照创建世界线',
-                      icon: <GitBranch size={16} />,
-                      disabled: busy || !menu.event.restorable,
-                      run: () => onFork(menuLine.id, menu.at, menu.event!.snapshotId),
-                    },
-                  ]
-                : []),
-            ],
-          },
-          {
-            id: 'history',
-            label: '快照与记录',
-            icon: <ClockCounterClockwise size={16} />,
-            children: [
-              {
-                id: 'save',
-                label: '保存配置快照',
-                icon: <Camera size={16} />,
-                disabled: busy || menuLine.state === 'applying',
-                run: () => onSnapshot(menuLine.id),
-              },
-              ...(menu.event
-                ? [
-                    {
-                      id: 'event',
-                      label: '查看此事件',
-                      icon: <ClockCounterClockwise size={16} />,
-                      run: () => onEvent(menu.event!),
-                    },
-                  ]
-                : []),
-              {
-                id: 'history-list',
-                label: '查看事件记录',
-                icon: <ClockCounterClockwise size={16} />,
-                run: () => onHistory(menuLine.id),
-              },
-            ],
-          },
-          {
-            id: 'compare',
-            label: comparisonIds.includes(menuLine.id) ? '移出对比' : '加入双线对比',
-            icon: <ArrowsLeftRight size={16} />,
-            disabled: busy || menuLine.kind === 'verification',
-            run: () => onCompare(menuLine.id),
-          },
-          ...(menuLine.kind !== 'origin'
+          ...(menuLine.kind === 'origin' || menuLine.kind === 'mirror'
             ? [
                 {
-                  id: 'manage',
-                  label: '世界线管理',
-                  icon: <DotsThree size={17} />,
-                  children: [
-                    {
-                      id: 'merge',
-                      label: '合入主干',
-                      icon: <GitMerge size={16} />,
-                      disabled:
-                        busy ||
-                        !mergeAvailable ||
-                        menuLine.kind !== 'mirror' ||
-                        menuLine.state === 'applying',
-                      hint: mergeAvailable
-                        ? undefined
-                        : '当前实例需重启后启用合入；也可在主干画布操作',
-                      run: () => onMerge(menuLine.id),
-                    },
-                    {
-                      id: 'default',
-                      label: menuLine.isDefault ? '已是默认世界线' : '设为默认世界线',
-                      icon: <Star size={16} />,
-                      disabled: busy || menuLine.kind !== 'mirror' || menuLine.isDefault,
-                      run: () => onManage('default', menuLine.id),
-                    },
-                    {
-                      id: 'alias',
-                      label: '修改别名',
-                      icon: <PencilSimple size={16} />,
-                      disabled: busy || menuLine.state === 'applying',
-                      run: () => onManage('alias', menuLine.id),
-                    },
-                    {
-                      id: 'stop',
-                      label: '停止世界线',
-                      icon: <Stop size={16} />,
-                      disabled:
-                        busy ||
-                        !['running', 'unreachable'].includes(menuLine.state) ||
-                        menuLine.id === currentId,
-                      hint: menuLine.id === currentId ? '请在另一实例停止当前世界线' : undefined,
-                      run: () => onManage('stop', menuLine.id),
-                    },
-                    {
-                      id: 'destroy',
-                      label: '删除世界线…',
-                      icon: <Trash size={16} />,
-                      danger: true,
-                      disabled:
-                        busy ||
-                        ['running', 'applying', 'unreachable'].includes(menuLine.state) ||
-                        menuLine.id === currentId,
-                      hint:
-                        menuLine.id === currentId
-                          ? '不能删除当前所在世界线'
-                          : ['running', 'unreachable'].includes(menuLine.state)
-                            ? '请先停止世界线'
-                            : undefined,
-                      run: () => onManage('destroy', menuLine.id),
-                    },
-                  ],
+                  id: 'composition',
+                  label: '查看组成',
+                  icon: <FileText size={16} />,
+                  run: () => onComposition(menuLine.id),
+                },
+                {
+                  id: 'install-plugin',
+                  label: '安装并验证插件',
+                  icon: <Plus size={16} />,
+                  disabled: busy || menuLine.state === 'applying',
+                  run: () => onInstall(menuLine.id),
+                },
+                {
+                  id: 'experiments',
+                  label: '查看验证实验',
+                  icon: <FileText size={16} />,
+                  run: () => onExperiments(menuLine.id),
                 },
               ]
             : []),
+          ...(menuLine.kind === 'rescue'
+            ? [
+                {
+                  id: 'rescue-stop',
+                  danger: true,
+                  label: '停止救援实例',
+                  icon: <Stop size={16} />,
+                  disabled: busy,
+                  run: () => onManage('stop', menuLine.id),
+                },
+              ]
+            : [
+                {
+                  id: 'branch',
+                  label: '世界线分支',
+                  icon: <GitBranch size={16} />,
+                  children: [
+                    {
+                      id: 'fork',
+                      label: '创建旁路分支',
+                      icon: <GitBranch size={16} />,
+                      disabled: busy || menuLine.state === 'applying',
+                      hint: '复制当前状态，不恢复历史数据',
+                      run: () => onFork(menuLine.id, menu.at),
+                    },
+                    {
+                      id: 'clean',
+                      label: '从干净环境开始',
+                      icon: <GitBranch size={16} />,
+                      disabled: busy,
+                      run: () => onFork(menuLine.id, undefined, undefined, true),
+                    },
+                    ...(menu.event?.snapshotId
+                      ? [
+                          {
+                            id: 'snapshot-fork',
+                            label: '从此快照创建世界线',
+                            icon: <GitBranch size={16} />,
+                            disabled: busy || !menu.event.restorable,
+                            run: () => onFork(menuLine.id, menu.at, menu.event!.snapshotId),
+                          },
+                        ]
+                      : []),
+                  ],
+                },
+                {
+                  id: 'history',
+                  label: '快照与记录',
+                  icon: <ClockCounterClockwise size={16} />,
+                  children: [
+                    {
+                      id: 'save',
+                      label: '保存配置快照',
+                      icon: <Camera size={16} />,
+                      disabled: busy || menuLine.state === 'applying',
+                      run: () => onSnapshot(menuLine.id),
+                    },
+                    ...(menu.event
+                      ? [
+                          {
+                            id: 'event',
+                            label: '查看此事件',
+                            icon: <ClockCounterClockwise size={16} />,
+                            run: () => onEvent(menu.event!),
+                          },
+                        ]
+                      : []),
+                    {
+                      id: 'history-list',
+                      label: '查看事件记录',
+                      icon: <ClockCounterClockwise size={16} />,
+                      run: () => onHistory(menuLine.id),
+                    },
+                  ],
+                },
+                {
+                  id: 'compare',
+                  label: comparisonIds.includes(menuLine.id) ? '移出对比' : '加入双线对比',
+                  icon: <ArrowsLeftRight size={16} />,
+                  disabled: busy || menuLine.kind === 'verification',
+                  run: () => onCompare(menuLine.id),
+                },
+                ...(menuLine.kind === 'verification'
+                  ? [
+                      {
+                        id: 'verify',
+                        label: '重验当前实验',
+                        icon: <ArrowRight size={16} />,
+                        disabled: busy || menuLine.state === 'applying',
+                        run: () => onVerify(menuLine.id, false),
+                      },
+                      {
+                        id: 'verify-login',
+                        label: '登录后重验',
+                        icon: <ArrowRight size={16} />,
+                        disabled: busy || menuLine.state === 'applying',
+                        run: () => onVerify(menuLine.id, true),
+                      },
+                      {
+                        id: 'promote',
+                        label: '合回来源环境',
+                        icon: <UploadSimple size={16} />,
+                        disabled: busy || menuLine.verdict !== 'passed',
+                        hint:
+                          menuLine.verdict === 'passed'
+                            ? '提升验证结果到正式环境，进度在维护面板展示'
+                            : '仅完整验证通过的实验可以合入',
+                        run: () => onPromote(menuLine.id),
+                      },
+                      {
+                        id: 'report',
+                        label: '生成诊断报告',
+                        icon: <FileText size={16} />,
+                        disabled: busy,
+                        run: () => onReport(menuLine.id),
+                      },
+                    ]
+                  : []),
+                ...(menuLine.kind !== 'origin'
+                  ? [
+                      {
+                        id: 'manage',
+                        label: '世界线管理',
+                        icon: <DotsThree size={17} />,
+                        children: [
+                          {
+                            id: 'merge',
+                            label: '合入主干',
+                            icon: <GitMerge size={16} />,
+                            disabled:
+                              busy ||
+                              !mergeAvailable ||
+                              menuLine.kind !== 'mirror' ||
+                              menuLine.state === 'applying',
+                            hint: mergeAvailable
+                              ? undefined
+                              : '当前实例需重启后启用合入；也可在主干画布操作',
+                            run: () => onMerge(menuLine.id),
+                          },
+                          {
+                            id: 'default',
+                            label: menuLine.isDefault ? '已是默认世界线' : '设为默认世界线',
+                            icon: <Star size={16} />,
+                            disabled: busy || menuLine.kind !== 'mirror' || menuLine.isDefault,
+                            run: () => onManage('default', menuLine.id),
+                          },
+                          {
+                            id: 'alias',
+                            label: '修改别名',
+                            icon: <PencilSimple size={16} />,
+                            disabled: busy || menuLine.state === 'applying',
+                            run: () => onManage('alias', menuLine.id),
+                          },
+                          {
+                            id: 'stop',
+                            danger: true,
+                            label: '停止世界线',
+                            icon: <Stop size={16} />,
+                            disabled:
+                              busy ||
+                              !['running', 'unreachable'].includes(menuLine.state) ||
+                              menuLine.id === currentId,
+                            hint:
+                              menuLine.id === currentId ? '请在另一实例停止当前世界线' : undefined,
+                            run: () => onManage('stop', menuLine.id),
+                          },
+                          {
+                            id: 'destroy',
+                            label: '删除世界线…',
+                            icon: <Trash size={16} />,
+                            danger: true,
+                            disabled:
+                              busy ||
+                              ['running', 'applying', 'unreachable'].includes(menuLine.state) ||
+                              menuLine.id === currentId,
+                            hint:
+                              menuLine.id === currentId
+                                ? '不能删除当前所在世界线'
+                                : ['running', 'unreachable'].includes(menuLine.state)
+                                  ? '请先停止世界线'
+                                  : undefined,
+                            run: () => onManage('destroy', menuLine.id),
+                          },
+                        ],
+                      },
+                    ]
+                  : []),
+              ]),
         ]
       : []
   const ticks = useMemo(
@@ -542,6 +722,63 @@ export function Timeline({
       ),
     [scale],
   )
+  const leafItems = flatMenuItems.flatMap((item) => item.children ?? [item])
+  const group = (
+    id: string,
+    label: string,
+    ids: string[],
+    icon: MenuAction['icon'],
+  ): MenuAction => ({
+    id,
+    label,
+    icon,
+    children: ids.flatMap((id) => leafItems.filter((item) => item.id === id)),
+  })
+  if (menuLine?.kind === 'mirror')
+    leafItems.push({
+      id: 'restart',
+      label: '重启世界线',
+      icon: <ArrowRight size={16} />,
+      disabled: busy || menuLine.id === currentId || menuLine.state === 'applying',
+      hint: '停止并重新加载当前世界线，配置与历史保留',
+      run: () => onManage('restart', menuLine.id),
+    })
+  const menuItems: MenuAction[] = [
+    group(
+      'runtime',
+      '实例操作',
+      ['enter', 'restart', 'stop', 'rescue-stop', 'destroy'],
+      <ArrowRight size={16} />,
+    ),
+    group(
+      'plugins',
+      '插件与验证',
+      [
+        'composition',
+        'install-plugin',
+        'experiments',
+        'verify',
+        'verify-login',
+        'promote',
+        'report',
+      ],
+      <FileText size={16} />,
+    ),
+    group(
+      'history',
+      '快照与对比',
+      ['save', 'event', 'history-list', 'compare'],
+      <ClockCounterClockwise size={16} />,
+    ),
+    group(
+      'branches',
+      '分支与合入',
+      ['fork', 'clean', 'snapshot-fork', 'merge'],
+      <GitBranch size={16} />,
+    ),
+    group('settings', '世界线设置', ['default', 'alias'], <DotsThree size={17} />),
+  ].filter((item) => item.children!.length > 0)
+
   return (
     <div
       className="wl-map wl-flow-map"
@@ -676,7 +913,17 @@ export function Timeline({
                   </span>
                 </div>
               ))}
-              <div className="wl-flow-cursor" style={{ left: timeX(time) }}>
+              <div
+                className="wl-flow-cursor"
+                style={{
+                  left: (() => {
+                    const node = nodes.find((node) => node.id === selected)
+                    return node?.data.cursorX != null
+                      ? node.position.x + node.data.cursorX
+                      : timeX(time)
+                  })(),
+                }}
+              >
                 <span>回看位置</span>
               </div>
             </div>
@@ -744,6 +991,7 @@ export function Timeline({
                   className={line.state === 'running' ? 'wl-live-dot' : ''}
                 />
                 {stateLabel(line.state)}
+                {line.initialization === 'clean' ? ' · 从干净环境创建' : ''}
                 {line.port ? ` · ${line.port}` : ''}
               </span>
               <span className="wl-muted">

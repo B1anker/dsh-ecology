@@ -1,3 +1,5 @@
+import { seedInstallation } from './clone-installation.js'
+import { inheritModelConfiguration } from './model-config.js'
 /**
  * Lab creation (WORLD-LINE-SPEC §5/§6, Phase 2): clone the whitelisted files
  * of one real profile into an isolated lab.
@@ -5,10 +7,12 @@
  * Order: profile existence preflight → exclusive profile lock (same discipline
  * as snapshots; the receipt must describe a quiescent source) → one read pass
  * with `analyzeProfile` (no store hook — labs hold bytes, not vault objects) →
- * fresh `labs/<id>` skeleton with its own DSH home, profile dir, pnpm store,
+ * fresh `labs/<id>` skeleton with its own DSH home, profile dir, installation tree,
  * and logs → copy the whitelisted composition files (manifest, lockfile,
  * workspace, profile patch; the derived root config is NOT copied — the host
- * regenerates `cordis.yml` on first boot) → write the §5 manifest.
+ * regenerates `cordis.yml` on first boot) → bridge relative `file:`/`link:`
+ * dependency paths with in-lab symlinks to the real dirs (local-deps.ts) →
+ * write the §5 manifest.
  *
  * Never writes the real profile or home; the lock guarantees no other
  * world-line writer is mid-flight on the source.
@@ -29,7 +33,8 @@ import { profileDir, profileLockPath } from '../fs/paths.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
 import { readObject } from '../vault/objects.js'
 import type { KnownHost } from './gate.js'
-import { labDir, labHomeDir, labLogDir, labProfileDir, labStoreDir, newLabId } from './layout.js'
+import { labDir, labHomeDir, labLogDir, labProfileDir, newLabId } from './layout.js'
+import { linkLocalDeps } from './local-deps.js'
 import type { LabManifest } from './manifest.js'
 import { writeLabManifest } from './manifest.js'
 
@@ -140,11 +145,11 @@ export async function createLab(
 
     await mkdir(labDir(ctx.home, id), { recursive: true })
     await mkdir(targetDir, { recursive: true })
-    await mkdir(labStoreDir(ctx.home, id), { recursive: true })
     await mkdir(labLogDir(ctx.home, id), { recursive: true })
 
     if (homePatch)
       await writeFileAtomic(join(labHomeDir(ctx.home, id), 'cordis.patch.yml'), homePatch)
+    if (restore === undefined) await inheritModelConfiguration(sourceHome, labHomeDir(ctx.home, id))
     const copied: string[] = []
     if (restore === undefined) {
       for (const record of analysis.files) {
@@ -165,9 +170,18 @@ export async function createLab(
       )
     }
 
+    // The clone sits deeper than the source, so relative file:/link: deps
+    // (and the lockfile's normalized relative entries) would ENOENT. Bridge
+    // them with in-lab symlinks to the real dirs; best-effort — bridging
+    // failures never abort creation, and missing targets install-fail with
+    // the same error as without bridging. The restore path resolves against
+    // sourceDir too: snapshots were captured from that very profile.
+    await linkLocalDeps(sourceDir, targetDir).catch(() => {})
+
     const lockfileRecord = analysis.files.find((record) => record.role === 'lockfile')
     const manifest: LabManifest = {
       manifestVersion: 1,
+      packageStore: 'shared-copy-v1',
       id,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
@@ -194,6 +208,14 @@ export async function createLab(
       plan: [],
       retention: { cleanupMode: 'keep-on-failure' },
     }
+    if (!restore)
+      await seedInstallation(
+        ctx,
+        sourceDir,
+        targetDir,
+        manifest,
+        analysis.dependencies.some((dep) => dep.kind === 'file' || dep.kind === 'link'),
+      )
     await writeLabManifest(ctx.home, manifest, now)
 
     return { manifest, labProfileDir: targetDir, copied }

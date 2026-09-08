@@ -1,3 +1,4 @@
+import { createLabSessionGate } from './lab-session.js'
 /**
  * dsh-web-login — a cookie-session login gate for the dsh Web surface.
  *
@@ -269,7 +270,17 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   /**
    * Whether a request carries a live, still-authorized session cookie.
    */
+  const delegatedLabSession = createLabSessionGate(process.env, Date.now, (req) => {
+    const connection = ctx.get<{
+      requestRejection?: (request: IncomingMessage) => number | undefined
+    }>('connection')
+    return (
+      typeof connection?.requestRejection === 'function' &&
+      connection.requestRejection(req) === undefined
+    )
+  })
   const readPrincipal = (req: IncomingMessage): SessionPrincipal | undefined => {
+    if (delegatedLabSession(req)) return { provider: 'password', role: 'member', authzVersion: 0 }
     const record = sessions.get(readCookie(req.headers.cookie, cookieName))
     if (record === undefined) return undefined
     if (!options.githubEnabled) return record.principal

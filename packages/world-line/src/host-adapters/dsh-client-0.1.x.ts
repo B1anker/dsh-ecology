@@ -6,12 +6,14 @@
  *    `#root`; the URL drops the `?token=` query after session handoff.
  *  - Boot globals injected by the app shell: `window.__DSH_BOOT__`
  *    ({rev, entries[], batches[]} — the plugin client manifest) and
- *    `window.__DSH_BOOT_READY__` (object; presence only, no promise).
+ *    `window.__DSH_BOOT_READY__` is a deferred; its promise settles after injection.
+ *    It does not itself prove plugin activation. The supported frontend loader
+ *    asserts every client entry active before mounting the app; its failure
+ *    surface is `[data-dsh-boot]` with `Failed to load plugins`.
  *  - The settled shell shows: buttons "新会话" and "设置", a conversation
  *    tree `[role=tree]` (empty state "暂无会话"), and "工作区" /
  *    "选择一个工作区开始" workspace empty state, plus a beta-notice dialog
- *    that does not block these markers. No console errors, pageerrors, or
- *    failed /plugins requests in a healthy boot.
+ *    that does not block these markers. Runtime observations are recorded separately from core assertions.
  *
  * A healthy session produced zero console/page/request errors; these markers
  * are the `clientReady` signal consumed by the browser probe (§6 steps 4-6).
@@ -28,6 +30,3 @@ export const CLIENT_BOOT_GLOBALS = ['__DSH_BOOT__', '__DSH_BOOT_READY__'] as con
 
 /** Mount element that must hold children once the shell renders. */
 export const CLIENT_MOUNT_SELECTOR = '#root'
-
-/** Failed same-origin /plugins|/api|/sse requests count against the boot. */
-export const CLIENT_BAD_REQUEST_RE = /^\/(?:plugins|api|sse)/

@@ -10,7 +10,8 @@
  *   overridden (acceptance 9).
  * - Stale (holder dead, or from another host): refused unless the caller
  *   explicitly confirms by passing `breakStale: true`; the refusal message
- *   names the lock path so the user can also remove it by hand.
+ *   names the lock path so the user can also remove it by hand. Operation
+ *   locks may opt into recovery of strictly local, provably dead owners.
  *
  * Release deletes the file only when its token still matches (pid +
  * startedAt), so a release can never remove a successor's lock.
@@ -113,6 +114,7 @@ export async function acquireLock(options: {
   lockPath: string
   purpose: string
   breakStale?: boolean
+  recoverDeadLocal?: boolean
   now?: Date
 }): Promise<LockHandle> {
   const { lockPath, purpose, breakStale = false } = options
@@ -122,12 +124,31 @@ export async function acquireLock(options: {
   const existing = await readLock(lockPath)
   if (existing !== null) {
     const stale = isStaleLock(existing, now)
-    if (!stale || !breakStale) {
+    const recoverLocal =
+      options.recoverDeadLocal &&
+      existing.host === hostname() &&
+      Number.isInteger(existing.pid) &&
+      existing.pid > 0 &&
+      !isProcessAlive(existing.pid)
+    if (!stale || (!breakStale && !recoverLocal)) {
       throw new LockedError(refusalMessage(existing, lockPath, stale))
     }
     // Confirmed stale takeover: clear the old file, then race for a fresh
     // O_EXCL creation below (a loser re-reads whatever won).
-    await rm(lockPath, { force: true }).catch(() => {})
+    // Serialize takeovers so a second recovery cannot unlink the first winner.
+    const guardPath = `${lockPath}.recovery`
+    const guard = await open(guardPath, 'wx', 0o600).catch(() => {
+      throw new LockedError(`锁正在恢复，请稍后重试：${lockPath}`)
+    })
+    try {
+      const current = await readLock(lockPath)
+      if (current?.token !== existing.token)
+        throw new LockedError(`锁的持有者已变化，请稍后重试：${lockPath}`)
+      await rm(lockPath)
+    } finally {
+      await guard.close()
+      await rm(guardPath, { force: true })
+    }
   }
 
   const record: LockFileContent = {

@@ -2,6 +2,8 @@ import type { WorldEvent } from '../domain/insight-types.js'
 
 export interface Line {
   id: string
+  initialization?: 'clean'
+  completedAt?: string
   alias?: string
   parentId?: string
   snapshotId?: string
@@ -20,6 +22,9 @@ export const stateLabel = (state: string) =>
     stopped: '已停止',
     failed: '失败',
     passed: '验证已完成',
+    incomplete: '验证未完成',
+    review: '异常待确认',
+    awaiting_auth: '等待登录',
     applying: '准备中',
     created: '已创建',
     unreachable: '连接失效',
@@ -118,7 +123,32 @@ export function eventMarkers(
   return markers
 }
 // Vivid light-trail palette from the supplied reference. IDs keep colors stable.
-const linePalette = ['#ff2028', '#18c900', '#ffa600', '#f000bb', '#00dedf', '#3030ee']
+const linePalette = [
+  '#e83e52',
+  '#269b68',
+  '#ed940a',
+  '#d62cb7',
+  '#00b6c8',
+  '#5254e8',
+  '#bd693b',
+  '#8e4bdb',
+  '#008f91',
+  '#db587a',
+  '#587fdf',
+  '#99a51b',
+  '#c7511f',
+  '#ba4290',
+  '#43783e',
+  '#a17a24',
+  '#8364ed',
+  '#df6942',
+  '#208dc3',
+  '#cc4570',
+  '#3f9c87',
+  '#8d69a8',
+  '#b29317',
+  '#4969a5',
+]
 export function lineColor(id: string) {
   if (id === 'origin') return '#00dedf'
   let hash = 0

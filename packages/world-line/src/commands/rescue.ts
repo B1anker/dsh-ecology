@@ -2,7 +2,7 @@
  * Rescue command (WORLD-LINE-SPEC §3 diagnostic & rescue, Phase 4): boot a
  * temporary safe profile under `world-line/rescues/<id>/home` that loads
  * exactly the version-policy core bundle layer plus the user's explicit
- * `--allow` row ids from the official `cordis.patch.yml` (verbatim block
+ * `--allow bundle:<package>` choices plus row ids from `cordis.patch.yml` (verbatim block
  * copy — never rewritten, reordered, or disabled in place). The official
  * profile and its patch are only read (under the writer lock) and stay
  * byte-identical. `rescue stop` terminates the recorded process group and
@@ -15,6 +15,7 @@
 
 import { randomBytes } from 'node:crypto'
 import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 
 import type { CliContext } from '../context.js'
@@ -23,8 +24,11 @@ import { writeFileAtomic } from '../fs/atomic.js'
 import { acquireLock } from '../fs/lock.js'
 import { profileDir, profileLockPath } from '../fs/paths.js'
 import { dshBootArgs } from '../host-adapters/dsh-0.1.x.js'
-import { requireKnownHost } from '../lab/gate.js'
+import { requireKnownHost, requirePnpm } from '../lab/gate.js'
 import { launchDsh } from '../lab/launcher.js'
+import { runCaptured } from '../lab/runner.js'
+import { freezeLocalProfile } from '../lab/vendor.js'
+import { rescueBundles } from './rescue-bundles.js'
 
 /** Rescue id: `rescue-YYYYMMDDTHHMMSSZ-<8 hex>` (mirrors lab/snapshot ids). */
 export const RESCUE_ID_RE = /^rescue-\d{8}T\d{6}Z-[0-9a-f]{8}$/
@@ -125,6 +129,7 @@ function pidAlive(pid: number | null): boolean {
 export function filterPatchBlocks(
   text: string,
   allowed: string[],
+  keepDisabled = false,
 ): { patch: string; disabled: string[]; found: string[] } {
   const blocks: string[][] = []
   let current: string[] | null = null
@@ -150,7 +155,7 @@ export function filterPatchBlocks(
     if (id === null || !allowedSet.has(id)) continue
     if (disabledOf(block)) {
       disabled.push(id)
-      continue
+      if (!keepDisabled) continue
     }
     found.push(id)
     kept.push(...block)
@@ -165,6 +170,33 @@ async function readOfficialPatch(ctx: CliContext): Promise<string> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '[]\n'
     throw error
+  }
+}
+
+/** Return only selectable patch identities; never expose plugin configuration. */
+export async function runRescuePlugins(ctx: CliContext) {
+  const patch = await readOfficialPatch(ctx)
+  const ids = [
+    ...new Set(
+      patch.split(/\r?\n/).flatMap((line) => {
+        const match = /^-\s+id:\s*['"]?([^'"]+)['"]?\s*$/.exec(line)
+        return match?.[1] ? [match[1]] : []
+      }),
+    ),
+  ]
+  const filtered = filterPatchBlocks(patch, ids)
+  const { bundles } = await rescueBundles(profileDir(ctx.home, ctx.profileName), ctx.profileName)
+  return {
+    plugins: [
+      ...bundles.map((bundle) => ({
+        id: `bundle:${bundle.name}`,
+        label: bundle.name,
+        disabled: false,
+      })),
+      ...ids
+        .filter((id) => !bundles.some((b) => b.ids.includes(id)))
+        .map((id) => ({ id, disabled: filtered.disabled.includes(id) })),
+    ],
   }
 }
 
@@ -188,36 +220,100 @@ export async function runRescueStart(ctx: CliContext, allow: string[]): Promise<
   const id = newRescueId(ctx.now())
   const startedAt = ctx.now().toISOString()
 
-  const patchText = await readOfficialPatch(ctx)
-  const filtered = filterPatchBlocks(patchText, allow)
-  const unknown = allow.filter(
-    (name) => !filtered.found.includes(name) && !filtered.disabled.includes(name),
-  )
-  if (unknown.length > 0) {
-    throw new UsageError(
-      `rescue --allow: no patch row named ${JSON.stringify(unknown.join(', '))} in the ` +
-        `official cordis.patch.yml (available row ids are copied into rescue only when named)`,
-    )
-  }
-  // The official patch must not change under a concurrent writer while we
-  // read it; release before the (long) boot — the boot touches only the
-  // rescue home.
-  const lock = await acquireLock({
-    lockPath: profileLockPath(ctx.home, ctx.profileName),
-    purpose: `rescue start (read ${ctx.profileName} patch)`,
-    breakStale: ctx.breakStaleLock,
-    now: ctx.now(),
-  })
-  await lock.release()
-
   const base = rescueDir(ctx.home, id)
   const home = rescueHomeDir(ctx.home, id)
   const profileName = ctx.profileName
-  await mkdir(join(home, 'profiles', profileName), { recursive: true })
-  await mkdir(rescueLogDir(ctx.home, id), { recursive: true })
-  await writeFileAtomic(join(home, 'profiles', profileName, 'cordis.patch.yml'), filtered.patch, {
-    mode: 0o600,
+  const target = profileDir(home, profileName)
+  const lock = await acquireLock({
+    lockPath: profileLockPath(ctx.home, ctx.profileName),
+    purpose: `rescue start (read ${ctx.profileName} composition)`,
+    breakStale: ctx.breakStaleLock,
+    now: ctx.now(),
   })
+  let filtered: ReturnType<typeof filterPatchBlocks>
+  let selectedCount = 0
+  try {
+    const patchText = await readOfficialPatch(ctx)
+    // Core-only rescue must still work when the optional plugin installation is broken.
+    const catalog = allow.some((name) => name.startsWith('bundle:'))
+      ? await rescueBundles(profileDir(ctx.home, profileName), profileName)
+      : { core: [], bundles: [] }
+    const selected = catalog.bundles.filter((b) => allow.includes(`bundle:${b.name}`))
+    selectedCount = selected.length
+    const explicit = allow.filter((name) => !name.startsWith('bundle:'))
+    const requested = [...new Set([...explicit, ...selected.flatMap((b) => b.ids)])]
+    filtered = filterPatchBlocks(patchText, requested, true)
+    const unknown = allow.filter((name) =>
+      name.startsWith('bundle:')
+        ? !selected.some((b) => `bundle:${b.name}` === name)
+        : !filtered.found.includes(name) && !filtered.disabled.includes(name),
+    )
+    if (unknown.length)
+      throw new UsageError(
+        `rescue --allow: no patch row or bundle named ${JSON.stringify(unknown.join(', '))}`,
+      )
+    await mkdir(target, { recursive: true })
+    await mkdir(rescueLogDir(ctx.home, id), { recursive: true })
+    await writeFileAtomic(join(target, 'cordis.patch.yml'), filtered.patch, { mode: 0o600 })
+    if (selected.length) {
+      await writeFileAtomic(
+        join(target, 'package.json'),
+        JSON.stringify({
+          name: 'world-line-rescue',
+          private: true,
+          dependencies: Object.fromEntries(selected.map((b) => [b.name, b.spec])),
+          dsh: { profile: { bundles: [...catalog.core, ...selected.map((b) => b.name)] } },
+        }),
+        { mode: 0o600 },
+      )
+      await freezeLocalProfile(
+        target,
+        profileDir(ctx.home, profileName),
+        join(base, 'local-packages'),
+      )
+      const frozen = JSON.parse(await readFile(join(target, 'package.json'), 'utf8'))
+      for (const spec of Object.values(frozen.dependencies) as string[]) {
+        if (!spec.startsWith('file:')) continue
+        const packagePath = join(spec.slice(5), 'package.json')
+        const pkg = JSON.parse(await readFile(packagePath, 'utf8'))
+        const patch = pkg.dsh?.bundle?.patch
+        if (Array.isArray(pkg.files) && typeof patch === 'string' && !pkg.files.includes(patch)) {
+          pkg.files.push(patch)
+          await writeFileAtomic(packagePath, JSON.stringify(pkg, null, 2))
+        }
+      }
+    }
+  } catch (error) {
+    await rm(base, { recursive: true, force: true })
+    throw error
+  } finally {
+    await lock.release()
+  }
+  if (selectedCount) {
+    try {
+      const install = await runCaptured(
+        requirePnpm(ctx.env).path,
+        [
+          'install',
+          '--prod',
+          '--ignore-scripts',
+          '--config.package-import-method=copy',
+          '--store-dir',
+          join(base, 'pnpm-store'),
+        ],
+        {
+          cwd: target,
+          env: { ...(ctx.experimentEnv ?? ctx.env), DSH_HOME: home },
+          timeoutMs: 180000,
+        },
+      )
+      if (install.exitCode !== 0 || install.timedOut || install.spawnError)
+        throw new UsageError('救援插件安装失败，请检查插件依赖是否可用')
+    } catch (error) {
+      await rm(base, { recursive: true, force: true })
+      throw error
+    }
+  }
 
   const launch = await launchDsh({
     dshBinary: host.binary.path,
@@ -282,6 +378,16 @@ export async function runRescueStart(ctx: CliContext, allow: string[]): Promise<
   await writeFileAtomic(rescueProbePath(ctx.home, id), `${JSON.stringify({ probes }, null, 2)}\n`, {
     mode: 0o600,
   })
+  // Private runtime capability, separate from public records and diagnostic reports.
+  await writeFileAtomic(
+    join(base, 'entry.json'),
+    JSON.stringify({
+      url: launch.handle.url,
+      hostname: hostname(),
+      pid: launch.handle.pid,
+    }),
+    { mode: 0o600 },
+  )
   const record: RescueRecord = {
     formatVersion: RESCUE_FORMAT_VERSION,
     kind: 'rescue',
@@ -375,4 +481,33 @@ export async function rescueExists(home: string, id: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/** Return an entry capability only through an authenticated, explicit Web action. */
+export async function runRescueEnter(
+  ctx: CliContext,
+  id: string,
+): Promise<{ id: string; url: string }> {
+  if (!RESCUE_ID_RE.test(id)) throw new UsageError('无效救援实例')
+  const record = await readRescueRecord(ctx.home, id)
+  if (record.profileName !== ctx.profileName) throw new UsageError('救援实例不属于当前 profile')
+  if (record.state !== 'running' || !pidAlive(record.pid))
+    throw new UsageError('救援实例已停止，请重新启动')
+  const entry = await readFile(join(rescueDir(ctx.home, id), 'entry.json'), 'utf8')
+    .then((text) => JSON.parse(text) as { url: string; hostname: string; pid: number })
+    .catch(() => null)
+  if (!entry) throw new UsageError('旧救援实例未保存进入凭据，请在维护面板停止后重新启动救援')
+  const url = new URL(entry.url)
+  if (
+    entry.hostname !== hostname() ||
+    entry.pid !== record.pid ||
+    url.protocol !== 'http:' ||
+    url.hostname !== '127.0.0.1' ||
+    Number(url.port) !== record.port ||
+    url.pathname !== '/' ||
+    url.username ||
+    url.password
+  )
+    throw new UsageError('救援实例进入地址无效，请重新启动救援')
+  return { id, url: entry.url }
 }

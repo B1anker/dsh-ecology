@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { constants } from 'node:fs'
 import {
   cp,
   lstat,
@@ -29,6 +30,7 @@ import { acquireLock } from '../fs/lock.js'
 import { profileDir, profileLockPath } from '../fs/paths.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
 import { resolveLabId } from '../lab/aliases.js'
+import { withPackageCache } from '../lab/cache-maintenance.js'
 import { createLab, WHITELIST_FILE_NAMES } from '../lab/create.js'
 import { requireKnownHost, requirePnpm } from '../lab/gate.js'
 import { inheritHome, rebaseHomePaths } from '../lab/home-inheritance.js'
@@ -37,6 +39,7 @@ import { localSourceHash } from '../lab/local-source.js'
 import { readLabManifest } from '../lab/manifest.js'
 import { type LabRunDeps, runLabTransaction } from '../lab/run.js'
 import { runCaptured } from '../lab/runner.js'
+import { labStorePolicy } from '../lab/store.js'
 import { transactionalReplaceFiles } from '../lab/swap.js'
 import { lineContext } from './insights.js'
 
@@ -275,7 +278,7 @@ const publicCandidate = ({
   committed,
   preSnapshot,
 })
-export async function prepareMerge(
+async function prepareMergeInternal(
   ctx: CliContext,
   input: { id: string; revision: string; plugins: string[]; includeConfig: boolean },
   deps?: { run?: Partial<LabRunDeps>; install?: typeof runCaptured },
@@ -323,6 +326,7 @@ export async function prepareMerge(
             digest(`${field}:${name}`).slice(0, 16) + suffix,
           )
           await cp(classified.target, destination, {
+            mode: constants.COPYFILE_FICLONE,
             recursive: true,
             filter: (entry) => !['node_modules', '.git', '.env'].includes(basename(entry)),
           })
@@ -379,22 +383,16 @@ export async function prepareMerge(
         ),
       )
     else await rm(join(dir, 'cordis.patch.yml'), { force: true })
+    const store = labStorePolicy(ctx.home, created.manifest)
     const env = {
-      ...(ctx.experimentEnv ?? ctx.env),
+      ...store.environment(ctx.experimentEnv ?? ctx.env),
       DSH_HOME: home,
       WORLD_LINE_LAB: labId,
       WORLD_LINE_MANAGER_HOME: ctx.home,
     }
     const install = await (deps?.install ?? runCaptured)(
       pnpm.path,
-      [
-        'install',
-        '--prod',
-        '--ignore-scripts',
-        '--no-frozen-lockfile',
-        '--store-dir',
-        join(root, 'store'),
-      ],
+      ['install', '--prod', '--ignore-scripts', '--no-frozen-lockfile', ...store.flags],
       { cwd: dir, env, timeoutMs: 180000 },
     )
     if (install.exitCode !== 0 || install.spawnError || install.timedOut)
@@ -574,4 +572,8 @@ export async function commitMerge(
   } finally {
     await serviceLock.release()
   }
+}
+
+export async function prepareMerge(...args: Parameters<typeof prepareMergeInternal>) {
+  return withPackageCache(args[0].home, () => prepareMergeInternal(...args))
 }

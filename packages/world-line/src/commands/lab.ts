@@ -1,3 +1,7 @@
+import { withOperations } from '../fs/operation.js'
+import { sourceContext } from '../lab/source.js'
+import { readSnapshotManifest } from '../vault/manifests.js'
+import { runSnapshotCreate } from './snapshot.js'
 /**
  * `lab` command implementations (WORLD-LINE-SPEC §3, Phase 2). Every
  * candidate verb runs one full transaction against a fresh isolated lab of
@@ -7,20 +11,21 @@
  */
 
 import { readFile, stat } from 'node:fs/promises'
-
+import { join } from 'node:path'
 import type { CliContext } from '../context.js'
 import { parsePatchListText } from '../domain/composition.js'
 import { FileError, UsageError } from '../domain/errors.js'
 import type { ProbeResult, ProbeSummary } from '../domain/probe.js'
 import { summarizeProbes } from '../domain/probe.js'
 import { writeFileAtomic } from '../fs/atomic.js'
+import { acquireLock } from '../fs/lock.js'
 import { destroyLab, reapExpiredLabs } from '../lab/cleanup.js'
 import { createLab } from '../lab/create.js'
 import { defaultLabId } from '../lab/defaults.js'
 import { requireKnownHost } from '../lab/gate.js'
 import { labDir, labExists, labProbePath, listLabs } from '../lab/layout.js'
 import type { LabManifest, LabPlanRecord } from '../lab/manifest.js'
-import { readLabManifest } from '../lab/manifest.js'
+import { readLabManifest, writeLabManifest } from '../lab/manifest.js'
 import type { CandidateSpec } from '../lab/plans.js'
 import { buildPlan, parseCandidateSpec } from '../lab/plans.js'
 import type { LabPromoteResult } from '../lab/promote.js'
@@ -33,6 +38,13 @@ type LabVerb = 'add' | 'update' | 'remove' | 'config-apply'
 
 /** Shared transaction options the CLI surface exposes. */
 export interface LabVerbOptions {
+  captureBaseline?: boolean
+  /** Manager-scoped interactive branch to clone and later merge back into. */
+  sourceId?: string
+  onLabCreated?(id: string): void
+  onTransaction?(id: string): void
+  clientProbes?: boolean
+  interactive?: boolean
   /** Keep a successful lab (default: clean up on success). */
   keep?: boolean
   /** Explicitly allow package build scripts (default --ignore-scripts). */
@@ -43,6 +55,9 @@ export interface LabVerbOptions {
   acceptInconclusive?: boolean
   /** Boot the official profile after promote and require a client probe. */
   restart?: boolean
+  /** Web-only progress hook: receives each probe as the run records it. */
+  onPhase?: (phase: string) => void
+  onProbe?: (probe: ProbeResult) => void
 }
 
 export interface LabActionResult {
@@ -70,6 +85,7 @@ export interface LabPromoteCommandResult {
   afterSnapshot: string | null
   appliedFiles: string[]
   restartVerified: boolean
+  restartPendingReason?: string
   lastKnownGood: string | null
   journalId: string
 }
@@ -78,12 +94,22 @@ export interface LabPromoteCommandResult {
 export async function runLabPromoteCommand(
   ctx: CliContext,
   labId: string,
-  options: { acceptInconclusive?: boolean; restart?: boolean },
+  options: {
+    acceptReview?: boolean
+    acceptInconclusive?: boolean
+    restart?: boolean
+    /** Web-only progress hook: fired at promote phase boundaries. */
+    onPhase?: (phase: string) => void
+    onTransaction?: (id: string) => void
+  },
 ): Promise<LabPromoteCommandResult> {
   const result = await runLabPromote(ctx, {
     labId,
+    acceptReview: options.acceptReview,
     acceptInconclusive: options.acceptInconclusive,
     restart: options.restart,
+    ...(options.onTransaction !== undefined ? { onTransaction: options.onTransaction } : {}),
+    ...(options.onPhase !== undefined ? { onPhase: options.onPhase } : {}),
   })
   return {
     profileName: ctx.profileName,
@@ -93,6 +119,7 @@ export async function runLabPromoteCommand(
     afterSnapshot: result.afterSnapshot,
     appliedFiles: result.appliedFiles,
     restartVerified: result.restartVerified,
+    ...(result.restartPendingReason ? { restartPendingReason: result.restartPendingReason } : {}),
     lastKnownGood: result.lastKnownGood,
     journalId: result.journalId,
   }
@@ -141,9 +168,43 @@ async function runVerb(
   specText: string | undefined,
   overlayText: string | undefined,
 ): Promise<LabActionResult> {
+  const source = await sourceContext(ctx, options.sourceId)
+  return withOperations(
+    [source.home],
+    ctx.profileName,
+    () => runVerbUnlocked(ctx, options, verb, spec, specText, overlayText),
+    ctx.breakStaleLock,
+  )
+}
+
+async function runVerbUnlocked(
+  ctx: CliContext,
+  options: LabVerbOptions,
+  verb: LabVerb,
+  spec: CandidateSpec | undefined,
+  specText: string | undefined,
+  overlayText: string | undefined,
+): Promise<LabActionResult> {
   const host = requireHost(ctx)
-  const created = await createLab(ctx, host, ctx.profileName)
+  const source = await sourceContext(ctx, options.sourceId)
+  const baseline = options.captureBaseline
+    ? await runSnapshotCreate(source, { label: `验证前 · ${verb}` })
+    : undefined
+  const created = await createLab(ctx, host, ctx.profileName, {
+    sourceHome: source.home,
+    ...(options.sourceId && options.sourceId !== 'origin' ? { parentLabId: options.sourceId } : {}),
+  })
   const labId = created.manifest.id
+  options.onLabCreated?.(labId)
+  if (baseline) {
+    created.manifest.source.baselineSnapshotId = baseline.id
+    await writeLabManifest(ctx.home, created.manifest, ctx.now())
+    if (
+      (await readSnapshotManifest(source.home, baseline.id)).profile.receipt.tree !==
+      created.manifest.source.receipt
+    )
+      throw new UsageError('来源在保存基线与复制之间发生变化，请重新创建验证实验')
+  }
   let overlayPath: string | undefined
   if (overlayText !== undefined) {
     overlayPath = `${labDir(ctx.home, labId)}/config-apply.yml`
@@ -164,10 +225,13 @@ async function runVerb(
     plan,
     allowScripts: options.allowScripts,
     keep: promoteWanted ? true : options.keep,
-    ...(promoteWanted ? { clientProbes: true } : {}),
+    clientProbes: promoteWanted || options.clientProbes === true,
+    interactive: options.interactive,
     ...(promoteWanted && options.acceptInconclusive === true
       ? { acceptClientInconclusive: true }
       : {}),
+    onPhase: options.onPhase,
+    ...(options.onProbe !== undefined ? { onProbe: options.onProbe } : {}),
   })
   const summary = summarizeProbes(outcome.probes)
   let kept = !outcome.deleted
@@ -183,6 +247,7 @@ async function runVerb(
     // profile. Refusals (gate/conflicts) throw and keep the lab for review.
     const promoted = await runLabPromote(ctx, {
       labId,
+      ...(options.onTransaction !== undefined ? { onTransaction: options.onTransaction } : {}),
       acceptInconclusive: options.acceptInconclusive,
       restart: options.restart,
     })
@@ -368,4 +433,52 @@ export function renderLabVerb(result: LabActionResult): string {
     lines.push(`journal   ${promote.journalId}`)
   }
   return `${lines.join('\n')}\n`
+}
+
+/** Reverify the retained installation; never re-resolve registry specs or promote. */
+export async function runLabVerify(
+  ctx: CliContext,
+  id: string,
+  options: {
+    interactive?: boolean
+    onPhase?: (phase: string) => void
+    onProbe?: (probe: ProbeResult) => void
+  } = {},
+) {
+  await readLabManifest(ctx.home, id)
+  const host = requireHost(ctx)
+  const lock = await acquireLock({
+    lockPath: join(labDir(ctx.home, id), '.verify.lock'),
+    purpose: 'reverify retained lab',
+    breakStale: ctx.breakStaleLock,
+    now: ctx.now(),
+  })
+  try {
+    const manifest = await readLabManifest(ctx.home, id)
+    if (manifest.hostExperiment) throw new UsageError('请在版本矩阵中重新验证此实验')
+    if (manifest.source.profileName !== ctx.profileName)
+      throw new UsageError('实验不属于当前 profile')
+    if (manifest.purpose === 'mirror') throw new UsageError('请选择验证实验，不能重验运行中的镜像')
+    const outcome = await runLabTransaction({
+      ctx,
+      host,
+      labId: id,
+      plan: manifest.plan,
+      verifyOnly: true,
+      clientProbes: true,
+      keep: true,
+      interactive: options.interactive,
+      onProbe: options.onProbe,
+      onPhase: options.onPhase,
+    })
+    return {
+      labId: id,
+      ok: outcome.ok,
+      kept: true,
+      deleted: false,
+      probeSummary: summarizeProbes(outcome.probes),
+    }
+  } finally {
+    await lock.release()
+  }
 }

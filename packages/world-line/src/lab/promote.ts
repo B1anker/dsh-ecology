@@ -1,3 +1,17 @@
+import { JSON_SCHEMA, load } from 'js-yaml'
+import { withOperations } from '../fs/operation.js'
+import { rebaseHomePaths } from './home-inheritance.js'
+import { labHomeDir } from './layout.js'
+import { sourceContext } from './source.js'
+import {
+  type PromotionTransaction,
+  prepareTransaction,
+  rollbackTransactionFiles,
+  saveTransaction,
+  settleTransaction,
+  type TransactionPhase,
+} from './transaction.js'
+
 /**
  * Promotion (WORLD-LINE-SPEC §7, Phase 3): the only sanctioned writer of the
  * official profile. Sequence per spec:
@@ -9,16 +23,17 @@
  *   3. auto `pre-promote` snapshot (its own writer lock),
  *   4. re-check receipts and swap the lab's verified whitelist files into the
  *      official profile (same-filesystem staging + fsync + rename dance),
- *   5. journal `committed` + `after` snapshot,
- *   6. optional `--restart`: boot the official profile and require a full
- *      client probe — pass marks the after-snapshot lastKnownGood; any
- *      failure rolls the managed files back to the pre-promote snapshot
- *      contents (journal `rolled-back`). Default: no restart.
+ *   5. optional --restart: install/boot and require a full client probe,
+ *   6. capture the final after-snapshot, durably decide commit, then reconcile
+ *      the stable point and idempotent journal. Before the decision, failures
+ *      restore exact private backups when hashes permit. Unknown runtime/file
+ *      states require explicit recovery; they are never reported as rolled back.
  *
  * Promote never copies lab runtime, logs, cookies, tokens or the lab home.
  */
 
 import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { runSnapshotCreate } from '../commands/snapshot.js'
 import type { CliContext } from '../context.js'
 import { UsageError, VerificationError } from '../domain/errors.js'
@@ -28,41 +43,73 @@ import { analyzeProfile } from '../domain/snapshot.js'
 import { acquireLock } from '../fs/lock.js'
 import { profileDir, profileLockPath } from '../fs/paths.js'
 import { adapterDsh01x, dshBootArgs } from '../host-adapters/dsh-0.1.x.js'
-import { readSnapshotManifest } from '../vault/manifests.js'
-import { readObject } from '../vault/objects.js'
-import { noteLastKnownGood } from '../vault/state.js'
 import { runClientProbe } from './browser.js'
 import { WHITELIST_FILE_NAMES } from './create.js'
 import type { KnownHost } from './gate.js'
 import { requireKnownHost } from './gate.js'
-import { appendJournal, newJournalId } from './journal.js'
+import { newJournalId } from './journal.js'
 import { launchDsh } from './launcher.js'
-import { labExists, labProbePath, labProfileDir } from './layout.js'
+import { labExists, labLogDir, labProbePath, labProfileDir } from './layout.js'
 import type { LabManifest } from './manifest.js'
 import { readLabManifest } from './manifest.js'
 import { runCaptured } from './runner.js'
-import { existingManagedFiles, transactionalReplaceFiles } from './swap.js'
+import { transactionalReplaceFiles } from './swap.js'
 
 export type ClientGate = 'pass' | 'fail' | 'inconclusive'
 
 /** Classify lab probe records for the promotion client gate (§6). */
 export function classifyClientGate(probes: readonly ProbeResult[]): ClientGate {
+  // v2 has a single independently evidenced browser check and explicit coverage.
+  if (probes.some((p) => p.check === 'plugin-function')) {
+    const required = probes.filter((p) => p.required)
+    if (required.some((p) => p.status === 'fail')) return 'fail'
+    return required.some((p) => p.check === 'browser-boot') &&
+      required.every((p) => p.status === 'pass')
+      ? 'pass'
+      : 'inconclusive'
+  }
   const relevant = probes.filter((entry) =>
     ['browser-boot', 'core-contract', 'candidate-contract'].includes(entry.check),
   )
   if (relevant.length === 0) return 'inconclusive'
   if (relevant.some((entry) => entry.status === 'fail')) return 'fail'
-  const boot = relevant.find((entry) => entry.check === 'browser-boot')
-  if (boot?.status === 'pass') return 'pass'
+  if (
+    ['browser-boot', 'core-contract', 'candidate-contract'].every((check) =>
+      relevant.some((entry) => entry.check === check && entry.status === 'pass'),
+    ) &&
+    relevant.every((entry) => entry.status === 'pass')
+  )
+    return 'pass'
   return 'inconclusive'
 }
 
+/** Only unknown-impact observations can be accepted, never missing core proof. */
+export function canAcceptReview(probes: readonly ProbeResult[]): boolean {
+  return (
+    ['browser-boot', 'plugin-function', 'client-observations'].every((check) =>
+      probes.some((p) => p.check === check),
+    ) &&
+    probes.some((p) => p.check === 'client-observations' && p.status === 'inconclusive') &&
+    probes.every(
+      (p) =>
+        !p.required ||
+        p.status === 'pass' ||
+        (p.check === 'client-observations' && p.status === 'inconclusive'),
+    )
+  )
+}
+
 export interface LabPromoteOptions {
+  /** Explicit per-run user review; never set by automatic verification flows. */
+  acceptReview?: boolean
   labId: string
   /** Accept inconclusive client evidence (never `fail`). */
   acceptInconclusive?: boolean
   /** Boot the official profile after the swap and require a full client probe. */
   restart?: boolean
+  /** Progress hook: fired at phase boundaries (web job ladder; ids are stable). */
+  onPhase?: (phase: string) => void
+  onTransaction?: (id: string) => void
   /** Injected launcher/client probe/installer for unit tests. */
   deps?: {
     launch?: typeof launchDsh
@@ -78,6 +125,7 @@ export interface LabPromoteResult {
   afterSnapshot: string | null
   appliedFiles: string[]
   restartVerified: boolean
+  restartPendingReason?: string
   lastKnownGood: string | null
   journalId: string
 }
@@ -111,36 +159,6 @@ function labSourceOf(labProfileDirPath: string) {
   }
 }
 
-/**
- * Roll the managed files of `officialDir` back to a snapshot. Names restored
- * come from the snapshot's stored whitelist objects; managed files the
- * snapshot never had (e.g. a lockfile the promote introduced) are deleted;
- * whitelist files whose content the snapshot skipped (secret policy) are left
- * alone. Returns the names the swap touched.
- */
-async function rollbackManagedFiles(
-  home: string,
-  snapshotId: string,
-  dir: string,
-): Promise<string[]> {
-  const manifest = await readSnapshotManifest(home, snapshotId)
-  const whitelist = new Set<string>(WHITELIST_FILE_NAMES)
-  const snapshotRecords = manifest.files.filter(
-    (file) => whitelist.has(file.name) && file.object !== null && file.object !== undefined,
-  )
-  const snapshotNames = new Set(snapshotRecords.map((file) => file.name))
-  const current = await existingManagedFiles(dir, WHITELIST_FILE_NAMES)
-  const names = [...snapshotNames, ...current.filter((name) => !snapshotNames.has(name))]
-  if (names.length === 0) return []
-  const sourceOf = async (name: string): Promise<Buffer | string | null> => {
-    const record = snapshotRecords.find((file) => file.name === name)
-    if (record === undefined || record.object === null) return null
-    return await readObject(home, record.object)
-  }
-  const swap = await transactionalReplaceFiles(dir, names, sourceOf)
-  return swap.applied
-}
-
 function analyzeProfileNow(ctx: CliContext) {
   return analyzeProfile({
     home: ctx.home,
@@ -153,6 +171,19 @@ export async function runLabPromote(
   ctx: CliContext,
   options: LabPromoteOptions,
 ): Promise<LabPromoteResult> {
+  const manifest = await readLabManifest(ctx.home, options.labId)
+  const source = await sourceContext(ctx, manifest.source.parentLabId)
+  return withOperations(
+    [source.home, labHomeDir(ctx.home, options.labId)],
+    ctx.profileName,
+    () => runLabPromoteUnlocked(ctx, options),
+    ctx.breakStaleLock,
+  )
+}
+async function runLabPromoteUnlocked(
+  ctx: CliContext,
+  options: LabPromoteOptions,
+): Promise<LabPromoteResult> {
   const { labId } = options
   if (!(await labExists(ctx.home, labId))) {
     throw new UsageError(`no such lab ${labId} under this home`)
@@ -161,6 +192,8 @@ export async function runLabPromote(
   const host: KnownHost = requireKnownHost(ctx)
 
   const manifest: LabManifest = await readLabManifest(ctx.home, labId)
+  if (manifest.hostExperiment)
+    throw new UsageError('版本矩阵实验不能直接合入；请先升级宿主适配认证并重新验证')
   if (manifest.purpose === 'mirror')
     throw new UsageError(
       'interactive mirrors cannot be promoted; use lab add/config verification instead',
@@ -173,13 +206,25 @@ export async function runLabPromote(
         `promoting requires --profile ${labProfileName}`,
     )
   }
-  if (manifest.state !== 'passed') {
-    throw new UsageError(`lab ${labId} is ${manifest.state} — only a passed lab can be promoted`)
+  options.onPhase?.('gate')
+  const probes = await readLabProbeProbes(ctx.home, labId)
+  const reviewAccepted = options.acceptReview === true && canAcceptReview(probes)
+  if (manifest.state !== 'passed' && !(manifest.state === 'failed' && reviewAccepted)) {
+    throw new UsageError(`实验 ${labId} 尚未通过必要检查，请先补充验证。`)
   }
 
-  // Client gate (§6: hostReady alone is not enough; no reliable signal blocks
-  // promotion unless accepted; a client failure is never overridable).
-  const probes = await readLabProbeProbes(ctx.home, labId)
+  if (probes.some((p) => p.check === 'plugin-function')) {
+    const evidence = JSON.parse(await readFile(labProbePath(ctx.home, labId), 'utf8'))
+    const candidate = await analyzeProfileNow({ ...ctx, home: labHomeDir(ctx.home, labId) })
+    if (
+      evidence.policyVersion !== 2 ||
+      evidence.candidateReceipt !== candidate.receipt.tree ||
+      evidence.sourceReceipt !== manifest.source.receipt ||
+      evidence.hostVersion !== host.raw
+    ) {
+      throw new VerificationError('实验内容、来源或宿主版本与验证记录不一致，请重新验证后合入。')
+    }
+  }
   const clientGate = classifyClientGate(probes)
   if (clientGate === 'fail') {
     throw new VerificationError(
@@ -187,15 +232,32 @@ export async function runLabPromote(
         '(--accept-inconclusive never overrides a client failure)',
     )
   }
-  if (clientGate === 'inconclusive' && options.acceptInconclusive !== true) {
+  if (clientGate === 'inconclusive' && !reviewAccepted) {
     throw new VerificationError(
-      `lab ${labId} has no reliable client-ready evidence — refusing to promote; ` +
-        're-run the lab with browser probes or pass --accept-inconclusive',
+      `实验 ${labId} 缺少完整的浏览器验证，尚不能合入来源环境。请点击「登录并补做浏览器验证」，通过后再合入。`,
     )
   }
 
+  const storageHome = ctx.home
+  ctx = await sourceContext(ctx, manifest.source.parentLabId)
   const officialDir = profileDir(ctx.home, ctx.profileName)
-  const labProfileDirPath = labProfileDir(ctx.home, labId, labProfileName)
+  const labProfileDirPath = labProfileDir(storageHome, labId, labProfileName)
+  const homeConfig = async (home: string) => {
+    const text = await readFile(join(home, 'cordis.patch.yml'), 'utf8').catch((e) => {
+      if (e.code === 'ENOENT') return null
+      throw e
+    })
+    return text === null
+      ? null
+      : rebaseHomePaths(load(text, { schema: JSON_SCHEMA }), home, ctx.home)
+  }
+  if (
+    JSON.stringify(await homeConfig(ctx.home)) !==
+    JSON.stringify(await homeConfig(labHomeDir(storageHome, labId)))
+  )
+    throw new UsageError(
+      '实验包含不同的 home 全局配置。请在「排障与交付」准备完整部署并切换；profile 合入不能覆盖其他 profile 的全局配置。',
+    )
   const journalId = newJournalId(ctx.now(), journalKind)
 
   // Receipt conflict check #1 under the writer lock.
@@ -218,49 +280,92 @@ export async function runLabPromote(
   }
 
   // Auto pre-promote snapshot (its own writer lock inside runSnapshotCreate).
+  options.onPhase?.('pre-snapshot')
   const pre = await runSnapshotCreate(ctx, { label: `pre-promote: lab ${labId}` })
 
-  // Receipt re-check + atomic swap under lock #2. The swap itself is the
-  // only critical section: the post-promote snapshot, restart verification
-  // and any rollback run outside it (each snapshot acquires its own writer
-  // lock, which this process must not hold twice).
-  const lock2 = await acquireLock({
-    lockPath: profileLockPath(ctx.home, ctx.profileName),
-    purpose: `promote lab ${labId} (swap)`,
-    breakStale: ctx.breakStaleLock,
-    now: ctx.now(),
-  })
-  let applied: string[] = []
-  let afterIdRef: string | null = null
-  try {
-    const current = await analyzeProfileNow(ctx)
-    if (current.receipt.tree !== manifest.source.receipt) {
-      throw new UsageError(
-        'official profile changed between the pre-promote snapshot and the swap — ' +
-          'promotion aborted (nothing was written)',
-      )
-    }
-    const swap = await transactionalReplaceFiles(
-      officialDir,
-      WHITELIST_FILE_NAMES,
-      labSourceOf(labProfileDirPath),
-    )
-    applied = swap.applied
-  } finally {
-    await lock2.release()
+  const record: PromotionTransaction = {
+    version: 1,
+    id: journalId,
+    profileName: ctx.profileName,
+    managerHome: storageHome,
+    ...(manifest.source.parentLabId && manifest.source.parentLabId !== 'origin'
+      ? { parentLabId: manifest.source.parentLabId }
+      : {}),
+    labId,
+    phase: 'prepared',
+    preSnapshot: pre.id,
+    afterSnapshot: null,
+    files: [],
+    entry: {
+      id: journalId,
+      kind: journalKind,
+      createdAt: ctx.now().toISOString(),
+      profileName: ctx.profileName,
+      labId,
+      preSnapshot: pre.id,
+      afterSnapshot: null,
+      outcome: 'rolled-back',
+      receiptBefore: manifest.source.receipt,
+      receiptAfter: manifest.source.receipt,
+      files: [...WHITELIST_FILE_NAMES],
+      lastKnownGood: false,
+      ...(reviewAccepted
+        ? {
+            reviewAcceptance: {
+              acceptedAt: ctx.now().toISOString(),
+              policyVersion: 2 as const,
+              unresolvedChecks: ['client-observations'],
+              labId,
+            },
+          }
+        : {}),
+      ...(journalKind === 'restore' && manifest.source.kind === 'restore'
+        ? { snapshotId: manifest.source.snapshotId }
+        : {}),
+    },
   }
+  const checkpoint = async (phase: TransactionPhase) => {
+    record.phase = phase
+    await saveTransaction(ctx.home, record)
+    options.onPhase?.(phase)
+  }
+  let prepared = false
+  let commitDecisionStarted = false
+  let runtimeMayBeActive = false
   try {
-    const afterResult = await runSnapshotCreate(ctx, { label: `post-promote: lab ${labId}` })
-    const afterId = afterResult.id
-    afterIdRef = afterId
-    const receiptAfter = (await analyzeProfileNow(ctx)).receipt.tree
-    let lkgId: string | null = null
+    const lock2 = await acquireLock({
+      lockPath: profileLockPath(ctx.home, ctx.profileName),
+      purpose: `promote lab ${labId} (swap)`,
+      breakStale: ctx.breakStaleLock,
+      now: ctx.now(),
+    })
+    try {
+      const current = await analyzeProfileNow(ctx)
+      if (current.receipt.tree !== manifest.source.receipt)
+        throw new UsageError(
+          'official profile changed between the pre-promote snapshot and the swap — promotion aborted (nothing was written)',
+        )
+      await prepareTransaction(ctx.home, record, labProfileDirPath)
+      prepared = true
+      options.onTransaction?.(record.id)
+      await checkpoint('swapping')
+      options.onPhase?.('swap')
+      await transactionalReplaceFiles(
+        officialDir,
+        WHITELIST_FILE_NAMES,
+        labSourceOf(labProfileDirPath),
+      )
+      await checkpoint('swapped')
+    } finally {
+      await lock2.release()
+    }
     let restartVerified = false
-
     if (options.restart === true) {
       // --restart: install the candidate's dependencies into the official
       // profile (derived node_modules — never copied from the lab), boot the
       // official profile, then require a full client probe.
+      await checkpoint('installing')
+      options.onPhase?.('restart-verify')
       const installImpl = options.deps?.install ?? runCaptured
       for (const step of manifest.plan) {
         if (step.action !== 'add' && step.action !== 'update' && step.action !== 'remove') {
@@ -271,6 +376,7 @@ export async function runLabPromote(
         if (step.action !== 'remove' && step.spec !== undefined) argv.push(step.spec)
         if (step.action === 'remove' && step.id !== undefined) argv.push(step.id)
         if (step.action !== 'remove') argv.push('--ignore-scripts')
+        runtimeMayBeActive = true
         const installOutcome = await installImpl(
           host.binary.path,
           ['plugin', '--profile', ctx.profileName, ...argv],
@@ -280,6 +386,7 @@ export async function runLabPromote(
             timeoutMs: 300_000,
           },
         )
+        runtimeMayBeActive = false
         if (installOutcome.exitCode !== 0 || installOutcome.spawnError !== null) {
           const tail = (installOutcome.stderr || installOutcome.stdout || '')
             .trim()
@@ -293,8 +400,10 @@ export async function runLabPromote(
           )
         }
       }
+      await checkpoint('verifying')
       const launchImpl = options.deps?.launch ?? launchDsh
       const clientProbeImpl = options.deps?.clientProbe ?? runClientProbe
+      runtimeMayBeActive = true
       const launchResult = await launchImpl({
         dshBinary: host.binary.path,
         args: dshBootArgs(ctx.profileName, 0),
@@ -303,6 +412,7 @@ export async function runLabPromote(
         readyTimeoutMs: 120_000,
       })
       if (launchResult.kind !== 'ready' || launchResult.handle === undefined) {
+        runtimeMayBeActive = false
         throw new Error(
           `official profile did not boot after promote — rolling back ` +
             `(host: ${redactText(launchResult.detail)})`,
@@ -310,83 +420,103 @@ export async function runLabPromote(
       }
       let probeOutcome
       try {
-        probeOutcome = await clientProbeImpl({ url: launchResult.handle.url })
+        probeOutcome = await clientProbeImpl({
+          url: launchResult.handle.url,
+          artifactRoot: join(labLogDir(storageHome, labId), 'browser-artifacts'),
+          artifactContext: 'promotion-restart',
+        })
       } finally {
-        await launchResult.handle.stop().catch(() => null)
+        await launchResult.handle.stop()
+        runtimeMayBeActive = false
       }
-      if (probeOutcome.signal.kind !== 'ready') {
+      if (probeOutcome.signal.kind === 'fail') {
         throw new Error(`restart verification failed (${probeOutcome.signal.kind}) — rolling back`)
       }
-      lkgId = afterId
-      restartVerified = true
-      await noteLastKnownGood(ctx.home, ctx.profileName, lkgId)
+      restartVerified = !reviewAccepted && probeOutcome.signal.kind === 'ready'
+      if (!restartVerified)
+        record.entry.reason =
+          '变更已提交；重启后的浏览器验证缺少完整证据，请完成登录或补充验证。未标记稳定点。'
     }
 
-    await appendJournal(ctx.home, {
-      id: journalId,
-      kind: journalKind,
-      createdAt: ctx.now().toISOString(),
-      profileName: ctx.profileName,
-      labId,
-      preSnapshot: pre.id,
-      afterSnapshot: afterId,
-      outcome: 'committed',
-      receiptBefore: manifest.source.receipt,
-      receiptAfter,
-      files: applied,
-      lastKnownGood: restartVerified,
-      ...(journalKind === 'restore' && manifest.source.kind === 'restore'
-        ? { snapshotId: manifest.source.snapshotId }
-        : {}),
+    await checkpoint('verified')
+    options.onPhase?.('after-snapshot')
+    const after = await runSnapshotCreate(ctx, {
+      label: `post-promote: lab ${labId}`,
+      transactionId: record.id,
     })
-    return {
+    record.afterSnapshot = after.id
+    record.entry.afterSnapshot = after.id
+    record.entry.receiptAfter = (await analyzeProfileNow(ctx)).receipt.tree
+    record.entry.outcome = 'committed'
+    record.entry.lastKnownGood = restartVerified
+    const result: LabPromoteResult = {
       ok: true,
       clientGate,
+      ...(record.entry.reason ? { restartPendingReason: record.entry.reason } : {}),
       preSnapshot: pre.id,
-      afterSnapshot: afterId,
-      appliedFiles: applied,
+      afterSnapshot: after.id,
+      appliedFiles: [...WHITELIST_FILE_NAMES],
       restartVerified,
-      lastKnownGood: lkgId,
+      lastKnownGood: restartVerified ? after.id : null,
       journalId,
     }
+    record.result = result
+    await checkpoint('snapshotted')
+    // Once this decision may be on disk, never roll back on metadata failures.
+    commitDecisionStarted = true
+    await checkpoint('committing')
+    options.onPhase?.('journal')
+    await withOperations(
+      [ctx.home],
+      'vault',
+      () => settleTransaction(ctx.home, record, ctx.breakStaleLock),
+      ctx.breakStaleLock,
+    )
+    options.onPhase?.('committed')
+    return result
   } catch (error) {
-    // Roll the managed files back to the pre-promote snapshot contents.
-    let rollbackSucceeded = false
-    try {
-      await rollbackManagedFiles(ctx.home, pre.id, officialDir)
-      rollbackSucceeded = true
-    } catch (rollbackError) {
-      const message = error instanceof Error ? error.message : String(error)
-      const wrapped = new Error(
-        `${message} — and the pre-promote rollback ALSO failed ` +
-          `(${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}); ` +
-          'manual rescue required',
+    if (!prepared) throw error
+    if (runtimeMayBeActive)
+      throw new Error(
+        `promotion runtime shutdown is unconfirmed: ${record.id}; stop the installer/verification process before recovery`,
+        { cause: error },
       )
-      if (rollbackError instanceof Error) wrapped.cause = rollbackError
-      throw wrapped
+    if (commitDecisionStarted)
+      throw new Error(
+        `promotion decision requires reconciliation: ${record.id}; run recovery reconcile ${record.id} --yes`,
+        { cause: error },
+      )
+    try {
+      const rollbackLock = await acquireLock({
+        lockPath: profileLockPath(ctx.home, ctx.profileName),
+        purpose: 'rollback promotion',
+        breakStale: ctx.breakStaleLock,
+      })
+      try {
+        await rollbackTransactionFiles(ctx.home, record)
+      } finally {
+        await rollbackLock.release()
+      }
+      record.entry.outcome = 'rolled-back'
+      record.entry.lastKnownGood = false
+      record.entry.receiptAfter = (await analyzeProfileNow(ctx)).receipt.tree
+      record.entry.reason = redactText(error instanceof Error ? error.message : String(error))
+      await saveTransaction(ctx.home, record)
+      await withOperations(
+        [ctx.home],
+        'vault',
+        () => settleTransaction(ctx.home, record, ctx.breakStaleLock),
+        ctx.breakStaleLock,
+      )
+    } catch (recoveryError) {
+      throw new Error(
+        `promotion recovery incomplete: ${record.id}; original files retained for recovery`,
+        { cause: new AggregateError([error, recoveryError]) },
+      )
     }
-    const reason = error instanceof Error ? error.message : String(error)
-    const receiptAfter = (await analyzeProfileNow(ctx).catch(() => null))?.receipt.tree ?? ''
-    await appendJournal(ctx.home, {
-      id: journalId,
-      kind: journalKind,
-      createdAt: ctx.now().toISOString(),
-      profileName: ctx.profileName,
-      labId,
-      preSnapshot: pre.id,
-      afterSnapshot: afterIdRef,
-      outcome: 'rolled-back',
-      receiptBefore: manifest.source.receipt,
-      receiptAfter,
-      files: applied,
-      lastKnownGood: false,
-      reason: redactText(reason),
-    })
-    void rollbackSucceeded
-    throw error instanceof UsageError
-      ? error
-      : new Error(
-          `promotion failed and was rolled back to the pre-promote snapshot: ${redactText(reason)}`,
-        )
+    throw new Error(
+      `promotion failed and was rolled back to the original managed files: ${redactText(error instanceof Error ? error.message : String(error))}`,
+      { cause: error },
+    )
   }
 }

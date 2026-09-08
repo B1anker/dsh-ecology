@@ -1,3 +1,6 @@
+import { detectDrift } from '../domain/drift.js'
+import { listTransactions, settled } from '../lab/transaction.js'
+
 /**
  * `dsh-world-line doctor` — read-only diagnostics (WORLD-LINE-SPEC §3, Phase 1).
  *
@@ -12,7 +15,6 @@
 import { existsSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-
 import type { CliContext } from '../context.js'
 import { runtimeEnvironment } from '../context.js'
 import { FileError } from '../domain/errors.js'
@@ -25,6 +27,7 @@ import { objectsDir, profileDir, snapshotsDir, worldLineDir } from '../fs/paths.
 import { findDshBinary, readDshVersion } from '../host-adapters/detect.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
 import type { VersionVerdict } from '../host-adapters/types.js'
+import { pendingSwaps } from '../lab/swap.js'
 import { readState } from '../vault/state.js'
 
 /** One doctor check outcome. */
@@ -108,6 +111,29 @@ export async function runDoctor(ctx: CliContext): Promise<DoctorResult> {
     }
   })
 
+  await check(checks, 'pending-promotions', 'interrupted promotion transactions', async () => {
+    const records = (await listTransactions(home)).filter(
+      (record) => record.profileName === profileName && !settled(record),
+    )
+    return records.length
+      ? {
+          status: 'fail',
+          detail: records
+            .map((record) => `${record.id}: ${record.phase}; recovery reconcile ${record.id} --yes`)
+            .join('; '),
+        }
+      : { status: 'ok', detail: 'no pending promotion transactions' }
+  })
+  await check(checks, 'pending-file-swaps', 'interrupted managed-file swaps', async () => {
+    const pending = await pendingSwaps(profileDir(home, profileName))
+    return pending.length
+      ? {
+          status: 'fail',
+          detail: `Retained swaps: ${pending.join(', ')}. Inspect with recovery list; recovery rollback <id> --yes restores managed files only.`,
+        }
+      : { status: 'ok', detail: 'no retained managed-file swaps' }
+  })
+
   // -- writer locks -------------------------------------------------
   await check(checks, 'writer-locks', 'per-profile writer locks', async () => {
     const lockDir = join(worldLineDir(home), 'locks')
@@ -175,6 +201,27 @@ export async function runDoctor(ctx: CliContext): Promise<DoctorResult> {
   )
 
   if (analysis !== null) {
+    const drift = await detectDrift(home, profileName, analysis)
+    for (const [key, title] of [
+      ['latest', '与最近记录相比'],
+      ['lastKnownGood', '与已验证稳定点相比'],
+    ] as const) {
+      const comparison = drift[key]
+      checks.push({
+        id: `drift-${key}`,
+        title,
+        status:
+          comparison.status === 'changed' ? 'warn' : comparison.status === 'same' ? 'ok' : 'info',
+        detail:
+          comparison.status === 'changed'
+            ? `配置已变化：${comparison.changedFiles.join(', ')}；基线 ${comparison.snapshotId}`
+            : comparison.status === 'same'
+              ? '受管配置一致；这不代表实例正在运行或健康。'
+              : comparison.status === 'missing'
+                ? '尚无此类基线。'
+                : (drift.note ?? '基线无法读取，状态未知。'),
+      })
+    }
     const manifest = analysis.manifest
     await check(checks, 'profile-manifest', 'profile package.json parses', async () => {
       if (manifest === null) {

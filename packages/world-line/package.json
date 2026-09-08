@@ -77,8 +77,8 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && rslib build",
-    "dev": "tsc -p tsconfig.build.json --watch",
+    "build": "node scripts/detach-build-output.mjs && tsc -p tsconfig.build.json && rslib build",
+    "dev": "node scripts/detach-build-output.mjs && tsc -p tsconfig.build.json --watch",
     "test": "bun run build && rstest run",
     "test:unit": "rstest run",
     "test:coverage": "rstest run --coverage",

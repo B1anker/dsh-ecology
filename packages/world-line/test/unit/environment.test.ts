@@ -10,7 +10,7 @@ import { loadDshEnvironment, loadExperimentEnvironment } from '../../src/environ
 import { destroyTempHome, installFakeDsh, makeTempHome, writeProfile } from '../helpers/fixture.js'
 
 describe('DSH home environment', () => {
-  test('shipped CLI passes layered values to rescue while pinning its isolated home', async () => {
+  test('shipped CLI passes layered values to clean labs while pinning their isolated home', async () => {
     const home = await makeTempHome()
     const userHome = await makeTempHome()
     try {
@@ -19,11 +19,12 @@ describe('DSH home environment', () => {
       await mkdir(join(userHome, '.dsh-wl'))
       await writeFile(join(userHome, '.dsh-wl', '.env'), 'WL_VALUE=experiment\nDSH_HOME=/wrong\n')
       const bin = await installFakeDsh(home)
+      await writeFile(join(bin, 'pnpm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
       await writeFile(
         join(bin, 'dsh'),
         '#!/bin/sh\n' +
           'if [ "$1" = "--version" ]; then echo 0.1.2-rc.1; exit 0; fi\n' +
-          'case "$DSH_HOME" in */world-line/rescues/*/home) echo isolated-home;; *) echo wrong-home;; esac\n' +
+          'case "$DSH_HOME" in */world-line/labs/*/home) echo isolated-home;; *) echo wrong-home;; esac\n' +
           'echo "value=$WL_VALUE base=${WL_BASE:-absent}"\nexit 1\n',
         { mode: 0o755 },
       )
@@ -39,8 +40,9 @@ describe('DSH home environment', () => {
             cli,
             '--dsh-home',
             home,
-            'rescue',
+            'lab',
             'start',
+            '--clean',
             '--json',
             ...(flag ? ['--no-inherit-env'] : []),
           ],
@@ -51,7 +53,7 @@ describe('DSH home environment', () => {
           },
         )
         expect(result.status).toBe(1)
-        const note = JSON.parse(result.stdout).data.note
+        const note = JSON.stringify(JSON.parse(result.stdout))
         expect(note).toContain('isolated-home')
         expect(note).toContain(expected)
       }

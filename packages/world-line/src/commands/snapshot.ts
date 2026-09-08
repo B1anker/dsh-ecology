@@ -1,3 +1,6 @@
+import { withOperations } from '../fs/operation.js'
+import { pendingSwaps } from '../lab/swap.js'
+import { listTransactions, settled } from '../lab/transaction.js'
 /**
  * `dsh-world-line snapshot create` (WORLD-LINE-SPEC §3, Phase 1).
  *
@@ -30,6 +33,8 @@ import { noteSnapshot } from '../vault/state.js'
 /** Options for one snapshot create run. */
 export interface SnapshotCreateOptions {
   label: string | null
+  /** Internal promotion checkpoint; never exposed as a Web parameter. */
+  transactionId?: string
 }
 
 /** The result of one snapshot create run. */
@@ -67,6 +72,18 @@ export async function runSnapshotCreate(
   ctx: CliContext,
   options: SnapshotCreateOptions,
 ): Promise<SnapshotCreateResult> {
+  await ensureProfileDir(profileDir(ctx.home, ctx.profileName))
+  return withOperations(
+    [ctx.home],
+    'vault',
+    () => runSnapshotCreateUnlocked(ctx, options),
+    ctx.breakStaleLock,
+  )
+}
+async function runSnapshotCreateUnlocked(
+  ctx: CliContext,
+  options: SnapshotCreateOptions,
+): Promise<SnapshotCreateResult> {
   const { home, profileName } = ctx
   const now = ctx.now()
   const createdAt = now.toISOString()
@@ -94,6 +111,22 @@ export async function runSnapshotCreate(
     now,
   })
   try {
+    const transactions = (await listTransactions(home)).filter(
+      (record) => record.profileName === profileName && !settled(record),
+    )
+    if (
+      transactions.some(
+        (record) => record.id !== options.transactionId || record.phase !== 'verified',
+      )
+    )
+      throw new UsageError(
+        'unfinished promotion transaction; reconcile before capturing a snapshot',
+      )
+    const pending = await pendingSwaps(profileDir(home, profileName))
+    if (pending.length)
+      throw new UsageError(
+        `unfinished managed-file swap: ${pending.join(', ')}; recover before capturing a snapshot`,
+      )
     const storedObjects = new Set<string>()
     // Phase 4: encrypt secret-bearing files into one bundle when a key
     // service exists; otherwise the Phase 1-3 skip policy stays (explicitly).

@@ -13,6 +13,7 @@
 
 import type { CliContext } from '../context.js'
 import { FileError, UsageError, VerificationError } from '../domain/errors.js'
+import type { ProbeResult } from '../domain/probe.js'
 import { ensureProfileDir } from '../domain/profile.js'
 import type { SnapshotManifest } from '../domain/snapshot.js'
 import { profileDir } from '../fs/paths.js'
@@ -42,6 +43,10 @@ export interface RestoreCommandResult {
 }
 
 export interface RestoreCommandOptions {
+  manager?: CliContext
+  sourceId?: string
+  removePlugins?: string[]
+
   /** Positional snapshot id; mutually exclusive with lastKnownGood. */
   snapshotId?: string
   lastKnownGood?: boolean
@@ -50,6 +55,12 @@ export interface RestoreCommandOptions {
   restart?: boolean
   /** Keep the restore lab after a successful promote. */
   keep?: boolean
+  /** Web-only progress hook: receives each probe as the run records it. */
+  onProbe?: (probe: ProbeResult) => void
+  /** Web-only progress hook: fired at promote phase boundaries. */
+  onPhase?: (phase: string) => void
+  onTransaction?: (id: string) => void
+  onLabCreated?: (id: string) => void | Promise<void>
   /** Test seam: inject capture/launch/browser fakes into the restore run. */
   deps?: Partial<LabRunDeps>
 }
@@ -128,19 +139,28 @@ export async function runRestoreCommand(
   const sourceDir = profileDir(ctx.home, ctx.profileName)
   await ensureProfileDir(sourceDir)
 
-  const created = await createLab(ctx, host, ctx.profileName, {
-    source: { snapshotId, manifest, secrets },
+  const manager = options.manager ?? ctx
+  const created = await createLab(manager, host, ctx.profileName, {
+    sourceHome: ctx.home,
+    ...(options.sourceId && options.sourceId !== 'origin' ? { parentLabId: options.sourceId } : {}),
+    source: { snapshotId, manifest, secrets, vaultHome: ctx.home, includeHomePatch: true },
   })
   const labId = created.manifest.id
+  await options.onLabCreated?.(labId)
 
   const run = await runLabTransaction({
-    ctx,
+    ctx: manager,
     host,
     labId,
-    plan: [],
+    plan: (options.removePlugins ?? []).map((name, index) => ({
+      seq: index + 1,
+      action: 'remove' as const,
+      id: name,
+    })),
     keep: true,
     clientProbes: true,
     acceptClientInconclusive: options.acceptInconclusive,
+    ...(options.onProbe !== undefined ? { onProbe: options.onProbe } : {}),
     deps: options.deps,
   })
   const clientGate = run.clientReady ?? 'skipped'
@@ -156,6 +176,8 @@ export async function runRestoreCommand(
     labId,
     acceptInconclusive: options.acceptInconclusive ?? false,
     restart: options.restart ?? false,
+    ...(options.onTransaction !== undefined ? { onTransaction: options.onTransaction } : {}),
+    ...(options.onPhase !== undefined ? { onPhase: options.onPhase } : {}),
   })
   if (options.keep !== true) {
     if (await labExists(ctx.home, labId)) await rmLab(ctx.home, labId)

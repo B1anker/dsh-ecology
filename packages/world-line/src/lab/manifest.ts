@@ -40,6 +40,8 @@ export interface LabPlanRecord {
 }
 
 export interface LabSource {
+  /** Immutable source snapshot captured before a Web validation. */
+  baselineSnapshotId?: string
   /** The instance whose independent home was copied at createdAt. */
   parentLabId?: string
   /** The real profile the lab clones from, by name. */
@@ -47,6 +49,7 @@ export interface LabSource {
   /** Adapter-relative profile home (label only; layout derives paths). */
   receipt: string
   /** `profile` (default) or `restore` — provenance marker for journals. */
+  initialization?: 'clean'
   kind?: 'profile' | 'restore'
   /** Set when `kind === 'restore'`: the vault snapshot that was materialized. */
   snapshotId?: string
@@ -69,6 +72,10 @@ export interface LabRunInfo {
 }
 
 export interface LabManifest {
+  hostExperiment?: { version: string; binary: string }
+
+  /** Absent in legacy labs: retain their original isolated store. */
+  packageStore?: 'shared-copy-v1'
   /** Interactive mirrors are not promotion candidates. */
   purpose?: 'mirror'
   homeInheritance?: { version: 1; apiKeys: boolean; copied: number; skippedLinks: string[] }
@@ -125,6 +132,9 @@ export function labManifestOf(raw: unknown, id: string): LabManifest {
     throw new FileError(
       `manifest of lab ${id} carries unsupported manifestVersion ${String(value.manifestVersion)}`,
     )
+  }
+  if (value.packageStore !== undefined && value.packageStore !== 'shared-copy-v1') {
+    throw new FileError(`manifest of lab ${id} carries unsupported package store policy`)
   }
   const state = value.state
   if (typeof state !== 'string' || !(state in TRANSITIONS)) {

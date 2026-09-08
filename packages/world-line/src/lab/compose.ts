@@ -20,6 +20,8 @@ import type { RunOutcome } from './runner.js'
 
 /** One row of a composed tree, in emission order. */
 export interface ComposedRow {
+  /** Loader section metadata; unknown when no unambiguous section exists. */
+  sourceBundle?: string
   /** Row id (`id:`), when the loader emitted one. */
   id?: string
   /** Row display name (`name:`). */
@@ -49,18 +51,45 @@ export interface CompositionProblem {
 /** Parse composed `--dump-config` YAML text into rows (ids order-preserved). */
 export function parseComposedTreeText(text: string, source: string): ActiveComposition {
   let parsed: unknown
+  const positions = new Map<object, number>(),
+    ambiguous = new Set<object>(),
+    scalars: { start: number; end: number }[] = [],
+    stack: number[] = []
   try {
-    parsed = yaml.load(text, { schema: patchSchema })
+    parsed = yaml.load(text, {
+      schema: patchSchema,
+      listener: (event, state) => {
+        if (event === 'open') {
+          stack.push(state.position)
+          return
+        }
+        const start = stack.pop() ?? 0
+        if (state.kind === 'scalar') scalars.push({ start, end: state.position })
+        if (state.result && typeof state.result === 'object') {
+          if (positions.has(state.result)) ambiguous.add(state.result)
+          else positions.set(state.result, start)
+        }
+      },
+    })
   } catch (error) {
     throw new FileError(`failed to parse composed tree ${source}: ${redactText(String(error))}`)
   }
   if (!Array.isArray(parsed)) {
     throw new FileError(`composed tree ${source} must be a YAML list of loader rows`)
   }
+  const markers = [...text.matchAll(/^# == ([^\r\n]+)\r?$/gm)]
+    .filter((m) => !scalars.some((range) => m.index! >= range.start && m.index! < range.end))
+    .map((m) => ({ at: m.index!, bundle: m[1]!.trim().split(', patched by ')[0]! }))
+  const sourceOf = (record: object) => {
+    if (ambiguous.has(record)) return undefined
+    const position = positions.get(record)
+    if (position === undefined) return undefined
+    return markers.findLast((marker) => marker.at < position)?.bundle
+  }
   const rows: ComposedRow[] = []
   const rawById = new Map<string, Record<string, unknown>>()
   for (const item of parsed) {
-    collectRows(item, rows, rawById)
+    collectRows(item, rows, rawById, sourceOf)
   }
   return { rows, rawById }
 }
@@ -70,10 +99,14 @@ function collectRows(
   value: unknown,
   rows: ComposedRow[],
   rawById: Map<string, Record<string, unknown>>,
+  sourceOf: (record: object) => string | undefined = () => undefined,
+  ancestors = new Set<object>(),
 ): void {
   if (value === null || typeof value !== 'object') return
+  if (ancestors.has(value)) throw new FileError('composed tree contains recursive YAML aliases')
+  const path = new Set([...ancestors, value])
   if (Array.isArray(value)) {
-    for (const item of value) collectRows(item, rows, rawById)
+    for (const item of value) collectRows(item, rows, rawById, sourceOf, path)
     return
   }
   const record = value as Record<string, unknown>
@@ -81,13 +114,14 @@ function collectRows(
   if (id !== undefined) {
     rows.push({
       id,
+      sourceBundle: sourceOf(record),
       name: typeof record.name === 'string' ? record.name : undefined,
       injectExternal: hasInjectExternal(record),
     })
     rawById.set(id, record)
   }
   if (Array.isArray(record.insert)) {
-    for (const item of record.insert) collectRows(item, rows, rawById)
+    for (const item of record.insert) collectRows(item, rows, rawById, sourceOf, path)
   }
 }
 
@@ -254,6 +288,8 @@ export function findCompositionProblems(
 // ---------------------------------------------------------------------------
 
 export interface ComposeProbeInput {
+  coreCheck?: (candidate: ActiveComposition) => Promise<void>
+
   /** The dsh binary to invoke (the lab gate guarantees a known version). */
   dshBinary: string
   /** Profile name inside the lab home. */
@@ -370,6 +406,20 @@ export async function runComposeProbe(input: ComposeProbeInput): Promise<Compose
     }
   }
 
+  if (input.coreCheck) {
+    try {
+      await input.coreCheck(composition)
+      probesOut.push(make('pass', '核心模板完整性', '核心行与独立版本模板一致'))
+    } catch (error) {
+      probesOut.push(
+        make(
+          'fail',
+          '核心模板完整性',
+          redactText(error instanceof Error ? error.message : String(error)),
+        ),
+      )
+    }
+  }
   const problems = findCompositionProblems(composition, input.overlayParsed, input.installedNames)
   for (const problem of problems) {
     probesOut.push(
@@ -404,4 +454,32 @@ function problemLabel(code: CompositionProblemCode): string {
 function lastNonEmpty(text: string): string {
   const lines = text.split('\n').filter((line) => line.trim() !== '')
   return lines[lines.length - 1] ?? ''
+}
+
+/** Compare with a separately obtained pristine, version-matched template dump. */
+export function assertCoreRows(
+  candidate: ActiveComposition,
+  baseline: ActiveComposition,
+  coreBundles: ReadonlySet<string>,
+): void {
+  const expected = baseline.rows.filter(
+    (row) =>
+      row.sourceBundle &&
+      coreBundles.has(row.sourceBundle) &&
+      baseline.rawById.get(row.id!)?.disabled !== true,
+  )
+  if (!expected.length || baseline.rows.some((row) => !row.sourceBundle))
+    throw new FileError('trusted core baseline has unknown bundle provenance')
+  for (const row of expected) {
+    const actual = candidate.rows.filter((item) => item.id === row.id)
+    if (
+      actual.length !== 1 ||
+      actual[0]?.sourceBundle !== row.sourceBundle ||
+      actual[0]?.name !== row.name ||
+      candidate.rawById.get(row.id!)?.disabled === true
+    )
+      throw new FileError(
+        `core row ${row.id} is missing, disabled, duplicated or has changed bundle provenance`,
+      )
+  }
 }

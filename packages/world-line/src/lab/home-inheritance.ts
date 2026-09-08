@@ -3,6 +3,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { dump, load } from 'js-yaml'
 import { FileError } from '../domain/errors.js'
 import { writeFileAtomic } from '../fs/atomic.js'
+import { cloneFile } from '../fs/clone.js'
 import { inheritModelConfiguration } from './model-config.js'
 
 const inspect = async (path: string) =>
@@ -113,6 +114,11 @@ export async function inheritHome(
       return
     }
     if (!info.isFile()) return // sockets, FIFOs and devices are runtime state
+    if (!/^(?:profiles\/[^/]+\/)?cordis\.patch\.ya?ml$/.test(path)) {
+      await cloneFile(from, to, info.mode & 0o100 ? 0o700 : 0o600)
+      result.copied++
+      return
+    }
     let bytes: Uint8Array | string = await readFile(from)
     if (/^(?:profiles\/[^/]+\/)?cordis\.patch\.ya?ml$/.test(path)) {
       try {

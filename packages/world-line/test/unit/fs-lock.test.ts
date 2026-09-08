@@ -216,3 +216,47 @@ describe('lock helpers', () => {
     expect(isStaleLock(null, new Date())).toBe(false)
   })
 })
+
+test('operation recovery only takes a provably dead local owner and serializes competing takeovers', async () => {
+  const dir = await tempDir(),
+    lockPath = join(dir, 'operation.lock')
+  const dead = 2147483647
+  expect(isProcessAlive(dead)).toBe(false)
+  try {
+    for (const record of [
+      { pid: process.pid, host: hostname() },
+      { pid: dead, host: 'another-host' },
+    ]) {
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          ...record,
+          token: 'old',
+          startedAt: new Date().toISOString(),
+          purpose: 'operation',
+        }),
+      )
+      await expect(
+        acquireLock({ lockPath, purpose: 'operation', recoverDeadLocal: true }),
+      ).rejects.toThrow()
+    }
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        pid: dead,
+        host: hostname(),
+        token: 'old',
+        startedAt: new Date().toISOString(),
+        purpose: 'operation',
+      }),
+    )
+    const attempts = await Promise.allSettled(
+      [1, 2].map(() => acquireLock({ lockPath, purpose: 'operation', recoverDeadLocal: true })),
+    )
+    const winners = attempts.filter((result) => result.status === 'fulfilled')
+    expect(winners.length).toBe(1)
+    for (const winner of winners) if (winner.status === 'fulfilled') await winner.value.release()
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

@@ -1,3 +1,5 @@
+import { withOperations } from '../fs/operation.js'
+import { recoveryReferences } from '../vault/references.js'
 /**
  * `dsh-world-line timeline` — list / show / diff of the profile time machine
  * (WORLD-LINE-SPEC §3, Phase 1). Read-only: opens the vault, never writes.
@@ -85,6 +87,7 @@ export interface TimelinePruneResult {
   protected: string[]
   removed: string[]
   corrupt: number
+  reasons: Record<string, string>
 }
 
 /**
@@ -99,6 +102,17 @@ export async function runTimelinePrune(
   ctx: CliContext,
   options: { yes?: boolean },
 ): Promise<TimelinePruneResult> {
+  return withOperations(
+    [ctx.home],
+    'vault',
+    () => runTimelinePruneUnlocked(ctx, options),
+    ctx.breakStaleLock,
+  )
+}
+async function runTimelinePruneUnlocked(
+  ctx: CliContext,
+  options: { yes?: boolean },
+): Promise<TimelinePruneResult> {
   const now = ctx.now()
   const lock = await acquireLock({
     lockPath: profileLockPath(ctx.home, ctx.profileName),
@@ -109,7 +123,7 @@ export async function runTimelinePrune(
   try {
     const { snapshots, corrupt } = await listSnapshotManifests(ctx.home)
     const state = await readState(ctx.home)
-    const pinned = new Set<string>()
+    const pinned = await recoveryReferences(ctx.home)
     for (const id of Object.values(state.lastKnownGood)) pinned.add(id)
     for (const id of Object.values(state.lastSnapshots)) pinned.add(id)
     const plan = planRetention({
@@ -119,6 +133,7 @@ export async function runTimelinePrune(
     })
     const removed: string[] = []
     if (options.yes === true) {
+      if (corrupt.length) throw new FileError('存在损坏快照，停止清理，请先诊断')
       for (const id of plan.deleteIds) {
         await rm(snapshotManifestPath(ctx.home, id), { force: true })
         await rm(secretBundlePath(ctx.home, id), { force: true })
@@ -133,6 +148,7 @@ export async function runTimelinePrune(
       protected: [...plan.protectedReasons.keys()],
       removed,
       corrupt: corrupt.length,
+      reasons: Object.fromEntries(plan.protectedReasons),
     }
   } finally {
     await lock.release()

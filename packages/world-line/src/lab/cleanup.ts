@@ -1,3 +1,6 @@
+import { withOperations } from '../fs/operation.js'
+import { labHomeDir } from './layout.js'
+import { readLabManifest } from './manifest.js'
 /**
  * Lab cleanup (WORLD-LINE-SPEC §3/§6, Phase 2): explicit `lab destroy` and the
  * automatic reap of failed labs whose 7-day diagnostic window expired.
@@ -100,6 +103,12 @@ export async function reapExpiredLabs(home: string, now: Date): Promise<ReapResu
 }
 
 export async function destroyLab(home: string, labId: string): Promise<DestroyResult> {
+  const manifest = await readLabManifest(home, labId).catch(() => null)
+  return withOperations([labHomeDir(home, labId)], manifest?.source.profileName ?? 'web', () =>
+    destroyLabGuarded(home, labId),
+  )
+}
+async function destroyLabGuarded(home: string, labId: string): Promise<DestroyResult> {
   const lock = await acquireLock({
     lockPath: join(labRoot(home), '.service.lock'),
     purpose: 'lab destroy',
