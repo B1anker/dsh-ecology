@@ -69,7 +69,7 @@ describe('durable managed-file swaps', () => {
           return handle;
         };
         syncBuiltinESMExports();
-        const { transactionalReplaceFiles } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), 'src/lab/swap.ts')).href)});
+        const { transactionalReplaceFiles } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), 'dist/lab/swap.js')).href)});
         try { await transactionalReplaceFiles(${JSON.stringify(dir)}, ['package.json'], async () => 'new package'); }
         catch (error) { console.log(error.message); }
       `
@@ -148,7 +148,7 @@ describe('durable managed-file swaps', () => {
             process.kill(process.pid, 'SIGKILL');
         };
         syncBuiltinESMExports();
-        const { transactionalReplaceFiles } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), 'src/lab/swap.ts')).href)});
+        const { transactionalReplaceFiles } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), 'dist/lab/swap.js')).href)});
         const changes = ${JSON.stringify(changes)};
         await transactionalReplaceFiles(${JSON.stringify(dir)}, changes.map(f => f.name), async name => changes.find(f => f.name === name).after);
       `

@@ -565,16 +565,7 @@ describe('promotion crash recovery', () => {
         const candidate = original + '\n'
         await writeFile(join(labProfileDir(home, labId, 'web'), 'package.json'), candidate)
         const script = `
-          import { registerHooks } from 'node:module';
-          import { existsSync } from 'node:fs';
-          registerHooks({ resolve(specifier, context, next) {
-            if (specifier.startsWith('.') && specifier.endsWith('.js') && context.parentURL?.includes('/src/')) {
-              const ts = new URL(specifier.slice(0, -3) + '.ts', context.parentURL);
-              if (existsSync(ts)) return next(ts.href, context);
-            }
-            return next(specifier, context);
-          }});
-          const { runLabPromote } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), 'src/lab/promote.ts')).href)});
+          const { runLabPromote } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), 'dist/lab/promote.js')).href)});
           await runLabPromote({ home: ${JSON.stringify(home)}, cwd: process.cwd(), profileName: 'web', env: process.env, json: false, breakStaleLock: false, now: () => new Date('2026-09-04T12:00:00.000Z') }, {
             labId: ${JSON.stringify(labId)}, restart: ${['installing', 'verifying', 'snapshotted', 'committing', 'committed'].includes(phase)},
             deps: {
