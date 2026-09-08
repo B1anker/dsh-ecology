@@ -117,26 +117,49 @@ const versionLabel = (dep: ReturnType<ProfileState['deps']['get']>) =>
       ? `本地插件${dep.version ? ` · ${dep.version}` : ''}`
       : (dep.version ?? '未解析')
     : '未安装'
-async function states(ctx: CliContext, id: string) {
-  if (id === 'origin') throw new UsageError('主干无需合入自身')
-  const sourceId = await resolveLabId(ctx.home, id)
-  const manifest = await readLabManifest(ctx.home, sourceId)
-  if (manifest.purpose !== 'mirror') throw new UsageError('请选择交互式世界线')
-  const sourceCtx = await lineContext(ctx, sourceId)
-  const [target, source] = await Promise.all([profileState(ctx), profileState(sourceCtx)])
+async function mergeLine(ctx: CliContext, reference: string) {
+  if (reference === 'origin') return { id: 'origin', name: 'main', ctx }
+  const id = await resolveLabId(ctx.home, reference)
+  const manifest = await readLabManifest(ctx.home, id)
+  if (manifest.purpose !== 'mirror' || manifest.state === 'destroyed')
+    throw new UsageError('请选择可用的交互式世界线')
+  return { id, name: manifest.alias ?? id, ctx: await lineContext(ctx, id) }
+}
+async function states(ctx: CliContext, id: string, targetReference = 'origin') {
+  if (id === 'origin') throw new UsageError('请选择交互式来源世界线')
+  const [from, to] = await Promise.all([mergeLine(ctx, id), mergeLine(ctx, targetReference)])
+  if (from.id === to.id) throw new UsageError('来源和目标不能是同一条世界线')
+  const [target, source] = await Promise.all([profileState(to.ctx), profileState(from.ctx)])
   return {
     target,
     source,
-    sourceId,
-    sourceName: manifest.alias ?? sourceId,
-    revision: digest(target.fingerprint + source.fingerprint),
+    sourceId: from.id,
+    sourceName: from.name,
+    targetId: to.id,
+    targetName: to.name,
+    targetCtx: to.ctx,
+    revision: digest(JSON.stringify([from.id, to.id, target.fingerprint, source.fingerprint])),
   }
 }
-export async function mergePreview(ctx: CliContext, id: string): Promise<MergePreview> {
-  const { target, source, sourceId, sourceName, revision } = await states(ctx, id)
+export async function mergePreview(
+  ctx: CliContext,
+  id: string,
+  targetId = 'origin',
+): Promise<MergePreview> {
+  const {
+    target,
+    source,
+    sourceId,
+    sourceName,
+    targetId: resolvedTarget,
+    targetName,
+    revision,
+  } = await states(ctx, id, targetId)
   return {
     sourceId,
     sourceName,
+    targetId: resolvedTarget,
+    targetName,
     revision,
     configChanged:
       !target.patch?.equals(source.patch ?? Buffer.alloc(0)) &&
@@ -260,6 +283,8 @@ const publicCandidate = ({
   labId,
   sourceId,
   sourceName,
+  targetId = 'origin',
+  targetName = 'main',
   plugins,
   includeConfig,
   ok,
@@ -271,6 +296,8 @@ const publicCandidate = ({
   labId,
   sourceId,
   sourceName,
+  targetId,
+  targetName,
   plugins,
   includeConfig,
   ok,
@@ -280,7 +307,13 @@ const publicCandidate = ({
 })
 async function prepareMergeInternal(
   ctx: CliContext,
-  input: { id: string; revision: string; plugins: string[]; includeConfig: boolean },
+  input: {
+    id: string
+    targetId?: string
+    revision: string
+    plugins: string[]
+    includeConfig: boolean
+  },
   deps?: { run?: Partial<LabRunDeps>; install?: typeof runCaptured },
 ) {
   const lock = await acquireLock({
@@ -289,8 +322,9 @@ async function prepareMergeInternal(
     breakStale: ctx.breakStaleLock,
   })
   try {
-    const preview = await mergePreview(ctx, input.id)
-    if (preview.revision !== input.revision) throw new UsageError('主干或来源已变化，请重新预览')
+    const preview = await mergePreview(ctx, input.id, input.targetId)
+    if (preview.revision !== input.revision)
+      throw new UsageError('目标世界线或来源已变化，请重新预览')
     const names = [...new Set(input.plugins)]
     if (
       (!names.length && !input.includeConfig) ||
@@ -299,16 +333,19 @@ async function prepareMergeInternal(
       throw new UsageError('请选择可合入的插件或配置')
     const host = requireKnownHost(ctx),
       pnpm = requirePnpm(ctx.experimentEnv ?? ctx.env)
-    const state = await states(ctx, input.id)
+    const state = await states(ctx, input.id, input.targetId)
     if (state.revision !== preview.revision) throw new UsageError('配置发生变化，请重新预览')
     const id = `merge-${randomBytes(12).toString('hex')}`,
       root = pathFor(ctx, id)
     await mkdir(root, { recursive: true, mode: 0o700 })
-    const created = await createLab(ctx, host, ctx.profileName)
+    const created = await createLab(ctx, host, ctx.profileName, {
+      sourceHome: state.targetCtx.home,
+      ...(state.targetId !== 'origin' ? { parentLabId: state.targetId } : {}),
+    })
     const labId = created.manifest.id,
       home = labHomeDir(ctx.home, labId),
       dir = labProfileDir(ctx.home, labId, ctx.profileName)
-    await inheritHome(ctx.home, home, { skipPaths: [`profiles/${ctx.profileName}`] })
+    await inheritHome(state.targetCtx.home, home, { skipPaths: [`profiles/${ctx.profileName}`] })
     const pkg = mergePackage(state.target.raw, state.source.raw, names)
     const frozenLocal = new Map<string, string>()
     // Freeze every local dependency independently, outside disposable lab homes.
@@ -396,8 +433,8 @@ async function prepareMergeInternal(
       { cwd: dir, env, timeoutMs: 180000 },
     )
     if (install.exitCode !== 0 || install.spawnError || install.timedOut)
-      throw new VerificationError('候选依赖安装失败，主干未改动')
-    // Absolute artifact references are valid from both the candidate and main profile.
+      throw new VerificationError('候选依赖安装失败，目标世界线未改动')
+    // Absolute artifact references are valid from both the candidate and target profile.
     // Normalize pnpm metadata before verification so the committed bytes are those verified.
     for (const name of [
       'pnpm-lock.yaml',
@@ -428,13 +465,15 @@ async function prepareMergeInternal(
       clientProbes: true,
       deps: deps?.run,
     })
-    // Rebase configuration back to main for commit, then validate the same config in an isolated home.
+    // Rebase configuration back to the target for commit, then validate the same config in an isolated home.
     // The runtime paths are rewritten on commit; the stored hash binds these exact staged bytes.
     const stored: StoredCandidate = {
       id,
       profileName: ctx.profileName,
       sourceId: state.sourceId,
       sourceName: state.sourceName,
+      targetId: state.targetId,
+      targetName: state.targetName,
       plugins: names,
       includeConfig: input.includeConfig,
       ok: run.ok && run.clientReady === 'pass',
@@ -442,8 +481,8 @@ async function prepareMergeInternal(
         run.ok && run.clientReady === 'pass'
           ? '插件安装、配置、启动与浏览器验证通过'
           : run.clientReady === 'skipped'
-            ? '缺少浏览器验证环境。请安装 Chrome，或通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定 Chromium 可执行文件，重启管理实例后重新验证。主干未改动。'
-            : '候选验证未通过，主干未改动。请查看验证实验记录。',
+            ? '缺少浏览器验证环境。请安装 Chrome，或通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定 Chromium 可执行文件，重启管理实例后重新验证。目标世界线未改动。'
+            : '候选验证未通过，目标世界线未改动。请查看验证实验记录。',
       targetFingerprint: state.target.fingerprint,
       sourceFingerprint: state.source.fingerprint,
       labId,
@@ -479,14 +518,15 @@ export async function commitMerge(
       throw new UsageError('候选不属于当前 profile')
     if (stored.committed) return publicCandidate(stored)
     if (!stored.ok) throw new VerificationError('验证未通过，不能合入')
-    const dir = labProfileDir(ctx.home, stored.labId, ctx.profileName),
-      main = profileDir(ctx.home, ctx.profileName)
-    const current = await states(ctx, stored.sourceId)
+    const dir = labProfileDir(ctx.home, stored.labId, ctx.profileName)
+    const current = await states(ctx, stored.sourceId, stored.targetId ?? 'origin')
+    const targetCtx = current.targetCtx,
+      main = profileDir(targetCtx.home, ctx.profileName)
     if (
       current.target.fingerprint !== stored.targetFingerprint ||
       current.source.fingerprint !== stored.sourceFingerprint
     )
-      throw new UsageError('主干或来源在验证后变化，请重新预览和验证')
+      throw new UsageError('目标世界线或来源在验证后变化，请重新预览和验证')
     if ((await runtimeHash(dir)) !== stored.candidateHash)
       throw new VerificationError('验证候选已变化，拒绝合入')
     if (
@@ -494,7 +534,7 @@ export async function commitMerge(
       (await runtimeHash(join(root, 'packages'))) !== stored.artifactsHash
     )
       throw new VerificationError('候选本地插件已变化，拒绝合入')
-    const pre = await runSnapshotCreate(ctx, { label: `合入前：${stored.sourceName}` })
+    const pre = await runSnapshotCreate(targetCtx, { label: `合入前：${stored.sourceName}` })
     if (
       pre.files.some(
         (file) => file.secretSkipped && WHITELIST_FILE_NAMES.some((name) => name === file.name),
@@ -502,7 +542,7 @@ export async function commitMerge(
     )
       throw new VerificationError('合入前配置备份不完整，请先启用安全密钥服务')
     const lock = await acquireLock({
-      lockPath: profileLockPath(ctx.home, ctx.profileName),
+      lockPath: profileLockPath(targetCtx.home, ctx.profileName),
       purpose: 'merge verified profile',
       breakStale: ctx.breakStaleLock,
     })
@@ -512,12 +552,12 @@ export async function commitMerge(
       movedFiles = false
     const originals = new Map<string, Buffer | null>()
     try {
-      const checked = await states(ctx, stored.sourceId)
+      const checked = await states(ctx, stored.sourceId, stored.targetId ?? 'origin')
       if (
         checked.target.fingerprint !== stored.targetFingerprint ||
         checked.source.fingerprint !== stored.sourceFingerprint
       )
-        throw new UsageError('主干在备份后发生变化，请重新验证')
+        throw new UsageError('目标世界线在备份后发生变化，请重新验证')
       if (
         (await runtimeHash(dir)) !== stored.candidateHash ||
         (stored.artifactsHash &&
@@ -531,7 +571,7 @@ export async function commitMerge(
             rebaseHomePaths(
               parsePatchListText(bytes.toString(), 'verified patch'),
               labHomeDir(ctx.home, stored.labId),
-              ctx.home,
+              targetCtx.home,
             ),
             { schema: patchSchema },
           )
@@ -552,7 +592,7 @@ export async function commitMerge(
       movedFiles = true
       stored.committed = true
       stored.preSnapshot = pre.id
-      stored.detail = '已合入主干并保存合入前快照。主干服务未重启；重新启动主干后使用新能力。'
+      stored.detail = `已合入 ${current.targetName} 并保存合入前快照。目标服务未重启；重新启动后使用新能力。`
       await writeFileAtomic(join(root, 'candidate.json'), JSON.stringify(stored))
     } catch (error) {
       if (movedFiles)

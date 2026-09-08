@@ -838,6 +838,7 @@ function WorldLine({
           <MergePanel
             key={mergeId}
             id={mergeId}
+            lines={[origin, ...(data?.lines ?? [])]}
             api={api}
             close={() => setMergeId(null)}
             onBusy={(message) => {
