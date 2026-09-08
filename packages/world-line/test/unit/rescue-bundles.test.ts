@@ -12,6 +12,7 @@ test('selected bundle is installed privately with its patch; unrelated bundle st
   const home = await makeTempHome()
   try {
     const bin = await installFakeDsh(home)
+    await writeFile(join(bin, 'pnpm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     const source = join(home, 'plugin-source')
     await mkdir(source)
     const pkg = {
@@ -59,7 +60,7 @@ test('selected bundle is installed privately with its patch; unrelated bundle st
     const ctx = {
       cwd: home,
       home,
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      env: { ...process.env, PATH: bin },
       profileName: 'web',
       json: false,
       breakStaleLock: false,

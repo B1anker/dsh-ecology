@@ -5,5 +5,7 @@
 - 纳入 world-line 的 Web 验证流程、插件组成/升级/卸载、任务持久化与事件推送、报告与恢复、快照对比与存储维护、二分与环境交付、部署与升级工作流，以及后续画布、菜单、弹窗和安装输入修复。
 - 纳入 web-login 的实验授权适配源码和测试。仅创建 PR 不会使 npm 上已经发布的 0.5.0 自动获得该适配；安装旧发布包仍可能需要登录。需经合入、发布及目标环境升级后再验证交付效果。
 - 仓库 `bun run check` 通过（lint 有警告）；宿主契约因可选宿主 peer 缺失而跳过，不算完成真实宿主契约验证。
-- `bun run test` 尚未全绿：world-line 的 environment 测试仍调用已停用的 `rescue start`；pet-desktop 的本机 native SDK 测试缺少 `@typescript/old` 等工具链支持，并报告 Node/module.registerHooks 环境问题。创建草稿 PR 保留这些未决项，不宣称满足合入条件。
-- 本次未执行完整 coverage、pack 或所有真实宿主端到端场景；此前针对进度连接背压、安装来源、配置继承和 UI 的检查仅覆盖对应修复。
+- 已修正 CLI 环境测试中的旧命令，并为使用模拟安装器的测试提供独立 pnpm fixture，消除对开发机 PATH 的依赖。
+- web-login 与 world-line 的完整包级覆盖率检查通过，门槛保持不变；新增原生授权、环境导入导出、精确宿主版本矩阵、调查恢复、核心模板、清理及 CLI/Web 工作流测试。
+- `bun run pack:check` 通过。GitHub 的完整 CI（包括 Node 矩阵及真实宿主登录测试）需以当前提交的远端结果为准。
+- 本机 `bun run test` 还涉及 pet-desktop native SDK 工具链问题（缺少 `@typescript/old` 等）；它不在当前 CI 覆盖率任务范围内，本次没有修改桌面工具链，也不把包级检查视为全仓库测试全部通过。

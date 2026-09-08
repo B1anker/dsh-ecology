@@ -795,3 +795,41 @@ test('an authorized login repairs native BrowserAuth without sharing a token wit
     expect(issued).toBe(1)
   })
 })
+
+test('lab delegation accepts only requests authenticated by the native connection', async () => {
+  const id = 'lab-20260908T061328Z-b7ba1266'
+  const variables = {
+    WORLD_LINE_LAB: id,
+    WORLD_LINE_MANAGER_HOME: '/tmp/wl-gate-fixture',
+    DSH_HOME: `/tmp/wl-gate-fixture/world-line/labs/${id}/home`,
+    WORLD_LINE_SESSION_SECRET: 'a'.repeat(64),
+    WORLD_LINE_SESSION_EXPIRES: String(Date.now() + 540000),
+  }
+  const prior = Object.fromEntries(Object.keys(variables).map((key) => [key, process.env[key]]))
+  Object.assign(process.env, variables)
+  try {
+    await withFixture({ persistentSessions: false }, async ({ ctx, port }) => {
+      expect((await request(port, '/exact')).status).toBe(401)
+      let unavailable = false
+      ctx.provide('connection', {
+        requestRejection: (req: { headers: Record<string, string> }) => {
+          if (unavailable) throw new Error('native unavailable')
+          return req.headers.cookie === 'native=valid' ? undefined : 401
+        },
+      })
+      expect((await request(port, '/exact')).status).toBe(401)
+      expect((await request(port, '/exact', { headers: { cookie: 'native=valid' } })).status).toBe(
+        200,
+      )
+      unavailable = true
+      expect((await request(port, '/exact', { headers: { cookie: 'native=valid' } })).status).toBe(
+        401,
+      )
+    })
+  } finally {
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
