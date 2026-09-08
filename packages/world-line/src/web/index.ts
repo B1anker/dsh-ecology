@@ -161,7 +161,7 @@ export async function worldLines(ctx: CliContext, currentId?: string) {
           ? `配置来源 ${manifest.source.snapshotId}`
           : '独立实例从这里开始',
       })
-      if (manifest.lastRun)
+      if (manifest.lastRun && Number.isFinite(Date.parse(manifest.lastRun.finishedAt)))
         events.push({
           id: `${id}:verification:${manifest.lastRun.finishedAt}`,
           lineId: id,
@@ -326,7 +326,9 @@ async function dispatchAction(
   const handlers: Record<string, () => Promise<unknown>> = {}
   const mergePreviewAction = async () => {
     if (typeof body.id !== 'string') throw new UsageError('请选择世界线或候选')
-    if (action === 'merge-preview') return mergePreview(ctx, body.id)
+    if (body.targetId !== undefined && (typeof body.targetId !== 'string' || !body.targetId))
+      throw new UsageError('请选择有效的目标世界线')
+    if (action === 'merge-preview') return mergePreview(ctx, body.id, body.targetId)
     if (action === 'merge-commit') return commitMerge(ctx, body.id)
     if (
       typeof body.revision !== 'string' ||
@@ -337,6 +339,7 @@ async function dispatchAction(
       throw new UsageError('合入选项无效')
     return prepareMerge(ctx, {
       id: body.id,
+      targetId: body.targetId,
       revision: body.revision,
       plugins: body.plugins,
       includeConfig: body.includeConfig,

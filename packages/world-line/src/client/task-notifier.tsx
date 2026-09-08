@@ -1,3 +1,5 @@
+import { ListChecks } from '@phosphor-icons/react/dist/csr/ListChecks'
+import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useEffect, useRef, useState } from 'react'
 import type { Job } from './job-view.js'
 export function TaskNotifier({ jobs, onOpen }: { jobs: Job[]; onOpen(): void }) {
@@ -48,25 +50,30 @@ export function TaskNotifier({ jobs, onOpen }: { jobs: Job[]; onOpen(): void }) 
     }
   }, [count])
   return count ? (
-    <div
-      role="status"
-      style={{
-        position: 'fixed',
-        bottom: 20,
-        right: 24,
-        zIndex: 80,
-        padding: 12,
-        background: 'var(--dsw-alias-bg-layer-1)',
-        border: '1px solid #edbb16',
-      }}
-    >
+    <div className="wl-task-notice" role="status" aria-live="polite" aria-atomic="true">
+      <span className="wl-task-notice-icon" aria-hidden="true">
+        <ListChecks size={20} />
+      </span>
+      <div className="wl-task-notice-content">
+        <span className="wl-task-notice-title">{count} 项任务已结束</span>
+        <button
+          type="button"
+          className="wl-task-notice-open"
+          onClick={() => {
+            setCount(0)
+            onOpen()
+          }}
+        >
+          查看任务
+        </button>
+      </div>
       <button
-        onClick={() => {
-          setCount(0)
-          onOpen()
-        }}
+        type="button"
+        className="wl-task-notice-dismiss"
+        aria-label="关闭任务通知"
+        onClick={() => setCount(0)}
       >
-        {count} 个世界线任务已结束，查看任务
+        <X size={16} aria-hidden="true" />
       </button>
     </div>
   ) : null

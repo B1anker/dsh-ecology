@@ -1,4 +1,8 @@
 export type PluginSource = 'registry' | 'local'
+export const pluginInputErrors: Record<PluginSource, string> = {
+  registry: '请输入包名或包名@版本，例如 @seaveyon/dsh-web-login@0.5.0。',
+  local: '请填写运行 DSH 的电脑上的绝对路径，例如 /Users/你的用户名/code/my-plugin。',
+}
 export function localPluginPath(input: string): string | null {
   const text = input.trim()
   if (/^@?(?:file|link):/.test(text)) return text.replace(/^@?(?:file|link):/, '')
@@ -15,12 +19,11 @@ export function pluginInstallSpec(
     if (!path.startsWith('/') || path.startsWith('//'))
       return {
         spec: '',
-        error: '请填写运行 DSH 的电脑上的绝对路径，例如 /Users/你的用户名/code/my-plugin。',
+        error: pluginInputErrors.local,
       }
     return { spec: `file:${path}` }
   }
   const match = /^((?:@[a-z0-9._-]+\/)?[a-z0-9._-]+)(?:@([^\s]+))?$/.exec(text)
-  if (!match)
-    return { spec: '', error: '请输入包名或包名@版本，例如 @seaveyon/dsh-web-login@0.5.0。' }
+  if (!match) return { spec: '', error: pluginInputErrors.registry }
   return { spec: `${match[1]}@${match[2] ?? 'latest'}` }
 }

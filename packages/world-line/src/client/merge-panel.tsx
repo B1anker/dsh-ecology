@@ -4,20 +4,35 @@ import { GitMerge } from '@phosphor-icons/react/dist/csr/GitMerge'
 import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useEffect, useState } from 'react'
 import type { MergeCandidate, MergePreview } from '../domain/merge-types.js'
+import { HudSelect } from './hud-controls.js'
+import { type Line, label } from './timeline-model.js'
 export function MergePanel({
   id,
+  lines,
   api,
   close,
   onBusy,
   onCommitted,
 }: {
   id: string
+  lines: Line[]
   api(body: unknown, signal?: AbortSignal): Promise<any>
   close(): void
   onBusy(value: string): void
   onCommitted(): void
 }) {
+  const [targetId, setTargetId] = useState('origin')
+  const targets = lines.filter(
+    (line) =>
+      line.id !== id &&
+      (line.kind === 'origin' || line.kind === 'mirror') &&
+      !['applying', 'destroyed', 'unreachable'].includes(line.state),
+  )
   const [preview, setPreview] = useState<MergePreview | null>(null)
+  const targetName =
+    preview?.targetName ??
+    targets.find((line) => line.id === targetId)?.alias ??
+    (targetId === 'origin' ? 'main' : targetId)
   const [selected, setSelected] = useState<string[]>([]),
     [config, setConfig] = useState(false)
   const [candidate, setCandidate] = useState<MergeCandidate | null>(null)
@@ -30,9 +45,11 @@ export function MergePanel({
     setCandidate(null)
     setError('')
     setConfig(false)
-    void api({ action: 'merge-preview', id }, abort.signal)
+    void api({ action: 'merge-preview', id, targetId }, abort.signal)
       .then((result: MergePreview) => {
         if (abort.signal.aborted) return
+        if (result.targetId !== targetId)
+          throw new Error('后端未确认所选目标世界线，请更新并重启管理实例后重试。')
         setPreview(result)
         setSelected(
           result.plugins
@@ -44,10 +61,12 @@ export function MergePanel({
         if (!abort.signal.aborted) setError(e.message)
       })
     return () => abort.abort()
-  }, [id, api, revision])
+  }, [id, targetId, api, revision])
   const perform = async (commit: boolean) => {
     if (pending || !preview) return
-    const message = commit ? '正在备份并合入主干…' : '正在构建候选并验证，主干保持运行…'
+    const message = commit
+      ? `正在备份并合入 ${targetName}…`
+      : `正在构建候选并验证，${targetName} 保持运行…`
     setPending(message)
     onBusy(message)
     setError('')
@@ -58,6 +77,7 @@ export function MergePanel({
           : {
               action: 'merge-prepare',
               id,
+              targetId: preview.targetId,
               revision: preview.revision,
               plugins: selected,
               includeConfig: config,
@@ -73,11 +93,11 @@ export function MergePanel({
     }
   }
   return (
-    <aside className="wl-inspector wl-merge-panel" aria-label="合入主干">
+    <aside className="wl-inspector wl-merge-panel" aria-label="合入世界线">
       <header className="wl-header">
         <div>
           <span className="wl-eyebrow">CONVERGENCE</span>
-          <h2>让这条线的能力回到主干</h2>
+          <h2>合入到另一条世界线</h2>
         </div>
         <button
           className="wl-button wl-icon"
@@ -88,12 +108,35 @@ export function MergePanel({
           <X size={16} />
         </button>
       </header>
-      <p className="wl-muted">{preview?.sourceName ?? '世界线'} → main · 正式环境</p>
+      <label>
+        合入目标
+        <HudSelect
+          aria-label="合入目标世界线"
+          value={targetId}
+          disabled={!!pending}
+          onChange={(event) => {
+            setPreview(null)
+            setCandidate(null)
+            setSelected([])
+            setTargetId(event.target.value)
+          }}
+        >
+          {targets.map((line) => (
+            <option key={line.id} value={line.id}>
+              {label(line)}
+              {line.kind === 'origin' ? ' · 主干' : ''}
+            </option>
+          ))}
+        </HudSelect>
+      </label>
+      <p className="wl-muted">
+        {preview?.sourceName ?? '世界线'} → {targetName}
+      </p>
       {!preview && !error && <p className="wl-muted">正在比较插件与配置…</p>}
       {preview && !candidate?.ok && (
         <>
           <p className="wl-muted">
-            只更新勾选的插件和对应 bundle，未勾选的主干能力保留。移除插件需要单独勾选。
+            只更新勾选的插件和对应 bundle，未勾选的目标世界线能力保留。移除插件需要单独勾选。
           </p>
           <div className="wl-merge-options">
             {preview.plugins.map((item) => (
@@ -137,8 +180,8 @@ export function MergePanel({
           </label>
           <p className="wl-muted">
             {config
-              ? '将完整替换主干的 profile 配置补丁，包括其中的配置值。请确认来源配置适用于主干。'
-              : '默认保留主干配置。'}{' '}
+              ? '将完整替换目标世界线的 profile 配置补丁，包括其中的配置值。请确认来源配置适用于目标世界线。'
+              : '默认保留目标配置。'}{' '}
             会话、模型设置、登录状态和 home 配置不会合入。
           </p>
           <button
@@ -154,7 +197,11 @@ export function MergePanel({
       {candidate && (
         <div className="wl-event-detail">
           <strong>
-            {candidate.committed ? '已合入主干' : candidate.ok ? '候选验证通过' : '验证未通过'}
+            {candidate.committed
+              ? `已合入 ${candidate.targetName}`
+              : candidate.ok
+                ? '候选验证通过'
+                : '验证未通过'}
           </strong>
           <p>{candidate.detail}</p>
           <p className="wl-muted">验证实验：{candidate.labId}</p>
@@ -162,7 +209,7 @@ export function MergePanel({
             <>
               <p className="wl-muted">
                 {candidate.plugins.length} 个插件
-                {candidate.includeConfig ? ' · 替换 profile 配置' : ' · 保留主干配置'}
+                {candidate.includeConfig ? ' · 替换 profile 配置' : ' · 保留目标配置'}
               </p>
               <ul>
                 {candidate.plugins.map((name) => (
@@ -179,7 +226,7 @@ export function MergePanel({
               onClick={() => void perform(true)}
             >
               <CheckCircle size={16} />
-              确认合入主干
+              确认合入 {candidate.targetName}
             </button>
           )}
           {!pending && !candidate.committed && (

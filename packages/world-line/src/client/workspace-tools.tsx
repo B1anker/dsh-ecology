@@ -20,6 +20,8 @@ export function WorkspaceTools({
   close,
   navigate,
   onJob,
+  onCompareLines,
+  onSnapshot,
 }: {
   panel: ToolPanel
   lines: Line[]
@@ -27,6 +29,8 @@ export function WorkspaceTools({
   close(): void
   navigate(panel: ToolPanel): void
   onJob(id: string): void
+  onCompareLines(id: string): void
+  onSnapshot(id: string): void
 }) {
   const jobs = useJobFeed()
   const [olderJobs, setOlderJobs] = useState<Job[]>([])
@@ -90,7 +94,16 @@ export function WorkspaceTools({
         .then((x) => {
           if (!c.signal.aborted) {
             if (action === 'lab-diff') setDiff(x)
-            else setData(x)
+            else {
+              setData(x)
+              if (action === 'snapshot-list') {
+                const latest = (x as WorldEvent[])
+                  .filter((event) => event.snapshotId)
+                  .toSorted((a, b) => b.at.localeCompare(a.at))[0]
+                setFrom(latest?.snapshotId ?? '')
+                setTo('current')
+              }
+            }
           }
         })
         .catch((e) => {
@@ -432,43 +445,72 @@ export function WorkspaceTools({
         (data ? <ReportView report={data as ReportResult} /> : !error && <p>正在生成脱敏报告…</p>)}
       {panel.section === 'compare' && (
         <>
-          <p className="wl-muted">
-            选择两份历史快照，或将历史快照与当前配置比较。当前配置以读取时刻为准。
-          </p>
-          {[
-            { value: from, set: setFrom, name: '比较基准' },
-            { value: to, set: setTo, name: '比较目标' },
-          ].map((side) => (
-            <label key={side.name}>
-              {side.name}
-              <HudSelect value={side.value} onChange={(e) => side.set(e.target.value)}>
-                <option value="">请选择</option>
-                <option value="current">当前状态</option>
-                {(data as WorldEvent[] | null)?.map((e) => (
-                  <option key={e.id} value={e.snapshotId}>
-                    {e.title} · {new Date(e.at).toLocaleString()}
-                  </option>
-                ))}
-              </HudSelect>
-            </label>
-          ))}
-          <button
-            className="wl-button"
-            disabled={busy || !from || !to || from === to}
-            onClick={async () => {
-              setBusy(true)
-              setError('')
-              try {
-                setDiff(await api({ action: 'snapshot-compare', from: ref(from), to: ref(to) }))
-              } catch (e) {
-                setError(String(e))
-              } finally {
-                setBusy(false)
-              }
-            }}
-          >
-            比较
+          <button className="wl-button" onClick={() => onCompareLines(workflowSource)}>
+            比较两条世界线的当前状态
           </button>
+          {source?.kind === 'verification' ? (
+            <p className="wl-muted">以下是本次验证相对安装前的变化。</p>
+          ) : data === null ? (
+            !error && <p role="status">正在读取历史快照…</p>
+          ) : data.length === 0 ? (
+            <div className="wl-event-detail">
+              <strong>这条世界线还没有历史快照</strong>
+              <p className="wl-muted">
+                历史比较需要至少一份快照。先保存快照，后续修改插件或配置后，就能与保存时的状态比较。若要比较现有环境，请使用上方的双线比较。
+              </p>
+              <button className="wl-button" onClick={() => onSnapshot(panel.id)}>
+                保存当前快照
+              </button>
+            </div>
+          ) : (
+            <>
+              <p className="wl-muted">
+                比较这条世界线的历史快照与当前状态，也可以选择两份快照。默认以最新快照为基准。
+              </p>
+              {[
+                { value: from, set: setFrom, name: '比较基准' },
+                { value: to, set: setTo, name: '比较目标' },
+              ].map((side) => (
+                <label key={side.name}>
+                  {side.name}
+                  <HudSelect
+                    aria-label={side.name}
+                    value={side.value}
+                    onChange={(e) => {
+                      side.set(e.target.value)
+                      setDiff(null)
+                    }}
+                  >
+                    <option value="">请选择</option>
+                    <option value="current">{source ? label(source) : panel.id} · 当前状态</option>
+                    {(data as WorldEvent[] | null)?.map((e) => (
+                      <option key={e.id} value={e.snapshotId}>
+                        {e.title} · {new Date(e.at).toLocaleString()}
+                      </option>
+                    ))}
+                  </HudSelect>
+                </label>
+              ))}
+              <button
+                className="wl-button"
+                disabled={busy || !from || !to || from === to}
+                onClick={async () => {
+                  setBusy(true)
+                  setError('')
+                  try {
+                    setDiff(await api({ action: 'snapshot-compare', from: ref(from), to: ref(to) }))
+                  } catch (e) {
+                    setError(String(e))
+                  } finally {
+                    setBusy(false)
+                  }
+                }}
+              >
+                比较
+              </button>
+              {from === to && <p className="wl-muted">请选择不同的状态进行比较。</p>}
+            </>
+          )}
           {diff && (
             <>
               <p>读取于 {new Date(diff.at).toLocaleString()}</p>

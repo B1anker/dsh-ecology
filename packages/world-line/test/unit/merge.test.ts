@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile, readlink, rename, symlink, writeFile } from 'no
 import { join } from 'node:path'
 import { describe, expect, test } from '@rstest/core'
 import type { CliContext } from '../../src/context.js'
+import { snapshotManifestPath } from '../../src/fs/paths.js'
 import {
   CLIENT_BOOT_GLOBALS,
   CLIENT_SHELL_MARKERS,
@@ -12,7 +13,7 @@ import { requireKnownHost } from '../../src/lab/gate.js'
 import { inheritHome } from '../../src/lab/home-inheritance.js'
 import { labHomeDir, labProfileDir } from '../../src/lab/layout.js'
 import { currentLabId, managerHome } from '../../src/lab/manager.js'
-import { writeLabManifest } from '../../src/lab/manifest.js'
+import { readLabManifest, writeLabManifest } from '../../src/lab/manifest.js'
 import type { LabRunDeps } from '../../src/lab/run.js'
 import type { runCaptured } from '../../src/lab/runner.js'
 import {
@@ -125,7 +126,150 @@ async function seed() {
   })
   return { ctx, id: source.manifest.id, home, local }
 }
+async function seedTarget(ctx: CliContext) {
+  const created = await createLab(ctx, requireKnownHost(ctx), 'web')
+  const id = created.manifest.id,
+    home = labHomeDir(ctx.home, id)
+  await writeLabManifest(
+    ctx.home,
+    { ...created.manifest, purpose: 'mirror', alias: 'destination' },
+    ctx.now(),
+  )
+  await writeProfile(home, 'web', {
+    packageJson: profilePackageJson({ dependencies: {}, bundles: [] }),
+    patchYaml: `- id: test\n  config:\n    value: destination\n    path: ${home}/assets\n`,
+  })
+  await mkdir(join(home, 'profiles/web/node_modules'), { recursive: true })
+  await writeFile(join(home, 'profiles/web/node_modules/old.txt'), 'destination-code')
+  return { id, home }
+}
 describe('verified world-line merges', () => {
+  test('merges into the selected world, preserving main and source and backing up the target', async () => {
+    const { ctx, id, home } = await seed()
+    try {
+      const target = await seedTarget(ctx)
+      const mainBefore = await readFile(join(home, 'profiles/web/package.json'), 'utf8')
+      const sourceBefore = await readFile(
+        join(labHomeDir(home, id), 'profiles/web/package.json'),
+        'utf8',
+      )
+      const preview = await mergePreview(ctx, id, 'destination')
+      expect(preview.targetId).toBe(target.id)
+      expect(preview.targetName).toBe('destination')
+      const ready = await prepareMerge(
+        ctx,
+        {
+          id,
+          targetId: target.id,
+          revision: preview.revision,
+          plugins: ['@fixture/new'],
+          includeConfig: false,
+        },
+        { install, run: runtime },
+      )
+      expect(ready.ok).toBe(true)
+      expect(ready.targetId).toBe(target.id)
+      expect((await readLabManifest(home, ready.labId)).source.parentLabId).toBe(target.id)
+      expect(await readFile(join(target.home, 'profiles/web/node_modules/old.txt'), 'utf8')).toBe(
+        'destination-code',
+      )
+      const committed = await commitMerge(ctx, ready.id)
+      expect(committed.targetId).toBe(target.id)
+      expect(committed.committed).toBe(true)
+      expect(
+        await readFile(join(target.home, 'profiles/web/node_modules/installed.txt'), 'utf8'),
+      ).toBe('verified-code')
+      const patch = await readFile(join(target.home, 'profiles/web/cordis.patch.yml'), 'utf8')
+      expect(patch).toContain('value: destination')
+      expect(patch).toContain(`${target.home}/assets`)
+      expect(await readFile(join(home, 'profiles/web/package.json'), 'utf8')).toBe(mainBefore)
+      expect(await readFile(join(home, 'profiles/web/node_modules/old.txt'), 'utf8')).toBe(
+        'old-code',
+      )
+      expect(await readFile(join(labHomeDir(home, id), 'profiles/web/package.json'), 'utf8')).toBe(
+        sourceBefore,
+      )
+      expect(
+        await readFile(snapshotManifestPath(target.home, committed.preSnapshot!), 'utf8'),
+      ).toContain(committed.preSnapshot!)
+      expect((await commitMerge(ctx, ready.id)).committed).toBe(true)
+    } finally {
+      await destroyTempHome(home)
+    }
+  })
+  test('target identity is bound to preview; self, verification and unavailable targets are refused', async () => {
+    const { ctx, id, home } = await seed()
+    try {
+      const target = await seedTarget(ctx)
+      const preview = await mergePreview(ctx, id)
+      await expect(mergePreview(ctx, id, 'feature')).rejects.toThrow('同一条')
+      await expect(
+        prepareMerge(
+          ctx,
+          {
+            id,
+            targetId: target.id,
+            revision: preview.revision,
+            plugins: ['@fixture/new'],
+            includeConfig: false,
+          },
+          { install, run: runtime },
+        ),
+      ).rejects.toThrow('重新预览')
+      const manifest = await readLabManifest(home, target.id)
+      await writeLabManifest(home, { ...manifest, state: 'applying' }, ctx.now())
+      await expect(mergePreview(ctx, id, target.id)).rejects.toThrow('正在准备')
+      await writeLabManifest(home, { ...manifest, purpose: undefined }, ctx.now())
+      await expect(mergePreview(ctx, id, target.id)).rejects.toThrow('交互式')
+      await writeLabManifest(
+        home,
+        { ...manifest, source: { ...manifest.source, profileName: 'other' } },
+        ctx.now(),
+      )
+      await expect(mergePreview(ctx, id, target.id)).rejects.toThrow('不属于当前')
+    } finally {
+      await destroyTempHome(home)
+    }
+  })
+  test('selected target drift refuses commit and swap failure restores that target only', async () => {
+    const { ctx, id, home } = await seed()
+    try {
+      const target = await seedTarget(ctx)
+      const preview = await mergePreview(ctx, id, target.id)
+      const ready = await prepareMerge(
+        ctx,
+        {
+          id,
+          targetId: target.id,
+          revision: preview.revision,
+          plugins: ['@fixture/new'],
+          includeConfig: true,
+        },
+        { install, run: runtime },
+      )
+      const patchPath = join(target.home, 'profiles/web/cordis.patch.yml')
+      const before = await readFile(patchPath)
+      await writeFile(patchPath, '- id: changed\n')
+      await expect(commitMerge(ctx, ready.id)).rejects.toThrow('验证后变化')
+      await writeFile(patchPath, before)
+      await expect(
+        commitMerge(ctx, ready.id, {
+          swap: async () => {
+            throw new Error('target swap failure')
+          },
+        }),
+      ).rejects.toThrow('target swap failure')
+      expect(await readFile(join(target.home, 'profiles/web/node_modules/old.txt'), 'utf8')).toBe(
+        'destination-code',
+      )
+      expect(await readFile(patchPath)).toEqual(before)
+      expect(await readFile(join(home, 'profiles/web/node_modules/old.txt'), 'utf8')).toBe(
+        'old-code',
+      )
+    } finally {
+      await destroyTempHome(home)
+    }
+  })
   test('pnpm metadata keeps immutable artifact paths after moving the runtime', () => {
     const output = portablePnpmMetadata(
       `importers:

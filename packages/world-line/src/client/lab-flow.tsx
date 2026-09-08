@@ -2,9 +2,10 @@ import { ArrowCounterClockwise } from '@phosphor-icons/react/dist/csr/ArrowCount
 import { CircleNotch } from '@phosphor-icons/react/dist/csr/CircleNotch'
 import { FileText } from '@phosphor-icons/react/dist/csr/FileText'
 import { Flask } from '@phosphor-icons/react/dist/csr/Flask'
+import { Info } from '@phosphor-icons/react/dist/csr/Info'
 import { UploadSimple } from '@phosphor-icons/react/dist/csr/UploadSimple'
 import { X } from '@phosphor-icons/react/dist/csr/X'
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { LabActionResult, LabPromoteCommandResult } from '../commands/lab.js'
 import type { ReportResult } from '../commands/report.js'
 import type { RestoreCommandResult } from '../commands/restore.js'
@@ -13,7 +14,12 @@ import { HudTabs } from './hud-controls.js'
 import { installationToResume } from './installation-flow.js'
 import { JobReceipt, jobKindLabel, ProbeLadder, useJob } from './job-view.js'
 import { useLabStatus } from './lab-status.js'
-import { localPluginPath, type PluginSource, pluginInstallSpec } from './plugin-input.js'
+import {
+  localPluginPath,
+  type PluginSource,
+  pluginInputErrors,
+  pluginInstallSpec,
+} from './plugin-input.js'
 import { ReportView } from './report-view.js'
 
 /** 「安装插件 → 验证 → promote」引导向导（web actions: lab-add / promote / restore / report / rescue-start）。 */
@@ -43,12 +49,12 @@ export function LabFlow({
   const [restoring, setRestoring] = useState(true)
   const [restoreError, setRestoreError] = useState('')
   const [restoreAttempt, setRestoreAttempt] = useState(0)
+  const pluginHelpId = useId()
   const [spec, setSpec] = useState('')
   const [pluginSource, setPluginSource] = useState<PluginSource>('registry')
   const [localPath, setLocalPath] = useState('')
   const installInput = pluginInstallSpec(pluginSource, pluginSource === 'local' ? localPath : spec)
   const [promote, setPromote] = useState(false)
-  const [restart, setRestart] = useState(true)
   const [keep, setKeep] = useState(true)
   const [allowScripts, setAllowScripts] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
@@ -184,7 +190,7 @@ export function LabFlow({
         </p>
       )}
       {!restoring && !restoreError && (
-        <p className="wl-muted">
+        <p className="wl-muted wl-lab-step">
           {step === 'install'
             ? '第 1 步 · 安装候选'
             : step === 'verify'
@@ -194,7 +200,9 @@ export function LabFlow({
       )}
       {!restoring && !restoreError && step === 'install' && (
         <div className="wl-lab-form">
-          <p>来源环境：{sourceName}。验证通过后合回此环境。</p>
+          <p className="wl-lab-source">
+            目标世界线：<strong>{sourceName}</strong>
+          </p>
           <HudTabs
             label="插件来源"
             value={pluginSource}
@@ -207,9 +215,26 @@ export function LabFlow({
             ]}
           />
           <label>
-            {pluginSource === 'local' ? '插件文件夹路径' : '包名（可带版本）'}
+            <span className="wl-field-label">
+              {pluginSource === 'local' ? '插件文件夹路径' : '包名（可带版本）'}
+              <span
+                className="wl-field-help"
+                tabIndex={0}
+                aria-label="安装来源说明"
+                aria-describedby="wl-plugin-source-help"
+              >
+                <Info size={14} aria-hidden="true" />
+                <span id="wl-plugin-source-help" role="tooltip" className="wl-field-tooltip">
+                  {pluginSource === 'local'
+                    ? '填写本机含 package.json 的插件目录，以 file: 方式安装。'
+                    : '未指定版本时使用 @latest。'}
+                </span>
+              </span>
+            </span>
             <input
               type="text"
+              aria-describedby={pluginHelpId}
+              aria-invalid={!!installInput.error}
               value={pluginSource === 'local' ? localPath : spec}
               onChange={(event) => {
                 const value = event.target.value
@@ -227,18 +252,17 @@ export function LabFlow({
               }
               disabled={!!pending}
             />
+            <span className="wl-plugin-input-help" id={pluginHelpId}>
+              <span
+                className="wl-error"
+                style={{ visibility: installInput.error ? 'visible' : 'hidden' }}
+                aria-hidden={!installInput.error}
+              >
+                {installInput.error ?? pluginInputErrors[pluginSource]}
+              </span>
+            </span>
           </label>
-          <p className="wl-muted">
-            {pluginSource === 'local'
-              ? '选择运行 DSH 的电脑上的插件目录，目录内须有 package.json；将作为 file: 本地依赖在实验中安装。'
-              : '不填版本默认安装 latest；填写 @版本号、@标签或版本范围可指定版本。'}
-          </p>
-          {installInput.error && (
-            <p className="wl-error" role="alert">
-              {installInput.error}
-            </p>
-          )}
-          {installInput.spec && (
+          {pluginSource === 'local' && installInput.spec && (
             <p className="wl-muted" style={{ overflowWrap: 'anywhere' }}>
               将安装：{installInput.spec}
             </p>
@@ -250,19 +274,7 @@ export function LabFlow({
               disabled={!!pending}
               onChange={(event) => setPromote(event.target.checked)}
             />
-            验证通过后自动合入来源环境
-          </label>
-          <label
-            className="wl-merge-config"
-            title="合入时会短暂重启目标世界线，通过检查后记录可用恢复点"
-          >
-            <input
-              type="checkbox"
-              checked={restart}
-              disabled={!!pending}
-              onChange={(event) => setRestart(event.target.checked)}
-            />
-            合入后自动重启并检查
+            验证通过后自动合入
           </label>
           <label className="wl-merge-config">
             <input
@@ -280,12 +292,10 @@ export function LabFlow({
               disabled={!!pending}
               onChange={(event) => setAllowScripts(event.target.checked)}
             />
-            允许构建脚本（默认忽略 install 脚本）
+            允许构建脚本（默认禁用）
           </label>
 
-          <p className="wl-muted">
-            验证在独立实验环境中进行，来源环境保持运行。验证任务在后台执行，关闭此面板不会中断。
-          </p>
+          <p className="wl-muted">隔离验证，不影响当前世界线。关闭面板后任务继续。</p>
           <button
             className="wl-button wl-primary"
             disabled={!installInput.spec || !!pending}
@@ -297,7 +307,7 @@ export function LabFlow({
                 keep,
                 allowScripts,
                 promote,
-                restart,
+                restart: true,
               })
             }
           >
@@ -370,7 +380,7 @@ export function LabFlow({
                         void run('正在提交合入…', {
                           action: 'promote',
                           id: labId,
-                          restart,
+                          restart: true,
                         })
                       }
                     >
@@ -431,7 +441,7 @@ export function LabFlow({
                         action: 'promote',
                         id: labId,
                         acceptReview: true,
-                        restart: false,
+                        restart: true,
                       })
                     }}
                   >
@@ -550,7 +560,7 @@ export function LabFlow({
                               action: 'restore',
                               lastKnownGood: true,
                               promote: true,
-                              restart,
+                              restart: true,
                             })
                           }}
                         >

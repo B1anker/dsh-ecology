@@ -1,6 +1,8 @@
 export interface MergePreview {
   sourceId: string
   sourceName: string
+  targetId: string
+  targetName: string
   revision: string
   plugins: {
     name: string
@@ -17,6 +19,8 @@ export interface MergeCandidate {
   labId: string
   sourceId: string
   sourceName: string
+  targetId: string
+  targetName: string
   plugins: string[]
   includeConfig: boolean
   ok: boolean

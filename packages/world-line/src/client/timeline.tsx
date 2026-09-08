@@ -652,7 +652,7 @@ export function Timeline({
                         children: [
                           {
                             id: 'merge',
-                            label: '合入主干',
+                            label: '合入到…',
                             icon: <GitMerge size={16} />,
                             disabled:
                               busy ||

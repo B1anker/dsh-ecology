@@ -200,4 +200,28 @@ export const styles = `
 .wl-menu-layer .wl-system-chevron{border-radius:0 var(--wl-radius-control) var(--wl-radius-control) 0}
 .wl-menu-layer .wl-system-item:not(:has(.wl-system-chevron)) .wl-system-label{border-radius:var(--wl-radius-control)}
 .wl-menu-layer .wl-system-submenu .wl-system-label{border-radius:var(--wl-radius-control)}
+
+/* The notifier lives outside .wl-page; give it its own theme and button reset. */
+.wl-task-notice{position:fixed;right:24px;bottom:20px;z-index:80;display:flex;align-items:center;gap:12px;width:280px;max-width:calc(100vw - 32px);box-sizing:border-box;padding:12px 14px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#20232a);border:1px solid var(--dsw-alias-border-l2,#e3e4e8);border-radius:10px;box-shadow:0 6px 24px #00000012;font-family:inherit;font-size:13px;line-height:1.5}
+.wl-task-notice-icon{display:flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;background:#edbb161a;color:var(--dsw-alias-label-primary,#20232a);border-radius:8px}
+.wl-task-notice-content{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:2px}.wl-task-notice-title{font-weight:500}
+.wl-task-notice button{appearance:none;display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;font:inherit;line-height:1.5;cursor:pointer;box-sizing:border-box;margin:0}
+.wl-task-notice .wl-task-notice-open{padding:0;color:var(--dsw-alias-label-secondary,#626873);font-size:12px;text-underline-offset:3px}.wl-task-notice-open:hover{text-decoration:underline;color:var(--dsw-alias-label-primary,#20232a)}
+.wl-task-notice .wl-task-notice-dismiss{align-self:flex-start;flex:none;width:28px;height:28px;padding:6px;border-radius:5px;color:var(--dsw-alias-label-secondary,#626873)}.wl-task-notice-dismiss:hover{background:var(--dsw-alias-bg-layer-1,#f3f4f6)}
+.wl-task-notice button:focus-visible{outline:2px solid #edbb16;outline-offset:3px}
+@media(max-width:480px){.wl-task-notice{right:16px;bottom:16px}}
+/* Compact installation spacing overrides the generic inspector paragraph margins. */
+.wl-page .wl-lab-flow>.wl-lab-step{margin:0;padding-top:24px;line-height:1.5}
+.wl-page .wl-lab-form{gap:12px;align-content:start}
+.wl-page .wl-lab-form p{margin:0;line-height:1.5}
+.wl-page .wl-lab-form .wl-lab-source{font-size:12px;color:var(--dsw-alias-label-secondary)}
+.wl-page .wl-lab-form .wl-lab-source strong{font-weight:500;color:var(--dsw-alias-label-primary)}
+.wl-page .wl-lab-form>label:not(.wl-merge-config){gap:6px}
+.wl-page .wl-lab-form>.wl-merge-config{margin:0;min-height:24px}
+.wl-plugin-input-help{display:grid;min-width:0}.wl-plugin-input-help>span{grid-area:1/1;font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+
+.wl-field-label{display:flex;align-items:center;gap:6px}
+.wl-field-help{position:relative;display:inline-flex;align-items:center;color:var(--dsw-alias-label-secondary);cursor:help;outline-offset:3px}
+.wl-field-tooltip{position:absolute;top:calc(100% + 8px);left:-100px;z-index:20;width:240px;max-width:65vw;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary);box-shadow:0 4px 16px #0002;font-size:12px;font-weight:400;line-height:1.5;visibility:hidden;opacity:0;pointer-events:none}
+.wl-field-help:hover .wl-field-tooltip,.wl-field-help:focus .wl-field-tooltip{visibility:visible;opacity:1}
 `
