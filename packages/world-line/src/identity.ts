@@ -6,8 +6,10 @@
  * advisory metadata recorded in every manifest.
  */
 
-/** The CLI's own version (kept in step with package.json by hand). */
-export const WORLD_LINE_VERSION = '0.1.0'
+import { createRequire } from 'node:module'
+
+/** Read at runtime: the release workflow bumps package.json after building. */
+export const WORLD_LINE_VERSION: string = createRequire(import.meta.url)('../package.json').version
 
 /** Machine-readable output envelope version (WORLD-LINE-SPEC §3). */
 export const ENVELOPE_SCHEMA_VERSION = 1

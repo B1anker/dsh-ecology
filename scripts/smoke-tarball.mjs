@@ -4,8 +4,9 @@
  * The rest of CI cannot answer this. rslib, rstest, and the rsbuild beneath both
  * require Node `^20.19.0 || >=22.12.0`, so no job that installs the dev toolchain
  * can start on the 20.11 that `engines.node` promises. This script therefore
- * takes the packed tarball, extracts it somewhere with no node_modules at all,
- * and imports it the way a consumer would.
+ * takes the packed tarball, extracts it somewhere without the workspace
+ * toolchain, installs only the package's own production dependencies, and
+ * imports it the way a consumer would.
  *
  * It is plain JavaScript on purpose: running it under the old Node is the point,
  * and a TypeScript entry would need a loader that has its own version floor.
@@ -295,6 +296,94 @@ const PACKAGES = {
       return 'public export, mock registry over a real socket, context events, tools deny, request and response doubles'
     },
   },
+
+  '@seaveyon/dsh-world-line': {
+    // Browser client is a `__ModuleLoader__` envelope that expects `window`.
+    skip: ['client.js'],
+    /**
+     * @param _dist - file URL of the extracted `dist/` directory.
+     * @param root - filesystem path of the extracted package.
+     * @param entry - package namespace resolved through the public exports map.
+     * @param manifest - extracted package.json.
+     * @returns a description of what was exercised.
+     */
+    async check(_dist, root, entry, manifest) {
+      const {
+        apply,
+        inject,
+        name,
+        main,
+        runCli,
+        WORLD_LINE_VERSION,
+        ENVELOPE_SCHEMA_VERSION,
+        WORLD_LINE_FORMAT_VERSION,
+      } = entry
+      if (typeof apply !== 'function') throw new Error('apply is not a function')
+      if (typeof main !== 'function') throw new Error('main is not a function')
+      if (typeof runCli !== 'function') throw new Error('runCli is not a function')
+      if (name !== '@seaveyon/dsh-world-line') throw new Error(`name is ${name}`)
+      if (JSON.stringify(inject) !== JSON.stringify(['webServer', 'connection'])) {
+        throw new Error(`inject is ${JSON.stringify(inject)}`)
+      }
+      if (WORLD_LINE_VERSION !== manifest.version) {
+        throw new Error(`WORLD_LINE_VERSION ${WORLD_LINE_VERSION} != ${manifest.version}`)
+      }
+      if (ENVELOPE_SCHEMA_VERSION !== 1) throw new Error('envelope schema')
+      if (WORLD_LINE_FORMAT_VERSION !== 1) throw new Error('format version')
+
+      const webRel = manifest.exports?.['./web']?.default
+      if (webRel !== './dist/web/index.js') throw new Error(`./web export is ${webRel}`)
+
+      const cliTarget = manifest.bin?.['dsh-world-line']
+      if (cliTarget !== './bin/dsh-world-line.mjs') {
+        throw new Error(`unexpected bin target ${cliTarget}`)
+      }
+      if (manifest.bin?.['world-line'] !== cliTarget) {
+        throw new Error('world-line bin alias does not match dsh-world-line')
+      }
+      const cli = join(root, cliTarget)
+      const help = await run(execPath, [cli, '--help'])
+      if (!help.stdout.startsWith(`dsh-world-line ${manifest.version}`)) {
+        throw new Error('CLI --help')
+      }
+      const versionOut = await run(execPath, [cli, '--version'])
+      if (versionOut.stdout.trim() !== manifest.version) throw new Error('CLI --version')
+
+      const declaredPatch = manifest.dsh?.bundle?.patch
+      if (declaredPatch !== './cordis.patch.yml') {
+        throw new Error(`unexpected dsh.bundle.patch ${declaredPatch}`)
+      }
+      const patch = load(await readFile(join(root, declaredPatch), 'utf8'))
+      if (!Array.isArray(patch)) throw new Error('bundle patch is not a top-level array')
+      const inserted = patch.flatMap((item) => (Array.isArray(item?.insert) ? item.insert : []))
+      const worldLine = inserted.find((row) => row?.id === 'world-line')
+      if (worldLine?.name !== '@seaveyon/dsh-world-line') throw new Error('bundle plugin row')
+      if (JSON.stringify(worldLine.inject) !== JSON.stringify(['webServer', 'connection'])) {
+        throw new Error('bundle plugin row does not wait for webServer and connection')
+      }
+
+      if (manifest.exports?.['./client']?.default !== './dist/client.js') {
+        throw new Error(
+          `unexpected client export ${JSON.stringify(manifest.exports?.['./client'])}`,
+        )
+      }
+      if (manifest.dsh?.client?.platform !== 'web' || manifest.dsh?.client?.immediately !== true) {
+        throw new Error(`unexpected dsh.client ${JSON.stringify(manifest.dsh?.client)}`)
+      }
+      const clientBundle = await readFile(join(root, 'dist/client.js'), 'utf8')
+      if (!clientBundle.startsWith('window.__ModuleLoader__.load')) {
+        throw new Error('client bundle missing ModuleLoader envelope')
+      }
+      if (!clientBundle.includes('id:"@seaveyon/dsh-world-line"')) {
+        throw new Error('client bundle registers the wrong module id')
+      }
+      if (!clientBundle.includes('require("react")')) {
+        throw new Error('client bundle no longer externalizes react')
+      }
+
+      return 'public export, CLI help and version, bundle patch, client envelope'
+    },
+  },
 }
 
 const tarball = argv[2]
@@ -311,6 +400,15 @@ try {
   const entry = PACKAGES[manifest.name]
   if (entry === undefined) {
     throw new Error(`no smoke checks are defined for ${manifest.name}`)
+  }
+
+  // A real install puts production dependencies next to the package. The other
+  // packages here have none, so this is a no-op for them; world-line needs
+  // js-yaml (and declares playwright-core) before its public export can load.
+  if (Object.keys(manifest.dependencies ?? {}).length > 0) {
+    await run('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
+      cwd: root,
+    })
   }
 
   const dist = pathToFileURL(join(root, 'dist') + '/')

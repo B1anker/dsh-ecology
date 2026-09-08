@@ -165,3 +165,44 @@ const petRow = petPatches
 assert(petRow?.name === '@seaveyon/dsh-pet', 'pet bundle: discovery row is missing or misnamed')
 
 console.log('ok    pet bundle manifest, client declaration, and discovery row')
+
+// ── @seaveyon/dsh-world-line ────────────────────────────────────────────────
+//
+// Same discovery promises as the pet: a client declaration the shell reads to
+// serve the browser bundle, and an insert row without which the plugin never
+// enters the Loader's tree. World-line also waits on webServer and connection,
+// because the management API is authenticated.
+
+const worldLineRoot = new URL('../packages/world-line/', import.meta.url)
+const worldLineManifest = JSON.parse(await readFile(new URL('package.json', worldLineRoot), 'utf8'))
+
+const worldLineClient = worldLineManifest.dsh?.client
+assert(worldLineClient?.platform === 'web', 'world-line bundle: dsh.client.platform must be "web"')
+assert(
+  Array.isArray(worldLineClient?.inject) && worldLineClient.inject.length === 0,
+  'world-line bundle: dsh.client.inject must be an empty array',
+)
+assert(
+  worldLineClient?.immediately === true,
+  'world-line bundle: dsh.client.immediately must be true',
+)
+assert(
+  worldLineManifest.exports?.['./client']?.default === './dist/client.js',
+  'world-line bundle: ./client export must point at ./dist/client.js',
+)
+assert(worldLineManifest.files?.includes('dist/'), 'world-line bundle: dist/ is absent from files')
+
+const worldLinePatches = await readPatch(worldLineRoot, worldLineManifest, 'world-line bundle')
+const worldLineRow = worldLinePatches
+  .flatMap((patch) => (Array.isArray(patch?.insert) ? patch.insert : []))
+  .find((row) => row?.id === 'world-line')
+assert(
+  worldLineRow?.name === '@seaveyon/dsh-world-line',
+  'world-line bundle: discovery row is missing or misnamed',
+)
+assert(
+  JSON.stringify(worldLineRow.inject) === JSON.stringify(['webServer', 'connection']),
+  'world-line bundle: plugin row must wait for webServer and connection',
+)
+
+console.log('ok    world-line bundle manifest, client declaration, and discovery row')
