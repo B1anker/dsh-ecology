@@ -1,3 +1,10 @@
+# [0.6.0](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.5.0...web-login-v0.6.0) (2026-09-08)
+
+
+### Features
+
+* **web-login:** support authenticated lab session delegation ([83fb474](https://github.com/B1anker/dsh-ecology/commit/83fb474547ddcf8f6ca9531ea9db30f94a4295b7))
+
 # [0.5.0](https://github.com/B1anker/dsh-ecology/compare/web-login-v0.4.2...web-login-v0.5.0) (2026-09-07)
 
 
