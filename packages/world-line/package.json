@@ -1,6 +1,6 @@
 {
   "name": "@seaveyon/dsh-world-line",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Safe change manager for DSH profiles: divergence labs, lastKnownGood snapshots, and a local time machine for profile and plugin composition",
   "keywords": [
     "dsh",
