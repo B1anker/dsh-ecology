@@ -298,6 +298,10 @@ jobs:
 
           release_package packages/plugin-testkit ./release/plugin-testkit.config.mjs
           release_package packages/web-login ./release/web-login.config.mjs
+          # world-line's first version (0.1.0, tag world-line-v0.1.0) was
+          # published by hand per README → "Bootstrapping a new package on npm";
+          # its trusted publisher names this workflow file.
+          release_package packages/world-line ./release/world-line.config.mjs
           # pet's first version (0.1.0, tag pet-v0.1.0) was published by hand
           # per README → "Bootstrapping a new package on npm"; its trusted
           # publisher names this workflow file. The three platform packages
