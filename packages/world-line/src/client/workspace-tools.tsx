@@ -10,6 +10,7 @@ import type { ToolPanel } from './panels.js'
 import { RecoveryPanel } from './recovery-panel.js'
 import { ReportView } from './report-view.js'
 import { ResearchPanel } from './research-panel.js'
+import { ChangeSummary, VersionPair } from './result-visuals.js'
 import { StoragePanel } from './storage-panel.js'
 import { type Line, label } from './timeline-model.js'
 
@@ -200,9 +201,9 @@ export function WorkspaceTools({
             启用任务完成通知
           </button>
           {allJobs.map((job) => (
-            <article className="wl-event-detail" key={job.id}>
+            <article className="wl-event-detail wl-task-card" data-status={job.status} key={job.id}>
               <strong>{jobKindLabel(job.kind)}</strong>
-              <span>
+              <span className="wl-task-state">
                 {
                   {
                     queued: '排队中',
@@ -217,7 +218,7 @@ export function WorkspaceTools({
                   }[job.status]
                 }
               </span>
-              <time>{new Date(job.startedAt).toLocaleString()}</time>
+              <time dateTime={job.startedAt}>{new Date(job.startedAt).toLocaleString()}</time>
               {job.error && <p className="wl-error">{job.error}</p>}
               <button className="wl-button" onClick={() => onJob(job.id)}>
                 查看进度与结果
@@ -527,6 +528,13 @@ export function WorkspaceTools({
           {diff && (
             <>
               <p>读取于 {new Date(diff.at).toLocaleString()}</p>
+              <ChangeSummary
+                diff={{
+                  dependencies: diff.diff.dependencies ?? [],
+                  files: diff.diff.files ?? [],
+                  patches: diff.diff.patches ?? [],
+                }}
+              />
               {['dependencies', 'files', 'patches'].map((k) => (
                 <details open className="wl-event-detail" key={k}>
                   <summary>
@@ -553,9 +561,10 @@ export function WorkspaceTools({
                               removed: '移除',
                               changed: '变更',
                             }[entry.status as string] ?? entry.status}
-                            {k === 'dependencies' &&
-                              ` · ${entry.before ?? '未安装'} → ${entry.after ?? '未安装'}`}
                           </p>
+                          {k === 'dependencies' && (
+                            <VersionPair before={entry.before} after={entry.after} />
+                          )}
                           {entry.changedFields?.length > 0 && (
                             <p className="wl-muted">
                               变化项：

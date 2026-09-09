@@ -9,6 +9,7 @@ import type { LabActionResult, LabPromoteCommandResult } from '../commands/lab.j
 import type { RestoreCommandResult } from '../commands/restore.js'
 import type { ProbeResult } from '../domain/probe.js'
 import { jobsConnected, useJobFeed } from './job-feed.js'
+import { CompatibilityMatrix } from './result-visuals.js'
 
 /** Server-side job snapshot (web action `job`). Jobs are in-memory: a host restart loses them. */
 export interface Job {
@@ -173,6 +174,8 @@ export function ProbeLadder({ job, onLogs }: { job: Job; onLogs?(): void }) {
 
 /** Receipt facts of a terminal ok job (promote receipt, or restore/lab-add result highlights). */
 export function JobReceipt({ job }: { job: Job }) {
+  if (job.kind === 'version-matrix' && (job.result as any)?.rows)
+    return <CompatibilityMatrix rows={(job.result as any).rows} />
   if (job.status !== 'ok') return null
   if (
     [

@@ -18,7 +18,7 @@ import { useJobFeed } from './job-feed.js'
 import { LabFlow } from './lab-flow.js'
 import { Maintenance } from './maintenance.js'
 import { MergePanel } from './merge-panel.js'
-import { Panel } from './panel.js'
+import { Panel, PanelNavigation } from './panel.js'
 import { usePanels } from './panels.js'
 import { styles } from './styles.js'
 import { TaskNotifier } from './task-notifier.js'
@@ -705,238 +705,233 @@ function WorldLine({
           </div>
         )}
       </div>
-      <div className="wl-workspace">
-        {!data ? (
-          <div className="wl-empty" role="status">
-            <CircleNotch size={28} className="wl-spin" />
-            <p>{loadError ? '连接暂时不可用，请重试' : '正在读取世界线…'}</p>
-          </div>
-        ) : matches.length === 0 ? (
-          <div className="wl-empty">
-            <MagnifyingGlass size={28} />
-            <h2>没有找到这条世界线</h2>
-            <p>试试别名或完整 ID。</p>
-            <button className="wl-button" onClick={() => setQuery('')}>
-              清除搜索
-            </button>
-          </div>
-        ) : (
-          <Timeline
-            lines={lines}
-            experiments={data.lines.filter((line) => line.kind === 'verification')}
-            onExperiments={(id) => {
-              setExperimentSource(id)
-              setInspector(null)
-              setMergeId(null)
-              setLabFlowOpen(false)
-              setMaintenanceOpen(false)
-            }}
-            onComposition={(id) => setToolPanel({ section: 'composition', id })}
-            onInstall={(id) => {
-              setInstallSource(id)
-              setLabFlowOpen(true)
-              setMaintenanceOpen(false)
-              setInspector(null)
-              setMergeId(null)
-              setExperimentSource(null)
-              setPanelJob(null)
-            }}
-            busy={!!busy}
-            selected={selected}
-            currentId={data.currentId}
-            onManage={(action, id) => {
-              const target = data.lines.find((line) => line.id === id)
-              if (!target || busy) return
-              setSelected(id)
-              if (action === 'alias' || action === 'destroy') {
+      <PanelNavigation.Provider value={canGoBack ? goBack : null}>
+        <div className="wl-workspace">
+          {!data ? (
+            <div className="wl-empty" role="status">
+              <CircleNotch size={28} className="wl-spin" />
+              <p>{loadError ? '连接暂时不可用，请重试' : '正在读取世界线…'}</p>
+            </div>
+          ) : matches.length === 0 ? (
+            <div className="wl-empty">
+              <MagnifyingGlass size={28} />
+              <h2>没有找到这条世界线</h2>
+              <p>试试别名或完整 ID。</p>
+              <button className="wl-button" onClick={() => setQuery('')}>
+                清除搜索
+              </button>
+            </div>
+          ) : (
+            <Timeline
+              lines={lines}
+              experiments={data.lines.filter((line) => line.kind === 'verification')}
+              onExperiments={(id) => {
+                setExperimentSource(id)
+                setInspector(null)
+                setMergeId(null)
+                setLabFlowOpen(false)
+                setMaintenanceOpen(false)
+              }}
+              onComposition={(id) => setToolPanel({ section: 'composition', id })}
+              onInstall={(id) => {
+                setInstallSource(id)
+                setLabFlowOpen(true)
+                setMaintenanceOpen(false)
+                setInspector(null)
+                setMergeId(null)
+                setExperimentSource(null)
+                setPanelJob(null)
+              }}
+              busy={!!busy}
+              selected={selected}
+              currentId={data.currentId}
+              onManage={(action, id) => {
+                const target = data.lines.find((line) => line.id === id)
+                if (!target || busy) return
+                setSelected(id)
+                if (action === 'alias' || action === 'destroy') {
+                  setError('')
+                  setAlias(target.alias ?? '')
+                  setDeleteConfirmation('')
+                  setDialog({ type: action, id })
+                } else
+                  void perform({
+                    action: target.kind === 'rescue' && action === 'stop' ? 'rescue-stop' : action,
+                    id,
+                  })
+              }}
+              events={(data.events ?? []).filter((event) => visible.has(event.lineId))}
+              comparisonIds={inspector?.type === 'compare' ? comparisonIds : []}
+              onCompare={compareSelect}
+              onEvent={inspectEvent}
+              onHistory={(id) => setInspector({ type: 'history', id })}
+              onSnapshot={openSnapshot}
+              onPromote={(id) => void startJob({ action: 'promote', id })}
+              onVerify={(id, interactive) =>
+                void startJob({ action: 'lab-verify', id, interactive })
+              }
+              onReport={(id) => void generateReport(id)}
+              mergeAvailable={data.capabilities?.merge === true}
+              onMerge={(id) => {
+                setInspector(null)
+                setMergeId(id)
+              }}
+              onSelect={setSelected}
+              onEnter={(id) =>
+                id === 'origin'
+                  ? close()
+                  : void perform(
+                      {
+                        action: id.startsWith('rescue-') ? 'rescue-enter' : 'start',
+                        id,
+                      },
+                      true,
+                    )
+              }
+              onTimeChange={setCursor}
+              onFork={openCreate}
+              time={time}
+              start={earliest}
+              end={latest}
+            />
+          )}
+          {data && experimentSource && !labFlowOpen && !maintenanceOpen && (
+            <Experiments
+              key={experimentSource}
+              sourceName={
+                experimentSource === 'origin'
+                  ? `main · ${data.profile}`
+                  : label(data.lines.find((line) => line.id === experimentSource) ?? origin)
+              }
+              lines={data.lines.filter(
+                (line) =>
+                  line.kind === 'verification' && (line.parentId ?? 'origin') === experimentSource,
+              )}
+              busy={!!busy}
+              expanded={expandedExperiment}
+              close={() => setExperimentSource(null)}
+              onLocate={(id) => {
+                setExpandedExperiment(id)
+                setSelected(id)
+                setQuery('')
+                setCursor(null)
+              }}
+              onCollapse={() => {
+                setExpandedExperiment(null)
+                setSelected(experimentSource)
+              }}
+              onVerify={(id) => void startJob({ action: 'lab-verify', id, interactive: true })}
+              onReport={(id) => void generateReport(id)}
+            />
+          )}
+          {data && inspector && !mergeId && (
+            <Inspector
+              state={inspector}
+              lines={all}
+              events={data.events ?? []}
+              comparisonIds={comparisonIds}
+              onComparisonIds={setComparisonIds}
+              onEvent={inspectEvent}
+              onFork={openCreate}
+              onSnapshot={openSnapshot}
+              onPromote={(id) => void startJob({ action: 'promote', id })}
+              onReport={(id) => void generateReport(id)}
+              onRestore={(id, snapshotId) => {
                 setError('')
-                setAlias(target.alias ?? '')
-                setDeleteConfirmation('')
-                setDialog({ type: action, id })
-              } else
-                void perform({
-                  action: target.kind === 'rescue' && action === 'stop' ? 'rescue-stop' : action,
-                  id,
-                })
-            }}
-            events={(data.events ?? []).filter((event) => visible.has(event.lineId))}
-            comparisonIds={inspector?.type === 'compare' ? comparisonIds : []}
-            onCompare={compareSelect}
-            onEvent={inspectEvent}
-            onHistory={(id) => setInspector({ type: 'history', id })}
-            onSnapshot={openSnapshot}
-            onPromote={(id) => void startJob({ action: 'promote', id })}
-            onVerify={(id, interactive) => void startJob({ action: 'lab-verify', id, interactive })}
-            onReport={(id) => void generateReport(id)}
-            mergeAvailable={data.capabilities?.merge === true}
-            onMerge={(id) => {
-              setInspector(null)
-              setMergeId(id)
-            }}
-            onSelect={setSelected}
-            onEnter={(id) =>
-              id === 'origin'
-                ? close()
-                : void perform(
-                    {
-                      action: id.startsWith('rescue-') ? 'rescue-enter' : 'start',
-                      id,
-                    },
-                    true,
-                  )
-            }
-            onTimeChange={setCursor}
-            onFork={openCreate}
-            time={time}
-            start={earliest}
-            end={latest}
-          />
-        )}
-        {canGoBack && (
-          <button
-            className="wl-button"
-            style={{ position: 'absolute', right: 32, bottom: 20, zIndex: 50 }}
-            onClick={goBack}
-          >
-            返回上个面板
-          </button>
-        )}
-        {data && experimentSource && !labFlowOpen && !maintenanceOpen && (
-          <Experiments
-            key={experimentSource}
-            sourceName={
-              experimentSource === 'origin'
-                ? `main · ${data.profile}`
-                : label(data.lines.find((line) => line.id === experimentSource) ?? origin)
-            }
-            lines={data.lines.filter(
-              (line) =>
-                line.kind === 'verification' && (line.parentId ?? 'origin') === experimentSource,
-            )}
-            busy={!!busy}
-            expanded={expandedExperiment}
-            close={() => setExperimentSource(null)}
-            onLocate={(id) => {
-              setExpandedExperiment(id)
-              setSelected(id)
-              setQuery('')
-              setCursor(null)
-            }}
-            onCollapse={() => {
-              setExpandedExperiment(null)
-              setSelected(experimentSource)
-            }}
-            onVerify={(id) => void startJob({ action: 'lab-verify', id, interactive: true })}
-            onReport={(id) => void generateReport(id)}
-          />
-        )}
-        {data && inspector && !mergeId && (
-          <Inspector
-            state={inspector}
-            lines={all}
-            events={data.events ?? []}
-            comparisonIds={comparisonIds}
-            onComparisonIds={setComparisonIds}
-            onEvent={inspectEvent}
-            onFork={openCreate}
-            onSnapshot={openSnapshot}
-            onPromote={(id) => void startJob({ action: 'promote', id })}
-            onReport={(id) => void generateReport(id)}
-            onRestore={(id, snapshotId) => {
-              setError('')
-              setDialog({ type: 'restore', id, snapshotId })
-            }}
-            close={() => setInspector(null)}
-            api={api}
-            busy={!!busy}
-          />
-        )}
-        {mergeId && (
-          <MergePanel
-            key={mergeId}
-            id={mergeId}
-            lines={[origin, ...(data?.lines ?? [])]}
-            api={api}
-            close={() => setMergeId(null)}
-            onBusy={(message) => {
-              setBusy(message)
-              operation.current = !!message
-            }}
-            onCommitted={() => void refresh()}
-          />
-        )}
-        {toolPanel && (
-          <WorkspaceTools
-            key={`${toolPanel.section}:${toolPanel.id}`}
-            panel={toolPanel}
-            lines={[origin, ...(data?.lines ?? [])]}
-            api={api}
-            close={() => setToolPanel(null)}
-            navigate={setToolPanel}
-            onSnapshot={(id) => {
-              setToolPanel(null)
-              openSnapshot(id)
-            }}
-            onCompareLines={(id) => {
-              setToolPanel(null)
-              const other = [origin, ...(data?.lines ?? [])].find(
-                (line) => line.id !== id && line.kind !== 'verification',
-              )
-              setComparisonIds(other ? [id, other.id] : [id])
-              setInspector({ type: 'compare' })
-            }}
-            onJob={(id) => {
-              setPanelJob(id)
-              setMaintenanceOpen(true)
-            }}
-          />
-        )}
-        {labFlowOpen && (
-          <LabFlow
-            key={installSource}
-            onCompare={(id) => setToolPanel({ section: 'compare', id })}
-            onLocate={(id) => {
-              setExpandedExperiment(id)
-              setQuery('')
-              setCursor(null)
-              setSelected(id)
-              setLabFlowOpen(false)
-              setMaintenanceOpen(false)
-              setInspector(null)
-              operation.current = false
-              void refresh()
-            }}
-            sourceId={installSource}
-            sourceName={
-              installSource === 'origin'
-                ? `main · ${data?.profile ?? 'web'}`
-                : label(
-                    data?.lines.find((line) => line.id === installSource) ?? {
-                      ...origin,
-                      id: installSource,
-                      alias: '来源世界线已不可用',
-                    },
-                  )
-            }
-            api={api}
-            close={closeLabFlow}
-            onBusy={jobBusy}
-            onSettled={jobSettled}
-            lastKnownGood={data?.lastKnownGood ?? null}
-          />
-        )}
-        {maintenanceOpen && (
-          <Maintenance
-            api={api}
-            jobId={panelJob}
-            onJobCreated={setPanelJob}
-            close={closeMaintenance}
-            onBusy={jobBusy}
-            onSettled={jobSettled}
-            lastKnownGood={data?.lastKnownGood ?? null}
-          />
-        )}
-      </div>
+                setDialog({ type: 'restore', id, snapshotId })
+              }}
+              close={() => setInspector(null)}
+              api={api}
+              busy={!!busy}
+            />
+          )}
+          {mergeId && (
+            <MergePanel
+              key={mergeId}
+              id={mergeId}
+              lines={[origin, ...(data?.lines ?? [])]}
+              api={api}
+              close={() => setMergeId(null)}
+              onBusy={(message) => {
+                setBusy(message)
+                operation.current = !!message
+              }}
+              onCommitted={() => void refresh()}
+            />
+          )}
+          {toolPanel && (
+            <WorkspaceTools
+              key={`${toolPanel.section}:${toolPanel.id}`}
+              panel={toolPanel}
+              lines={[origin, ...(data?.lines ?? [])]}
+              api={api}
+              close={() => setToolPanel(null)}
+              navigate={setToolPanel}
+              onSnapshot={(id) => {
+                setToolPanel(null)
+                openSnapshot(id)
+              }}
+              onCompareLines={(id) => {
+                setToolPanel(null)
+                const other = [origin, ...(data?.lines ?? [])].find(
+                  (line) => line.id !== id && line.kind !== 'verification',
+                )
+                setComparisonIds(other ? [id, other.id] : [id])
+                setInspector({ type: 'compare' })
+              }}
+              onJob={(id) => {
+                setPanelJob(id)
+                setMaintenanceOpen(true)
+              }}
+            />
+          )}
+          {labFlowOpen && (
+            <LabFlow
+              key={installSource}
+              onCompare={(id) => setToolPanel({ section: 'compare', id })}
+              onLocate={(id) => {
+                setExpandedExperiment(id)
+                setQuery('')
+                setCursor(null)
+                setSelected(id)
+                setLabFlowOpen(false)
+                setMaintenanceOpen(false)
+                setInspector(null)
+                operation.current = false
+                void refresh()
+              }}
+              sourceId={installSource}
+              sourceName={
+                installSource === 'origin'
+                  ? `main · ${data?.profile ?? 'web'}`
+                  : label(
+                      data?.lines.find((line) => line.id === installSource) ?? {
+                        ...origin,
+                        id: installSource,
+                        alias: '来源世界线已不可用',
+                      },
+                    )
+              }
+              api={api}
+              close={closeLabFlow}
+              onBusy={jobBusy}
+              onSettled={jobSettled}
+              lastKnownGood={data?.lastKnownGood ?? null}
+            />
+          )}
+          {maintenanceOpen && (
+            <Maintenance
+              api={api}
+              jobId={panelJob}
+              onJobCreated={setPanelJob}
+              close={closeMaintenance}
+              onBusy={jobBusy}
+              onSettled={jobSettled}
+              lastKnownGood={data?.lastKnownGood ?? null}
+            />
+          )}
+        </div>
+      </PanelNavigation.Provider>
       {!!data?.eventWarnings?.length && (
         <p className="wl-event-warning wl-muted" role="status">
           {data.eventWarnings.join('；')}
@@ -983,7 +978,7 @@ function WorldLine({
                   取消
                 </button>
                 <button
-                  className="wl-button wl-primary"
+                  className={`wl-button ${dialog.type === 'destroy' ? 'wl-danger' : 'wl-primary'}`}
                   disabled={
                     !!busy ||
                     (dialog.type !== 'create' && !dialogLine) ||

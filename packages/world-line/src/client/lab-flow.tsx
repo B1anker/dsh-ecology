@@ -237,7 +237,7 @@ export function LabFlow({
               placeholder={
                 pluginSource === 'local'
                   ? '/Users/你的用户名/code/my-plugin'
-                  : '@seaveyon/dsh-web-login 或 @seaveyon/dsh-web-login@0.5.0'
+                  : '@seaveyon/dsh-web-login@latest'
               }
               disabled={!!pending}
             />
@@ -250,6 +250,15 @@ export function LabFlow({
                 aria-hidden={!installInput.error}
               >
                 {installInput.error ?? pluginInputErrors[pluginSource]}
+              </span>
+              <span
+                className="wl-muted"
+                aria-hidden={!!installInput.error}
+                style={{ visibility: installInput.error ? 'hidden' : 'visible' }}
+              >
+                {pluginSource === 'local'
+                  ? '填写运行 DSH 的电脑上的插件目录。'
+                  : '支持包名@版本；省略版本时使用 latest。'}
               </span>
             </span>
           </label>

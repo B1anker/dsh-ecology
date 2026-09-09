@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { HudSelect, HudTabs } from './hud-controls.js'
+import type { Job } from './job-view.js'
+import { CompatibilityMatrix, UpgradeResults } from './result-visuals.js'
 export function ResearchPanel({
   id,
   api,
@@ -9,6 +11,8 @@ export function ResearchPanel({
   api(body: unknown): Promise<any>
   onJob(id: string): void
 }) {
+  const [matrixJobs, setMatrixJobs] = useState<Job[]>([])
+  const [matrixError, setMatrixError] = useState('')
   const [topic, setTopic] = useState('diagnose')
   const [historyLimit, setHistoryLimit] = useState(5)
   const [breakStale, setBreakStale] = useState(false)
@@ -42,6 +46,13 @@ export function ResearchPanel({
     setPolicy(p)
     setUpgrades(u.filter((r: any) => r.sourceId === id))
     setDeployment(d)
+    try {
+      const jobs = (await api({ action: 'jobs' })) as Job[]
+      setMatrixJobs(jobs.filter((job) => job.kind === 'version-matrix' && job.resource === id))
+      setMatrixError('')
+    } catch {
+      setMatrixError('兼容验证历史读取失败，请刷新进度重试。')
+    }
   }
   useEffect(() => {
     void refresh().catch((e) => setError(e.message))
@@ -375,6 +386,28 @@ export function ResearchPanel({
           开始矩阵验证
         </button>
       </section>
+      {topic === 'updates' && (
+        <>
+          {matrixError && <p className="wl-error">{matrixError}</p>}
+          {!matrixError && !matrixJobs.length && (
+            <p className="wl-muted">最近任务中暂无此环境的兼容验证记录。运行验证后，这里会显示版本矩阵。</p>
+          )}
+          {matrixJobs.slice(0, 5).map((job) => (
+            <section className="wl-viz" key={job.id}>
+              <small>{new Date(job.startedAt).toLocaleString()}</small>
+              {(job.result as any)?.rows ? (
+                <CompatibilityMatrix rows={(job.result as any).rows} />
+              ) : (
+                <p>{job.phase || '尚无矩阵结果'}</p>
+              )}
+              {job.error && <p className="wl-error">{job.error}</p>}
+              <button className="wl-button" onClick={() => onJob(job.id)}>
+                查看验证任务
+              </button>
+            </section>
+          ))}
+        </>
+      )}
       <section hidden={topic !== 'updates'} className="wl-event-detail">
         <h3>升级建议</h3>
         <p>
@@ -405,6 +438,7 @@ export function ResearchPanel({
         {upgrades.map((r: any) => (
           <div key={r.checkedAt}>
             <p>{r.checkedAt}</p>
+            <UpgradeResults rows={r.rows} />
             {r.rows
               .filter((p: any) => p.status === 'verified')
               .map((p: any) => (
@@ -421,10 +455,6 @@ export function ResearchPanel({
                   </button>
                 </div>
               ))}
-            <details>
-              <summary>全部检查结果（含失败）</summary>
-              <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(r.rows, null, 2)}</pre>
-            </details>
           </div>
         ))}
       </section>

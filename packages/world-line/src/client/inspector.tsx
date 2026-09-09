@@ -8,6 +8,7 @@ import { UploadSimple } from '@phosphor-icons/react/dist/csr/UploadSimple'
 import { useEffect, useState } from 'react'
 import type { SnapshotDetail, WorldComparison, WorldEvent } from '../domain/insight-types.js'
 import { Panel } from './panel.js'
+import { ChangeSummary, VersionPair } from './result-visuals.js'
 import { Select } from './select.js'
 import { type Line, label } from './timeline-model.js'
 
@@ -158,10 +159,7 @@ export function Inspector({
           )}
           {result && (
             <>
-              <div className="wl-insight-summary">
-                <strong>{result.dependencies.length}</strong> 个插件差异{' '}
-                <strong>{result.patches.length}</strong> 处配置项变化
-              </div>
+              <ChangeSummary diff={result} />
               <p className="wl-muted">读取于 {date(result.at)} · 从左侧基准看右侧目标</p>
               <h3>插件变化</h3>
               {result.dependencies.length ? (
@@ -169,9 +167,7 @@ export function Inspector({
                   <div className="wl-diff-row" key={dep.name}>
                     <strong>{dep.name}</strong>
                     <span className="wl-badge">{status(dep.status)}</span>
-                    <p>
-                      {dep.before} → {dep.after}
-                    </p>
+                    <VersionPair before={dep.before} after={dep.after} />
                     {!!dep.changes?.length && <p>{dep.changes.join('、')}不同</p>}
                   </div>
                 ))
