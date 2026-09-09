@@ -3,7 +3,7 @@
  * the two paths JSON envelopes do not exercise.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -20,8 +20,11 @@ import {
 import { makeTempHome, profilePackageJson, runCliIn, writeProfile } from '../helpers/fixture.js'
 
 describe('package surface', () => {
-  test('index re-exports the identity and runner', () => {
-    expect(WORLD_LINE_VERSION).toBe('0.1.0')
+  test('index re-exports the identity and runner', async () => {
+    const { version } = JSON.parse(
+      await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
+    )
+    expect(WORLD_LINE_VERSION).toBe(version)
     expect(ENVELOPE_SCHEMA_VERSION).toBe(1)
     expect(WORLD_LINE_FORMAT_VERSION).toBe(1)
     expect(typeof runCli).toBe('function')

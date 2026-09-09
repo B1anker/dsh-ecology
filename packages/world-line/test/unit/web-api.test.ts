@@ -6,6 +6,7 @@ import { newRescueId, rescueDir, rescueHomeDir } from '../../src/commands/rescue
 import type { CliContext } from '../../src/context.js'
 import { UsageError } from '../../src/domain/errors.js'
 import type { ProbeResult } from '../../src/domain/probe.js'
+import { labHomeDir } from '../../src/lab/layout.js'
 import { type LabManifest, writeLabManifest } from '../../src/lab/manifest.js'
 import { noteLastKnownGood } from '../../src/vault/state.js'
 import { apply, type OperateDeps, operate, worldLines } from '../../src/web/index.js'
@@ -229,6 +230,9 @@ describe('world-line Web lab/job actions', () => {
       await expect(
         operate(ctx, { action: 'restore', lastKnownGood: 'yes' }),
       ).rejects.toBeInstanceOf(UsageError)
+      await expect(
+        operate(ctx, { action: 'restore', snapshotId: 'snap-x', sourceId: 42 }),
+      ).rejects.toBeInstanceOf(UsageError)
       await expect(operate(ctx, { action: 'job' })).rejects.toBeInstanceOf(UsageError)
       await expect(operate(ctx, { action: 'job', id: 'job-gone' })).rejects.toThrow('已结束')
       await expect(operate(ctx, { action: 'report' })).rejects.toBeInstanceOf(UsageError)
@@ -236,6 +240,35 @@ describe('world-line Web lab/job actions', () => {
       await expect(
         operate(ctx, { action: 'rescue-start', allow: 'ui-workspace' }),
       ).rejects.toBeInstanceOf(UsageError)
+    } finally {
+      await destroyTempHome(home)
+    }
+  })
+
+  test('restore reads a selected line vault and promotes back to that line', async () => {
+    const home = await makeTempHome()
+    const ctx = makeCtx(home)
+    const sourceId = 'lab-20260909T063030Z-b24fa6b6'
+    try {
+      await writeLabManifest(home, { ...labManifest(sourceId), purpose: 'mirror' }, new Date())
+      let restoreContext: CliContext | undefined
+      let restoreOptions: Parameters<NonNullable<OperateDeps['restore']>>[1] | undefined
+      const restore: NonNullable<OperateDeps['restore']> = async (selected, options) => {
+        restoreContext = selected
+        restoreOptions = options
+        return { ok: true, kind: 'verify', snapshotId: 'snap-x', labId: 'lab-recovery' }
+      }
+      const started = (await operate(
+        ctx,
+        { action: 'restore', snapshotId: 'snap-x', sourceId },
+        undefined,
+        { restore },
+      )) as { jobId: string }
+      const job = await pollJob(ctx, started.jobId)
+      expect(restoreContext?.home).toBe(labHomeDir(home, sourceId))
+      expect(restoreOptions?.manager?.home).toBe(home)
+      expect(restoreOptions?.sourceId).toBe(sourceId)
+      expect(job.resource).toBe(sourceId)
     } finally {
       await destroyTempHome(home)
     }

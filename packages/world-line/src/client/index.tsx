@@ -101,6 +101,7 @@ function WorldLine({
   const [loadError, setLoadError] = useState(''),
     [refreshing, setRefreshing] = useState(false)
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
+  const [dissolvingId, setDissolvingId] = useState<string | null>(null)
   const { begin: beginEntry, entry } = useWorldLineEntry()
   const restoreFocus = useRef<HTMLElement | null>(null)
   const request = useRef<AbortController | null>(null),
@@ -397,7 +398,9 @@ function WorldLine({
     setAlias('')
     setError('')
   }
+  const [eventFocus, setEventFocus] = useState<{ id: string; revision: number } | null>(null)
   const inspectEvent = (event: WorldEvent) => {
+    setEventFocus((previous) => ({ id: event.id, revision: (previous?.revision ?? 0) + 1 }))
     setSelected(event.lineId)
     setCursor(Date.parse(event.at))
     setInspector({ type: 'history', id: event.lineId, eventId: event.id })
@@ -440,6 +443,15 @@ function WorldLine({
         if (!result.url) throw new Error('目标实例未返回进入地址，请重试。')
         await dive.finish(result.url)
       } else {
+        if (body.action === 'destroy') {
+          // The server already confirmed deletion. Keep the stale node for one
+          // beat so a failed request can never look like a successful removal.
+          setDialog(null)
+          setDissolvingId(String(body.id))
+          const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 820
+          await new Promise<void>((resolve) => window.setTimeout(resolve, duration))
+          setDissolvingId(null)
+        }
         setNotice(
           body.action === 'create'
             ? '新的世界线已启动。选择「进入世界线」即可打开。'
@@ -608,7 +620,7 @@ function WorldLine({
               {(['composition', 'compare', 'config', 'tasks', 'storage'] as const)
                 .filter((section) =>
                   ({
-                    composition: '当前组成 插件 升级 卸载',
+                    composition: '插件列表 查看插件 升级 卸载 配置',
                     compare: '历史快照比较 差异',
                     config: '验证配置变更',
                     tasks: '任务进度',
@@ -627,7 +639,7 @@ function WorldLine({
                   >
                     {
                       {
-                        composition: '当前组成',
+                        composition: '插件列表',
                         compare: '历史比较',
                         config: '验证配置变更',
                         tasks: '任务台',
@@ -743,6 +755,7 @@ function WorldLine({
                 setPanelJob(null)
               }}
               busy={!!busy}
+              dissolvingId={dissolvingId}
               selected={selected}
               currentId={data.currentId}
               onManage={(action, id) => {
@@ -764,6 +777,7 @@ function WorldLine({
               comparisonIds={inspector?.type === 'compare' ? comparisonIds : []}
               onCompare={compareSelect}
               onEvent={inspectEvent}
+              eventFocus={eventFocus}
               onHistory={(id) => setInspector({ type: 'history', id })}
               onSnapshot={openSnapshot}
               onPromote={(id) => void startJob({ action: 'promote', id })}
@@ -943,7 +957,9 @@ function WorldLine({
           start={earliest}
           end={latest}
           live={cursor === null}
-          events={(data.events ?? []).filter((event) => visible.has(event.lineId))}
+          events={(data.events ?? []).filter(
+            (event) => visible.has(event.lineId) && !event.parentEventId,
+          )}
           onChange={setCursor}
           onNow={() => setCursor(null)}
         />
@@ -1034,7 +1050,12 @@ function WorldLine({
               if (dialog.type === 'restore') {
                 const snapshotId = dialog.snapshotId
                 setDialog(null)
-                void startJob({ action: 'restore', snapshotId, promote: true })
+                void startJob({
+                  action: 'restore',
+                  snapshotId,
+                  sourceId: dialog.id,
+                  promote: true,
+                })
                 return
               }
               void perform(
@@ -1131,8 +1152,8 @@ function WorldLine({
               <div className="wl-delete-confirm">
                 <p>
                   将把快照 <strong>{dialog.snapshotId}</strong>{' '}
-                  的插件与配置回滚到正式环境：先在验证实验中还原并验证，通过后才会 promote；promote
-                  前会自动保存当前状态的回退快照。
+                  的插件与配置恢复到正式环境：先在验证实验中还原并验证，通过后才会
+                  promote。为保证仍可撤销，时间线会保留后续历史，并新增“恢复前”和“恢复后”快照。
                 </p>
                 <p className="wl-muted">验证期间正式环境不受影响，进度会在维护面板中展示。</p>
               </div>

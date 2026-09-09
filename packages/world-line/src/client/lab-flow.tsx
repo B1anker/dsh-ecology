@@ -85,8 +85,6 @@ export function LabFlow({
   useEffect(() => setReportData(null), [jobId])
   const [message, setMessage] = useState('')
 
-  const [confirmReview, setConfirmReview] = useState(false)
-  useEffect(() => setConfirmReview(false), [jobId])
   const [confirmRollback, setConfirmRollback] = useState(false)
   const { job, gone, connectionError } = useJob(api, jobId, () => {
     onBusy(false)
@@ -425,35 +423,9 @@ export function LabFlow({
                 ))}
               </details>
               {job.status === 'review' && (
-                <section className="wl-review-action" aria-label="人工确认合入">
-                  <strong>人工确认后合入</strong>
-                  <p className="wl-muted">
-                    只有必要检查通过时可接受本次未确认风险。该选择会留下记录，不自动标记稳定点，也不适用于后续安装。
-                  </p>
-                  <button
-                    className="wl-button wl-primary"
-                    disabled={!!pending || !labId}
-                    onClick={() => {
-                      if (!confirmReview) {
-                        setConfirmReview(true)
-                        return
-                      }
-                      void run('正在记录本次风险接受并合入…', {
-                        action: 'promote',
-                        id: labId,
-                        acceptReview: true,
-                        restart: true,
-                      })
-                    }}
-                  >
-                    {confirmReview ? '确认接受本次风险并合入' : '我已确认可用，继续合入'}
-                  </button>
-                  {confirmReview && (
-                    <button className="wl-button" onClick={() => setConfirmReview(false)}>
-                      取消合入
-                    </button>
-                  )}
-                </section>
+                <p className="wl-muted">
+                  这是旧版验证记录。请重新验证；核心界面可用时，运行告警不再阻止合入。
+                </p>
               )}
               <div className="wl-flow-actions">
                 {failure.login && (

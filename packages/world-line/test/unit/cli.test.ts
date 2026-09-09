@@ -62,12 +62,15 @@ describe('CLI surface', () => {
   })
 
   test('--version and -V print the package version and exit 0', async () => {
+    const { version } = JSON.parse(
+      await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
+    )
     const long = await runCliIn({ argv: ['--version'] })
     expect(long.exitCode).toBe(0)
-    expect(long.stdout.trim()).toBe('0.1.0')
+    expect(long.stdout.trim()).toBe(version)
     const short = await runCliIn({ argv: ['-V'] })
     expect(short.exitCode).toBe(0)
-    expect(short.stdout.trim()).toBe('0.1.0')
+    expect(short.stdout.trim()).toBe(version)
     const help = await runCliIn({ argv: ['--help'] })
     expect(help.stdout).toContain('--version')
   })

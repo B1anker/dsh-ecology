@@ -149,7 +149,7 @@ describe('browser client probe', () => {
     expect(browser.closed).toBe(false)
   })
 
-  test('a console error requires review without claiming core damage', async () => {
+  test('a console error is diagnostic when the core shell is stable', async () => {
     const page = new FakePage([readyState(), readyState()])
     const browser = new FakeBrowser(page)
     page.emit('console', { type: () => 'error', text: () => 'boom at runtime' })
@@ -158,12 +158,12 @@ describe('browser client probe', () => {
       readyTimeoutMs: 300,
       deps: { browser },
     })
-    expect(outcome.signal.kind).toBe('inconclusive')
-    expect(outcome.observations?.[0]?.impact).toBe('review')
+    expect(outcome.signal.kind).toBe('ready')
+    expect(outcome.observations?.[0]?.impact).toBe('warning')
     expect(outcome.events.some((entry) => entry.startsWith('console.error'))).toBe(true)
   })
 
-  test('an exception with a stable shell requires review', async () => {
+  test('an exception with a stable shell does not block', async () => {
     const page = new FakePage([readyState()])
     const browser = new FakeBrowser(page)
     page.emit('pageerror', 'uncaught reference')
@@ -172,11 +172,11 @@ describe('browser client probe', () => {
       readyTimeoutMs: 300,
       deps: { browser },
     })
-    expect(outcome.signal.kind).toBe('inconclusive')
+    expect(outcome.signal.kind).toBe('ready')
     expect(outcome.events.some((entry) => entry.startsWith('pageerror:'))).toBe(true)
   })
 
-  test('failed same-origin plugin/api/sse requests count against the boot', async () => {
+  test('failed optional same-origin resources do not override a stable core shell', async () => {
     const page = new FakePage([readyState(), readyState()])
     const browser = new FakeBrowser(page)
     page.emit('requestfailed', {
@@ -189,7 +189,7 @@ describe('browser client probe', () => {
       readyTimeoutMs: 300,
       deps: { browser },
     })
-    expect(outcome.signal.kind).toBe('fail')
+    expect(outcome.signal.kind).toBe('ready')
     expect(outcome.events.some((entry) => entry.startsWith('requestfailed:'))).toBe(true)
   })
 
@@ -211,15 +211,15 @@ describe('browser client probe', () => {
       url: 'http://127.0.0.1:1/',
       deps: { browser: new FakeBrowser(page) },
     })
-    expect(outcome.signal.kind).toBe('inconclusive')
+    expect(outcome.signal.kind).toBe('ready')
     expect(outcome.observations?.[0]).toMatchObject({
       source: 'external',
-      impact: 'review',
+      impact: 'warning',
       address: 'http://127.0.0.1:2/api/state',
     })
     expect(JSON.stringify(outcome)).not.toContain('secret')
   })
-  test('host script HTTP 404 blocks even if shell markers exist', async () => {
+  test('host script HTTP 404 is diagnostic if the core shell remains stable', async () => {
     const page = new FakePage([readyState()])
     page.emit('response', {
       status: () => 404,
@@ -230,7 +230,7 @@ describe('browser client probe', () => {
       url: 'http://127.0.0.1:1/',
       deps: { browser: new FakeBrowser(page) },
     })
-    expect(outcome.signal.kind).toBe('fail')
+    expect(outcome.signal.kind).toBe('ready')
   })
   test('markers missing without errors is inconclusive, not ready', async () => {
     const page = new FakePage([emptyState(), emptyState()])

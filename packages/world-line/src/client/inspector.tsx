@@ -12,7 +12,9 @@ import { ChangeSummary, VersionPair } from './result-visuals.js'
 import { Select } from './select.js'
 import { type Line, label } from './timeline-model.js'
 
-export type InspectorState = { type: 'history'; id: string; eventId?: string } | { type: 'compare' }
+export type InspectorState =
+  | { type: 'history'; id: string; eventId?: string; eventIds?: string[] }
+  | { type: 'compare' }
 const date = (at: string) => new Date(at).toLocaleString('zh-CN')
 const status = (value: string) =>
   ({ added: '新增', removed: '移除', changed: '变化' })[value] ?? value
@@ -93,7 +95,12 @@ export function Inspector({
   }, [state.type, id, snapshotId, from, to, revision, api])
   const line = lines.find((item) => item.id === id)
   const history = events
-    .filter((item) => item.lineId === id)
+    .filter(
+      (item) =>
+        item.lineId === id &&
+        (!item.parentEventId || item.id === event?.id) &&
+        (state.type !== 'history' || !state.eventIds || state.eventIds.includes(item.id)),
+    )
     .toSorted((a, b) => b.at.localeCompare(a.at))
   return (
     <Panel
@@ -136,16 +143,17 @@ export function Inspector({
                 ]}
               />
             ))}
-          </div>
-          <div className="wl-toolbar">
             <button
-              className="wl-button"
-              disabled={!from || !to || loading}
+              className="wl-button wl-icon wl-compare-swap"
+              aria-label="交换比较方向"
+              title="交换比较方向"
+              disabled={!from || !to || loading || busy}
               onClick={() => onComparisonIds([to, from])}
             >
               <ArrowsLeftRight size={15} />
-              交换方向
             </button>
+          </div>
+          <div className="wl-toolbar">
             <button
               className="wl-button"
               disabled={!from || !to || loading}
@@ -241,21 +249,56 @@ export function Inspector({
           {event && (
             <section className="wl-event-detail">
               <span className="wl-eyebrow">
-                {event.kind === 'snapshot' ? 'CHECKPOINT' : 'EVENT'}
+                {event.kind === 'snapshot'
+                  ? '快照'
+                  : event.kind === 'restore'
+                    ? '恢复记录'
+                    : '操作记录'}
               </span>
-              <h3>{event.title}</h3>
+              <h3>
+                {event.actionLabel ?? event.title}
+                {event.statusLabel && <span className="wl-result-status">{event.statusLabel}</span>}
+              </h3>
+              {event.packages
+                ? event.packages.map((pkg) => (
+                    <p className="wl-package-label" key={pkg.name}>
+                      {pkg.name} · {pkg.version}
+                    </p>
+                  ))
+                : event.packageLabel && <p className="wl-package-label">{event.packageLabel}</p>}
               <time>{date(event.at)}</time>
-              <p>{event.detail}</p>
+              {event.detail && <p>{event.detail}</p>}
+              {!!event.childEventIds?.length && (
+                <details className="wl-operation-backups">
+                  <summary>备份（{event.childEventIds.length}）</summary>
+                  <nav className="wl-event-list" aria-label="本次操作的自动备份">
+                    {event.childEventIds
+                      .map((childId) => events.find((item) => item.id === childId))
+                      .filter((item): item is WorldEvent => !!item)
+                      .map((child) => (
+                        <button key={child.id} onClick={() => onEvent(child)}>
+                          <span>
+                            <strong>{child.title}</strong>
+                            <time>{date(child.at)}</time>
+                          </span>
+                        </button>
+                      ))}
+                  </nav>
+                </details>
+              )}
               {detail && (
                 <>
-                  <p className="wl-muted">{detail.warnings.join(' ')}</p>
+                  <details>
+                    <summary>快照包含哪些内容？</summary>
+                    <p className="wl-muted">{detail.warnings.join(' ')}</p>
+                  </details>
                   <button
                     className="wl-button wl-primary"
                     disabled={busy || !detail.restorable}
                     onClick={() => onFork(id, Date.parse(event.at), detail.id)}
                   >
                     <GitBranch size={15} />
-                    从此快照创建世界线
+                    用此快照新建世界线
                   </button>
                   <button
                     className="wl-button"
@@ -283,9 +326,6 @@ export function Inspector({
                   </details>
                 </>
               )}
-              {event.kind !== 'snapshot' && (
-                <p className="wl-muted">这是事件记录；只有快照节点可以恢复当时的配置。</p>
-              )}
             </section>
           )}
           {!history.length && (
@@ -293,18 +333,23 @@ export function Inspector({
               还没有留下快照。保存当前配置，给下一次试验留一个起点。
             </p>
           )}
-          <nav aria-label="事件记录" className="wl-event-list">
+          <nav aria-label="事件记录" className="wl-event-list wl-history-timeline">
             {history.map((item) => (
               <button
                 key={item.id}
                 aria-pressed={event?.id === item.id}
                 onClick={() => onEvent(item)}
               >
-                <span className="wl-event-symbol" data-kind={item.kind}>
-                  {item.kind === 'snapshot' ? '◆' : '○'}
-                </span>
+                <span className="wl-history-dot" aria-hidden="true" />
                 <span>
-                  <strong>{item.title}</strong>
+                  <strong>
+                    {item.kind === 'merge' ? item.title : (item.packageLabel ?? item.title)}
+                  </strong>
+                  {item.actionLabel && (
+                    <span className="wl-history-result">
+                      {item.actionLabel} · {item.statusLabel}
+                    </span>
+                  )}
                   <time>{date(item.at)}</time>
                 </span>
               </button>

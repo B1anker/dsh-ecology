@@ -533,15 +533,15 @@ async function runLabTransactionUnlocked(input: LabRunInput): Promise<LabRunOutc
         detail:
           '本次检查安装、配置组合、宿主启动及核心界面；不调用模型、不推断外部服务和插件全部功能正常。',
       })
-      const unresolved = clientOutcome.observations?.filter((o) => o.impact === 'review') ?? []
+      const unresolved = clientOutcome.observations ?? []
       if (unresolved.length > 0)
         emit({
           check: 'client-observations',
-          label: '运行异常的功能影响待确认',
-          required: true,
+          label: '插件运行告警（不阻止合入）',
+          required: false,
           startedAt: clientStartedAt,
           finishedAt,
-          status: 'inconclusive',
+          status: 'warn',
           detail: unresolved
             .map((o) => `${o.id} [${o.source}] ${o.address ?? ''} ${o.message}`)
             .join('\n'),

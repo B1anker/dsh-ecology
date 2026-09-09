@@ -313,6 +313,9 @@ describe('lab promote', () => {
         ),
         'utf8',
       )
+      const candidateManifest = JSON.parse(await readFile(labManifestPath(home, labId), 'utf8'))
+      candidateManifest.packageStore = 'shared-copy-v1'
+      await writeFile(labManifestPath(home, labId), JSON.stringify(candidateManifest))
       ctx.env.WL_ENV_TEST = 'official'
       ctx.experimentEnv = { ...ctx.env, WL_ENV_TEST: 'experiment', DSH_HOME: '/wrong' }
       const launchFake: NonNullable<
@@ -352,7 +355,10 @@ describe('lab promote', () => {
         deps: {
           launch: launchFake,
           clientProbe: clientProbeFake,
-          install: async () => {
+          install: async (_file, _argv, installOptions) => {
+            expect(installOptions.env?.pnpm_config_store_dir).toBe(
+              join(home, 'world-line', 'cache', 'pnpm-store'),
+            )
             await writeFile(
               join(officialDir, 'package.json'),
               (await readFile(join(officialDir, 'package.json'), 'utf8')) + '\n\n',

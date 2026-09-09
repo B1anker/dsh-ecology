@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto'
 import { chmod, mkdir, readFile, readlink, rename, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, test } from '@rstest/core'
 import type { CliContext } from '../../src/context.js'
+import type { MergePreview } from '../../src/domain/merge-types.js'
 import { snapshotManifestPath } from '../../src/fs/paths.js'
 import {
   CLIENT_BOOT_GLOBALS,
@@ -11,11 +13,12 @@ import {
 import { createLab } from '../../src/lab/create.js'
 import { requireKnownHost } from '../../src/lab/gate.js'
 import { inheritHome } from '../../src/lab/home-inheritance.js'
-import { labHomeDir, labProfileDir } from '../../src/lab/layout.js'
+import { labHomeDir, labProbePath, labProfileDir } from '../../src/lab/layout.js'
 import { currentLabId, managerHome } from '../../src/lab/manager.js'
 import { readLabManifest, writeLabManifest } from '../../src/lab/manifest.js'
 import type { LabRunDeps } from '../../src/lab/run.js'
 import type { runCaptured } from '../../src/lab/runner.js'
+import { operate } from '../../src/web/index.js'
 import {
   commitMerge,
   mergePackage,
@@ -144,6 +147,50 @@ async function seedTarget(ctx: CliContext) {
   return { id, home }
 }
 describe('verified world-line merges', () => {
+  test('external service warnings pass the shared runner and allow normal merge without acceptance', async () => {
+    const { ctx, id, home } = await seed()
+    try {
+      const preview = await mergePreview(ctx, id)
+      const warningRuntime = {
+        ...runtime,
+        browserLaunch: async () => {
+          const browser = await runtime.browserLaunch!()
+          const context = await browser!.newContext()
+          const page = await context.newPage()
+          const originalOn = page.on.bind(page)
+          page.on = ((event: string, callback: (value: unknown) => void) => {
+            originalOn(event as any, callback)
+            if (event === 'requestfailed')
+              callback({
+                url: () => 'http://127.0.0.1:45731/state',
+                resourceType: () => 'fetch',
+                failure: () => ({ errorText: 'net::ERR_CONNECTION_REFUSED' }),
+              })
+          }) as typeof page.on
+          return {
+            ...browser!,
+            newContext: async () => ({ ...context, newPage: async () => page }),
+          }
+        },
+      }
+      const ready = await prepareMerge(
+        ctx,
+        { id, revision: preview.revision, plugins: ['@fixture/new'], includeConfig: false },
+        { install, run: warningRuntime },
+      )
+      expect(ready.ok).toBe(true)
+      expect(ready.detail).toContain('有运行告警')
+      const evidence = JSON.parse(await readFile(labProbePath(home, ready.labId), 'utf8'))
+      expect(evidence.probes.find((p: any) => p.check === 'client-observations')).toMatchObject({
+        required: false,
+        status: 'warn',
+      })
+      expect((await readLabManifest(home, ready.labId)).state).toBe('passed')
+      expect((await commitMerge(ctx, ready.id)).committed).toBe(true)
+    } finally {
+      await destroyTempHome(home)
+    }
+  })
   test('merges into the selected world, preserving main and source and backing up the target', async () => {
     const { ctx, id, home } = await seed()
     try {
@@ -153,7 +200,11 @@ describe('verified world-line merges', () => {
         join(labHomeDir(home, id), 'profiles/web/package.json'),
         'utf8',
       )
-      const preview = await mergePreview(ctx, id, 'destination')
+      const preview = (await operate(ctx, {
+        action: 'merge-preview',
+        id,
+        targetId: 'destination',
+      })) as MergePreview
       expect(preview.targetId).toBe(target.id)
       expect(preview.targetName).toBe('destination')
       const ready = await prepareMerge(
@@ -423,6 +474,59 @@ packages:
       )
       expect(ready.ok).toBe(false)
       await expect(commitMerge(ctx, ready.id)).rejects.toThrow('验证未通过')
+      await expect(commitMerge(ctx, ready.id, { acceptReview: true })).rejects.toThrow('验证未通过')
+    } finally {
+      await destroyTempHome(home)
+    }
+  })
+  test('review merge requires explicit consent, unchanged proof, and no failed core checks', async () => {
+    const { ctx, id, home } = await seed()
+    try {
+      const preview = await mergePreview(ctx, id)
+      const ready = await prepareMerge(
+        ctx,
+        { id, revision: preview.revision, plugins: ['@fixture/new'], includeConfig: false },
+        { install, run: runtime },
+      )
+      const path = join(home, 'world-line/merges', ready.id, 'candidate.json')
+      const stored = JSON.parse(await readFile(path, 'utf8'))
+      const proofPath = labProbePath(home, ready.labId)
+      const proof = JSON.parse(await readFile(proofPath, 'utf8'))
+      proof.probes = proof.probes.filter(
+        (p: any) => !['plugin-function', 'client-observations'].includes(p.check),
+      )
+      proof.probes.push(
+        { check: 'plugin-function', required: false, status: 'skip' },
+        { check: 'client-observations', required: true, status: 'inconclusive' },
+      )
+      const bytes = JSON.stringify(proof)
+      stored.ok = false
+      stored.reviewable = true
+      stored.reviewProbeHash = createHash('sha256').update(bytes).digest('hex')
+      await writeFile(path, JSON.stringify(stored))
+      await writeFile(proofPath, bytes)
+      await expect(commitMerge(ctx, ready.id)).rejects.toThrow('需先明确确认')
+      await writeFile(proofPath, bytes + ' ')
+      await expect(commitMerge(ctx, ready.id, { acceptReview: true })).rejects.toThrow(
+        '验证记录已变化',
+      )
+      const failed = JSON.stringify({
+        probes: [...proof.probes, { check: 'host-boot', required: true, status: 'fail' }],
+      })
+      await writeFile(proofPath, failed)
+      await writeFile(
+        path,
+        JSON.stringify({
+          ...stored,
+          reviewProbeHash: createHash('sha256').update(failed).digest('hex'),
+        }),
+      )
+      await expect(commitMerge(ctx, ready.id, { acceptReview: true })).rejects.toThrow('存在失败项')
+      await writeFile(proofPath, bytes)
+      await writeFile(path, JSON.stringify(stored))
+      const result = await commitMerge(ctx, ready.id, { acceptReview: true })
+      expect(result.committed).toBe(true)
+      expect(result.reviewAccepted).toBe(true)
     } finally {
       await destroyTempHome(home)
     }

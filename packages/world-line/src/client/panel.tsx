@@ -16,6 +16,7 @@ type PanelProps = Omit<ComponentPropsWithoutRef<'form'>, 'title'> & {
   close(): void
   closeDisabled?: boolean
   footer?: ReactNode
+  back?: () => void
 }
 
 /** Shared drawer chrome: only the body scrolls, keeping title and actions visible. */
@@ -25,12 +26,14 @@ export function Panel({
   close,
   closeDisabled,
   footer,
+  back,
   children,
   className = '',
   ...props
 }: PanelProps) {
   const titleId = useId()
-  const goBack = useContext(PanelNavigation)
+  const navigationBack = useContext(PanelNavigation)
+  const goBack = back ?? navigationBack
   return (
     <Surface {...props} className={`${className} wl-panel`} aria-labelledby={titleId}>
       <header className="wl-panel-header">

@@ -110,12 +110,21 @@ export function Maintenance({
       setPending('')
     }
   }
-  const runForLab = async (id: string, action: 'lab-verify' | 'promote', interactive = false) => {
+  const runForLab = async (
+    id: string,
+    action: 'lab-verify' | 'promote',
+    interactive = false,
+    acceptReview = false,
+  ) => {
     if (pending || running) return
     setPending('正在提交任务…')
     setError('')
     try {
-      const result = await api({ action, id, interactive })
+      const result = await api(
+        action === 'lab-verify'
+          ? { action, id, interactive }
+          : { action, id, restart: true, ...(acceptReview ? { acceptReview: true } : {}) },
+      )
       setInternalJob(result.jobId)
       onJobCreated(result.jobId)
       onBusy(true)
@@ -139,6 +148,7 @@ export function Maintenance({
     job && ['fail', 'review', 'awaiting_auth', 'incomplete'].includes(job.status)
       ? ((job.result as { labId?: string | null } | undefined)?.labId ?? job.labId ?? null)
       : null
+  const review = job?.status === 'review'
   return (
     <Panel
       title="维护"
@@ -186,7 +196,14 @@ export function Maintenance({
             )}
           {job && ['fail', 'review', 'awaiting_auth', 'incomplete'].includes(job.status) && (
             <>
-              <p className="wl-error">验证未通过，正式环境未改动。</p>
+              {review ? (
+                <div className="wl-failure-summary">
+                  <strong>旧版验证记录</strong>
+                  <p className="wl-muted">请重新验证；核心界面可用时，运行告警不再阻止合入。</p>
+                </div>
+              ) : (
+                <p className="wl-error">验证未通过，正式环境未改动。</p>
+              )}
               {failedLabId && (
                 <div className="wl-flow-actions">
                   <button

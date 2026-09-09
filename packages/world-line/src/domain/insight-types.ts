@@ -3,11 +3,20 @@ export interface WorldEvent {
   id: string
   lineId: string
   at: string
-  kind: 'created' | 'snapshot' | 'verification'
+  kind: 'created' | 'snapshot' | 'verification' | 'restore' | 'operation' | 'merge'
+  sourceLineId?: string
   title: string
   detail: string
   snapshotId?: string
   restorable?: boolean
+  afterSnapshotId?: string
+  unchanged?: boolean
+  parentEventId?: string
+  childEventIds?: string[]
+  actionLabel?: string
+  packageLabel?: string
+  packages?: { name: string; version: string }[]
+  statusLabel?: string
 }
 export interface WorldComparison {
   at: string

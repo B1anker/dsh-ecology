@@ -22,9 +22,13 @@ export interface MergeCandidate {
   targetId: string
   targetName: string
   plugins: string[]
+  packageVersions?: { name: string; version: string }[]
   includeConfig: boolean
   ok: boolean
+  reviewable?: boolean
+  reviewAccepted?: boolean
   detail: string
   committed?: boolean
+  committedAt?: string
   preSnapshot?: string
 }

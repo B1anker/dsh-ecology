@@ -7,12 +7,20 @@ import {
   eventMarkers,
   type Line,
   lineColor,
+  mergeConnectionPath,
   pointTime,
+  restoreRelation,
   TRACK_END,
   TRACK_LEFT,
   timelineScale,
   timeX,
 } from '../../src/client/timeline-model.js'
+
+test('merge curve leaves the source marker edge and enters below the target without overshooting', () => {
+  expect(mergeConnectionPath(500, 300, 500, 102)).toBe('M 500 300 C 500 300, 500 180, 500 120')
+  expect(mergeConnectionPath(500, 300, 560, 102)).toBe('M 500 300 C 518 300, 560 180, 560 120')
+  expect(mergeConnectionPath(550, 300, 560, 102)).toBe('M 550 300 C 555 300, 560 180, 560 120')
+})
 
 const line: Line = {
   id: 'new-id',
@@ -155,6 +163,76 @@ describe('persistent timeline history', () => {
 })
 
 describe('long idle timeline spacing', () => {
+  test('restore relationships use the target snapshot on the same line and detect later changes', () => {
+    const target = {
+      id: 'target',
+      lineId: line.id,
+      at: new Date(1000).toISOString(),
+      kind: 'snapshot' as const,
+      snapshotId: 'snap-target',
+      title: 'Before',
+      detail: '',
+    }
+    const restore = {
+      ...target,
+      id: 'restore',
+      kind: 'restore' as const,
+      at: new Date(3000).toISOString(),
+      unchanged: true,
+    }
+    expect(restoreRelation([restore, target], line.id)).toEqual({ restore, target, later: false })
+    const later = {
+      ...target,
+      id: 'later',
+      snapshotId: 'snap-new',
+      at: new Date(4000).toISOString(),
+    }
+    expect(restoreRelation([later, target, restore], line.id)?.later).toBe(true)
+    expect(restoreRelation([restore, { ...target, lineId: 'other' }], line.id)).toBeNull()
+  })
+  test('expanded events cannot rejoin neighboring clusters, including identical timestamps', () => {
+    const records = [10000, 10000, 10001, 10002].map((at, index) => ({
+      id: String(index),
+      lineId: line.id,
+      at: new Date(at).toISOString(),
+      kind: 'snapshot' as const,
+      title: 'Snapshot',
+      detail: '',
+    }))
+    const scale = timelineScale(
+      0,
+      3600000,
+      records.map((event) => Date.parse(event.at)),
+      [10000, 10000],
+    )
+    const markers = eventMarkers(records, line, 0, 3600000, scale.toX, ['0', '1'])
+    expect(
+      markers.find((marker) => marker.events.some((event) => event.id === '0'))?.events,
+    ).toHaveLength(1)
+    expect(
+      markers.find((marker) => marker.events.some((event) => event.id === '1'))?.events,
+    ).toHaveLength(1)
+    expect(markers[1]!.x - markers[0]!.x).toBeGreaterThanOrEqual(36)
+    expect(markers.flatMap((marker) => marker.events)).toEqual(records)
+  })
+  test('expanding a cluster separates its events and preserves inverse time coordinates', () => {
+    const records = [10000, 10001].map((at, index) => ({
+      id: String(index),
+      lineId: line.id,
+      at: new Date(at).toISOString(),
+      kind: 'snapshot' as const,
+      title: 'Snapshot',
+      detail: '',
+    }))
+    const normal = timelineScale(0, 3600000, [10000, 10001])
+    expect(eventMarkers(records, line, 0, 3600000, normal.toX)).toHaveLength(1)
+    const expanded = timelineScale(0, 3600000, [10000, 10001], [10000, 10001])
+    expect(eventMarkers(records, line, 0, 3600000, expanded.toX)).toHaveLength(2)
+    expect(expanded.toX(10001) - expanded.toX(10000)).toBeGreaterThanOrEqual(55)
+    expect(expanded.right).toBeGreaterThan(TRACK_END)
+    for (const at of [0, 10000, 10000.5, 10001, 1800000, 3600000])
+      expect(expanded.toTime(expanded.toX(at))).toBeCloseTo(at)
+  })
   test('keeps a short burst readable after a year without events and maps clicks back to real time', () => {
     const minute = 60000,
       end = 365 * 86400000

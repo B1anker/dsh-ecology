@@ -1,3 +1,4 @@
+import { ArrowCounterClockwise } from '@phosphor-icons/react/dist/csr/ArrowCounterClockwise'
 import { ArrowRight } from '@phosphor-icons/react/dist/csr/ArrowRight'
 import { ArrowsLeftRight } from '@phosphor-icons/react/dist/csr/ArrowsLeftRight'
 import { Camera } from '@phosphor-icons/react/dist/csr/Camera'
@@ -31,7 +32,15 @@ import {
   useUpdateNodeInternals,
   ViewportPortal,
 } from '@xyflow/react'
-import { type CSSProperties, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  type MouseEvent,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { WorldEvent } from '../domain/insight-types.js'
 import { ContextMenu, type MenuAction } from './context-menu.js'
 import {
@@ -40,12 +49,14 @@ import {
   type Line,
   label,
   lineColor,
+  mergeConnectionPath,
   ROW_HEIGHT,
+  restoreRelation,
   stateLabel,
-  TRACK_END,
   TRACK_LEFT,
   timelineScale,
 } from './timeline-model.js'
+import { TooltipButton } from './tooltip-button.js'
 
 export { type Line, label, stateLabel } from './timeline-model.js'
 
@@ -60,10 +71,16 @@ type TrackData = {
   forks: { id: string; x: number }[]
   active: boolean
   busy: boolean
+  dissolving: boolean
   compared: boolean
   markers: { x: number; events: WorldEvent[] }[]
+  expandedIds: string[]
+  focusedEventId?: string
+  restoration:
+    | (NonNullable<ReturnType<typeof restoreRelation>> & { fromX: number; toX: number })
+    | null
   enter(): void
-  inspect(event: WorldEvent): void
+  inspect(events: WorldEvent[]): void
   openEvent(mouse: MouseEvent<HTMLElement>, event: WorldEvent): void
   open(event: MouseEvent<HTMLElement>, line: Line): void
 }
@@ -73,6 +90,7 @@ type Branch = Edge<
   'branch'
 >
 function TrackNode({ id, data }: NodeProps<Track>) {
+  const arrowId = useId()
   const update = useUpdateNodeInternals()
   const handles = data.forks.map((fork) => `${fork.id}:${fork.x}`).join(',')
   useEffect(() => {
@@ -84,6 +102,7 @@ function TrackNode({ id, data }: NodeProps<Track>) {
       className="wl-flow-track"
       data-active={data.active}
       data-compared={data.compared}
+      data-dissolving={data.dissolving}
       data-running={line.state === 'running'}
       data-stopped={line.state === 'stopped'}
       style={{ width: data.width + 220, '--wl-line-color': lineColor(line.id) } as CSSProperties}
@@ -109,39 +128,126 @@ function TrackNode({ id, data }: NodeProps<Track>) {
         {data.markers.map((marker) => {
           const event =
             marker.events.findLast((item) => item.kind === 'snapshot') ?? marker.events.at(-1)!
+          const grouped = marker.events.length > 1
+          const expandedIndex = grouped ? -1 : data.expandedIds.indexOf(event.id)
+          const eventNames = marker.events.map((item) => item.title).join('；')
           return (
-            <button
+            <TooltipButton
               key={event.id}
               className="wl-event-marker nodrag nopan"
               data-event-id={event.id}
               data-kind={event.kind}
+              data-expanded={expandedIndex >= 0}
+              data-restored-history={
+                !!data.restoration &&
+                marker.events.every(
+                  (item) =>
+                    item.id !== data.restoration!.restore.id &&
+                    Date.parse(item.at) > Date.parse(data.restoration!.target.at) &&
+                    Date.parse(item.at) < Date.parse(data.restoration!.restore.at),
+                )
+              }
               data-ahead={marker.events.every((item) => Date.parse(item.at) > data.time)}
-              data-at-cursor={marker.events.some((item) => Date.parse(item.at) === data.time)}
+              data-at-cursor={marker.events.some((item) =>
+                data.focusedEventId
+                  ? item.id === data.focusedEventId
+                  : Date.parse(item.at) === data.time,
+              )}
               style={{ left: marker.x }}
-              title={`${event.title} · ${timestamp(Date.parse(event.at))}${marker.events.length > 1 ? ` · ${marker.events.length} 个事件` : ''}`}
-              aria-label={`${label(line)} ${event.title}${marker.events.length > 1 ? ` 等 ${marker.events.length} 个事件` : ''}`}
+              tooltipTitle={
+                grouped
+                  ? `${marker.events.length} 个事件`
+                  : event.actionLabel
+                    ? `${event.actionLabel} · ${event.statusLabel}`
+                    : event.title
+              }
+              tooltipDescription={
+                grouped ? (
+                  <>
+                    {marker.events.slice(0, 4).map((item) => (
+                      <p key={item.id}>{item.title}</p>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    {event.packages
+                      ? event.packages.map((pkg) => (
+                          <p key={pkg.name}>
+                            {pkg.name} · {pkg.version}
+                          </p>
+                        ))
+                      : event.packageLabel && <p>{event.packageLabel}</p>}
+                    <p>{timestamp(Date.parse(event.at))}</p>
+                  </>
+                )
+              }
+              tooltipAction={grouped ? '放大查看' : '查看详情'}
+              tooltipColor={lineColor(line.id)}
+              aria-label={
+                grouped
+                  ? `${label(line)} 此处有 ${marker.events.length} 条记录：${eventNames}`
+                  : `${label(line)} ${event.title}`
+              }
               disabled={data.busy}
               onClick={(mouse) => {
                 mouse.stopPropagation()
-                data.inspect(event)
+                data.inspect(marker.events)
               }}
               onContextMenu={(mouse) => {
                 mouse.stopPropagation()
-                data.openEvent(mouse, event)
+                if (grouped) data.inspect(marker.events)
+                else data.openEvent(mouse, event)
               }}
             >
-              {marker.events.length > 1
-                ? marker.events.length
-                : event.kind === 'snapshot'
-                  ? '◆'
-                  : '○'}
-            </button>
+              {grouped ? (
+                marker.events.length
+              ) : event.kind === 'snapshot' ? (
+                '◆'
+              ) : event.kind === 'restore' ? (
+                <ArrowCounterClockwise size={14} weight="regular" />
+              ) : event.kind === 'merge' ? (
+                <GitMerge size={16} weight="regular" />
+              ) : (
+                '○'
+              )}
+            </TooltipButton>
           )
         })}
+        {data.restoration && (
+          <svg
+            className="wl-restore-link"
+            style={{ width: data.width }}
+            aria-label={`恢复指向 ${timestamp(Date.parse(data.restoration.target.at))} 的快照`}
+          >
+            <defs>
+              <marker
+                id={arrowId}
+                viewBox="0 0 8 8"
+                refX="7"
+                refY="4"
+                markerWidth="6"
+                markerHeight="6"
+                orient="auto"
+                markerUnits="userSpaceOnUse"
+              >
+                <path d="M 1 1 L 7 4 L 1 7" />
+              </marker>
+            </defs>
+            <path
+              markerEnd={`url(#${arrowId})`}
+              d={`M ${data.restoration.fromX} 17 C ${data.restoration.fromX} 43, ${data.restoration.toX + 50} 43, ${data.restoration.toX + 18} 18`}
+            />
+          </svg>
+        )}
         {line.state === 'running' && <span className="wl-flow-energy" />}
         {data.cursorX !== null && (
           <span
             className="wl-time-point"
+            data-expanded-overlap={data.markers.some(
+              (marker) =>
+                Math.abs(marker.x - data.cursorX!) < 20 &&
+                marker.events.some((event) => data.expandedIds.includes(event.id)),
+            )}
             data-overlap={data.markers.some((marker) => Math.abs(marker.x - data.cursorX!) < 20)}
             style={{ left: data.cursorX }}
           />
@@ -204,6 +310,13 @@ function TrackNode({ id, data }: NodeProps<Track>) {
       >
         <DotsThree size={20} />
       </button>
+      {data.dissolving && (
+        <span className="wl-disintegration" aria-hidden="true">
+          {Array.from({ length: 14 }, (_, index) => (
+            <i key={index} />
+          ))}
+        </span>
+      )}
     </div>
   )
 }
@@ -258,6 +371,7 @@ export function Timeline({
   comparisonIds,
   onCompare,
   onEvent,
+  eventFocus,
   onHistory,
   onSnapshot,
   onPromote,
@@ -270,6 +384,7 @@ export function Timeline({
   start,
   end,
   busy = false,
+  dissolvingId = null,
 }: {
   lines: Line[]
   experiments: Line[]
@@ -281,6 +396,7 @@ export function Timeline({
   comparisonIds: string[]
   onCompare(id: string): void
   onEvent(event: WorldEvent): void
+  eventFocus: { id: string; revision: number } | null
   onHistory(id: string): void
   onSnapshot(id: string): void
   onPromote(id: string): void
@@ -298,22 +414,70 @@ export function Timeline({
   start: number
   end: number
   busy?: boolean
+  dissolvingId?: string | null
 }) {
+  const [expanded, setExpanded] = useState<WorldEvent[]>([])
   const scale = useMemo(
     () =>
-      timelineScale(start, end, [
-        ...events.map((event) => Date.parse(event.at)),
-        ...lines.flatMap((line) => [
-          Date.parse(line.createdAt),
-          Date.parse(line.forkedAt ?? line.createdAt),
-        ]),
-      ]),
-    [start, end, events, lines],
+      timelineScale(
+        start,
+        end,
+        [
+          ...events.map((event) => Date.parse(event.at)),
+          ...lines.flatMap((line) => [
+            Date.parse(line.createdAt),
+            Date.parse(line.forkedAt ?? line.createdAt),
+          ]),
+        ],
+        expanded.map((event) => Date.parse(event.at)),
+      ),
+    [start, end, events, lines, expanded],
   )
   const timeX = scale.toX
   const pointTime = (x: number, line: Line) => Math.max(Date.parse(line.createdAt), scale.toTime(x))
   const container = useRef<HTMLDivElement>(null)
   const instance = useRef<ReactFlowInstance<Track, Branch> | null>(null)
+  const resetView = useRef(false)
+  const beforeExpandZoom = useRef<number | null>(null)
+  const collapseZoom = useRef<number | null>(null)
+  const focusEvent = events.find(
+    (event) =>
+      event.id === eventFocus?.id && event.lineId === selected && Date.parse(event.at) === time,
+  )
+  useEffect(() => {
+    if (!focusEvent) return
+    if (expanded.length && !expanded.some((event) => event.id === focusEvent.id)) {
+      collapseZoom.current = beforeExpandZoom.current
+      beforeExpandZoom.current = null
+      setExpanded([])
+      return
+    }
+    const line = lines.find((line) => line.id === focusEvent.lineId)
+    if (!line) return
+    const cluster = eventMarkers(events, line, start, end, scale.toX, [focusEvent.id]).find(
+      (marker) => marker.events.some((event) => event.id === focusEvent.id),
+    )
+    if (cluster && cluster.events.length > 1) {
+      if (!expanded.length) beforeExpandZoom.current = instance.current?.getZoom() ?? 1
+      setExpanded(cluster.events)
+    }
+  }, [eventFocus])
+  useEffect(() => {
+    if (!expanded.length) {
+      if (resetView.current) {
+        resetView.current = false
+        void instance.current?.fitView(fitOptions)
+      }
+      return
+    }
+    const row = lines.findIndex((line) => line.id === expanded[0]!.lineId)
+    const positions = expanded.map((event) => scale.toX(Date.parse(event.at)))
+    void instance.current?.setCenter(
+      (Math.min(...positions) + Math.max(...positions)) / 2,
+      126 + Math.max(0, row) * ROW_HEIGHT,
+      { zoom: 1.5, duration: 300 },
+    )
+  }, [expanded])
   const [menu, setMenu] = useState<{
     id: string
     at: number
@@ -410,12 +574,18 @@ export function Timeline({
   const connections = canvasConnections(lines)
   const nodes: Track[] = lines.map((line, index) => {
     const born = timeX(Date.parse(line.createdAt))
-    const markers = eventMarkers(events, line, start, end, scale.toX)
+    const relation = restoreRelation(events, line.id)
+    const markers = eventMarkers(events, line, start, end, scale.toX, [
+      ...expanded.map((event) => event.id),
+      ...(focusEvent ? [focusEvent.id] : []),
+      ...(relation ? [relation.restore.id, relation.target.id] : []),
+      ...events.filter((event) => event.kind === 'merge').map((event) => event.id),
+    ])
     return {
       id: line.id,
       type: 'worldline',
       // Controlled node refreshes must not lose their dimensions between ResizeObserver deliveries.
-      width: TRACK_END + 72 - born + 220,
+      width: scale.right + 72 - born + 220,
       height: 76,
       handles: [
         { type: 'target', position: Position.Left, x: 0, y: 35.5, width: 1, height: 1 },
@@ -445,15 +615,38 @@ export function Timeline({
         time,
         compared: comparisonIds.includes(line.id),
         markers,
+        expandedIds: expanded.map((event) => event.id),
+        focusedEventId: focusEvent?.lineId === line.id ? focusEvent.id : undefined,
+        restoration: relation
+          ? {
+              ...relation,
+              fromX: markers.find((marker) =>
+                marker.events.some((event) => event.id === relation.restore.id),
+              )!.x,
+              toX: markers.find((marker) =>
+                marker.events.some((event) => event.id === relation.target.id),
+              )!.x,
+            }
+          : null,
         enter: () => onEnter(line.id),
-        inspect: onEvent,
+        inspect: (records) => {
+          if (records.length === 1) onEvent(records[0]!)
+          else {
+            setMenu(null)
+            onSelect(line.id)
+            onTimeChange(Date.parse(records[0]!.at))
+            if (!expanded.length) beforeExpandZoom.current = instance.current?.getZoom() ?? 1
+            setExpanded(records)
+          }
+        },
         openEvent: (mouse, event) => open(mouse, line, Date.parse(event.at), event),
-        width: TRACK_END + 72 - born,
+        width: scale.right + 72 - born,
         cursorX:
           selected === line.id && time >= Date.parse(line.createdAt)
-            ? (markers.find((marker) =>
-                marker.events.some((event) => Date.parse(event.at) === time),
-              )?.x ??
+            ? (markers.find((marker) => marker.events.some((event) => event.id === focusEvent?.id))
+                ?.x ??
+              markers.find((marker) => marker.events.some((event) => Date.parse(event.at) === time))
+                ?.x ??
               markers.find((marker) => Math.abs(marker.x - (timeX(time) - born)) < 20)?.x ??
               timeX(time) - born)
             : null,
@@ -467,12 +660,45 @@ export function Timeline({
           })),
         active: selected === line.id,
         busy,
+        dissolving: line.id === dissolvingId,
         experiments: experiments.filter((item) => (item.parentId ?? 'origin') === line.id),
         showExperiments: () => onExperiments(line.id),
         open: (event, target) => open(event, target, Math.max(Date.parse(target.createdAt), time)),
       },
     }
   })
+  useEffect(() => {
+    if (!focusEvent) return
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        const node = nodes.find((node) => node.id === focusEvent.lineId)
+        const marker = node?.data.markers.find((marker) =>
+          marker.events.some((event) => event.id === focusEvent.id),
+        )
+        const bounds = container.current?.getBoundingClientRect()
+        if (!node || !marker || !bounds) return
+        const panel = container.current
+          ?.closest('.wl-workspace')
+          ?.querySelector('.wl-inspector')
+          ?.getBoundingClientRect()
+        const freeWidth =
+          panel && panel.left > bounds.left
+            ? Math.min(bounds.width, panel.left - bounds.left - 24)
+            : bounds.width
+        const zoom = collapseZoom.current ?? 1.5
+        collapseZoom.current = null
+        void instance.current?.setViewport(
+          {
+            x: freeWidth / 2 - (node.position.x + marker.x) * zoom,
+            y: bounds.height / 2 - (node.position.y + 36) * zoom,
+            zoom,
+          },
+          { duration: 250 },
+        )
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [eventFocus, expanded])
   const edges: Branch[] = connections.map((connection) => ({
     id: `branch-${connection.target}`,
     source: connection.source,
@@ -526,7 +752,7 @@ export function Timeline({
             ? [
                 {
                   id: 'composition',
-                  label: '查看组成',
+                  label: '查看插件',
                   icon: <FileText size={16} />,
                   run: () => onComposition(menuLine.id),
                 },
@@ -738,7 +964,7 @@ export function Timeline({
   const ticks = useMemo(
     () =>
       Array.from({ length: 5 }, (_, index) =>
-        scale.toTime(TRACK_LEFT + ((TRACK_END - TRACK_LEFT) * index) / 4),
+        scale.toTime(TRACK_LEFT + ((scale.right - TRACK_LEFT) * index) / 4),
       ),
     [scale],
   )
@@ -901,9 +1127,80 @@ export function Timeline({
           aria-label="世界线时间轴，拖动画布平移，捏合缩放，右键时间点打开操作"
         >
           <ViewportPortal>
+            <svg
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                width: scale.right + 72,
+                height: 180 + lines.length * ROW_HEIGHT,
+                overflow: 'visible',
+                pointerEvents: 'none',
+              }}
+              aria-label="世界线合入连线"
+            >
+              {events
+                .filter((event) => event.kind === 'merge')
+                .map((event) => {
+                  const source = nodes.find((node) => node.id === event.sourceLineId)
+                  const target = nodes.find((node) => node.id === event.lineId)
+                  const marker = target?.data.markers.find((marker) =>
+                    marker.events.some((item) => item.id === event.id),
+                  )
+                  if (!source || !target || !marker || source === target) return null
+                  const x = target.position.x + marker.x
+                  // Connect the last visible source event that existed when this merge completed.
+                  // Use its rendered marker edge so zoom/cluster expansion cannot detach the curve.
+                  const sourceMarker = source.data.markers
+                    .flatMap((marker) =>
+                      marker.events
+                        .filter((item) => Date.parse(item.at) <= Date.parse(event.at))
+                        .map((item) => ({ marker, at: Date.parse(item.at) })),
+                    )
+                    .sort((a, b) => b.at - a.at)[0]?.marker
+                  const fromX = source.position.x + (sourceMarker ? sourceMarker.x + 14 : 0)
+                  const fromY = source.position.y + 36
+                  const toY = target.position.y + 36
+                  const arrow = `wl-merge-arrow-${event.id.replace(/[^a-zA-Z0-9-]/g, '-')}`
+                  return (
+                    <g key={event.id} style={{ color: lineColor(event.sourceLineId!) }}>
+                      <title>{event.title}</title>
+                      <defs>
+                        <marker
+                          id={arrow}
+                          viewBox="0 0 8 8"
+                          refX="7"
+                          refY="4"
+                          markerWidth="7"
+                          markerHeight="7"
+                          orient="auto"
+                          markerUnits="userSpaceOnUse"
+                        >
+                          <path
+                            d="M 1 1 L 7 4 L 1 7"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.4"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </marker>
+                      </defs>
+                      <path
+                        d={mergeConnectionPath(fromX, fromY, x, toY)}
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.7"
+                        opacity=".85"
+                        markerEnd={`url(#${arrow})`}
+                      />
+                    </g>
+                  )
+                })}
+            </svg>
             <div
               className="wl-flow-ruler"
-              style={{ width: TRACK_END + 72, height: 30 + lines.length * ROW_HEIGHT }}
+              style={{ width: scale.right + 72, height: 30 + lines.length * ROW_HEIGHT }}
               aria-hidden="true"
             >
               {ticks.map((at) => (
@@ -949,8 +1246,7 @@ export function Timeline({
             </div>
           </ViewportPortal>
           <Panel position="bottom-right" className="wl-flow-help">
-            ◆ 快照 · ○ 事件 · 淡色表示游标之后
-            {scale.compressed ? ' · 长空白已压缩，时间以刻度为准' : ''}
+            ◆ 快照 · ○ 事件
           </Panel>
           <Panel position="bottom-left" className="wl-flow-controls">
             <details className="wl-map-tools">
@@ -975,7 +1271,12 @@ export function Timeline({
                 <button
                   className="wl-button wl-icon"
                   aria-label="适应全部世界线"
-                  onClick={() => void instance.current?.fitView(fitOptions)}
+                  onClick={() => {
+                    if (expanded.length) {
+                      resetView.current = true
+                      setExpanded([])
+                    } else void instance.current?.fitView(fitOptions)
+                  }}
                 >
                   <CornersOut size={16} />
                 </button>

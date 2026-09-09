@@ -390,7 +390,9 @@ export function ResearchPanel({
         <>
           {matrixError && <p className="wl-error">{matrixError}</p>}
           {!matrixError && !matrixJobs.length && (
-            <p className="wl-muted">最近任务中暂无此环境的兼容验证记录。运行验证后，这里会显示版本矩阵。</p>
+            <p className="wl-muted">
+              最近任务中暂无此环境的兼容验证记录。运行验证后，这里会显示版本矩阵。
+            </p>
           )}
           {matrixJobs.slice(0, 5).map((job) => (
             <section className="wl-viz" key={job.id}>

@@ -1,5 +1,5 @@
 import { expect, test } from '@rstest/core'
-import { probe, summarizeProbes } from '../../src/domain/probe.js'
+import { probe, summarizeProbes, verificationState } from '../../src/domain/probe.js'
 import { canAcceptReview, classifyClientGate } from '../../src/lab/promote.js'
 
 test('required skipped or warning checks cannot fabricate verification', () => {
@@ -30,4 +30,20 @@ test('single-run risk acceptance cannot override missing or failed core evidence
     expect(canAcceptReview([{ ...core, status }, coverage, review])).toBe(false)
   }
   expect(canAcceptReview([coverage, review])).toBe(false)
+})
+test('runtime warnings pass every shared gate without user acceptance, but missing core evidence does not', () => {
+  const core = probe(new Date(), 'browser-boot', 'core', 'pass')
+  const coverage = probe(new Date(), 'plugin-function', 'not tested', 'skip', { required: false })
+  const warning = probe(new Date(), 'client-observations', 'runtime warnings', 'warn', {
+    required: false,
+  })
+  expect(summarizeProbes([core, coverage, warning]).ok).toBe(true)
+  expect(classifyClientGate([core, coverage, warning])).toBe('pass')
+  expect(verificationState([core, coverage, warning])).toBe('passed')
+  for (const status of ['fail', 'inconclusive', 'skip'] as const) {
+    const probes = [{ ...core, status }, coverage, warning]
+    expect(summarizeProbes(probes).ok).toBe(false)
+    expect(classifyClientGate(probes)).not.toBe('pass')
+    expect(verificationState(probes)).not.toBe('passed')
+  }
 })
