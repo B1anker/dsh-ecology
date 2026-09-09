@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { StorageSize } from '../vault/maintenance.js'
 import { HudSelect, HudTabs } from './hud-controls.js'
+import { CleanupSummary } from './result-visuals.js'
+import { StorageOverview } from './storage-overview.js'
 
-const size = (n: number) => `${(n / 1024 / 1024).toFixed(2)} MiB`
 export function StoragePanel({
   id,
   api,
@@ -67,9 +68,12 @@ export function StoragePanel({
           { id: 'restore', title: '找回对象' },
         ]}
       />
-      <p className="wl-muted">
-        统计不跟随符号链接，硬链接按 inode 去重。逻辑大小与已分配空间不等于 APFS
-        上最终可释放空间；统计缓存一分钟。
+      <p hidden={topic === 'usage'} className="wl-muted">
+        {topic === 'cleanup'
+          ? '先预览将清理的内容，再确认执行。占用空间不等于最终可释放空间。'
+          : topic === 'cache'
+            ? '下载缓存可供后续安装复用。清理后，需要时会重新下载。'
+            : '选择已回收的对象，检查内容后再恢复。'}
       </p>
       {error && (
         <p className="wl-error" role="alert">
@@ -127,42 +131,7 @@ export function StoragePanel({
       {topic === 'usage' &&
         (data ? (
           <>
-            <p>
-              逻辑大小 {size(data.logicalBytes)} · 已分配 {size(data.allocatedBytes)} · {data.files}{' '}
-              个文件
-            </p>
-            <small>统计时间：{new Date(data.at).toLocaleString()}</small>
-            {Object.entries(data.groups).map(([name, g]) => (
-              <article className="wl-event-detail" key={name}>
-                <strong>
-                  {names[name] ??
-                    (
-                      {
-                        'vault/objects': '快照内容对象',
-                        'vault/snapshots': '快照记录',
-                        'vault/secrets': '加密配置',
-                        reports: '诊断报告',
-                        jobs: '任务记录',
-                        merges: '合入准备',
-                        cache: '共享下载缓存',
-                        investigations: '排障记录',
-                        deployments: 'A/B 部署',
-                        'host-versions': '矩阵宿主安装',
-                        'upgrade-results': '升级验证结果',
-                        requests: '提交幂等记录',
-                        quarantine: '隔离回收区',
-                        'state.json': '管理状态',
-                        'labs/.defaults.json': '默认世界线设置',
-                      } as Record<string, string>
-                    )[name] ??
-                    name}
-                </strong>
-                {names[name] && <small className="wl-muted">{name}</small>}
-                <span>
-                  {size(g.logicalBytes)} / 已分配 {size(g.allocatedBytes)}
-                </span>
-              </article>
-            ))}
+            <StorageOverview data={data} names={names} onCleanup={() => setTopic('cleanup')} />
             {data.warnings.map((w, i) => (
               <p key={i} className="wl-error">
                 {w}
@@ -194,25 +163,7 @@ export function StoragePanel({
       {topic === 'cleanup' && plan && (
         <section className="wl-event-detail">
           <h3>{kind === 'gc' ? '待隔离对象' : '快照清理预览'}</h3>
-          {kind === 'gc' ? (
-            <p>
-              {plan.objects.length} 个对象，共 {size(plan.logicalBytes)}
-              。先移入隔离区，可恢复；至少七天后可手动永久删除。
-            </p>
-          ) : (
-            <>
-              <p>
-                共 {plan.total} 份快照；保留 {plan.protected.length} 份，删除 {plan.delete.length}{' '}
-                份。只删除快照记录与对应密钥包。
-              </p>
-              <details>
-                <summary>保留原因与候选清单</summary>
-                <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                  {JSON.stringify({ reasons: plan.reasons, delete: plan.delete }, null, 2)}
-                </pre>
-              </details>
-            </>
-          )}
+          <CleanupSummary plan={plan} kind={kind} />
           <button
             className="wl-button"
             disabled={busy || !(kind === 'gc' ? plan.objects.length : plan.delete.length)}

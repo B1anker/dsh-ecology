@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { ReportResult } from '../commands/report.js'
 export function ReportView({ report }: { report: ReportResult }) {
   const [notice, setNotice] = useState('')
   const [preview, setPreview] = useState<string | null>(null)
   const [cleanup, setCleanup] = useState<any>(null)
+  const [tab, setTab] = useState(0)
+  const tabId = useId()
+  useEffect(() => {
+    setTab(0)
+  }, [report.reportId])
   useEffect(
     () => () => {
       if (preview) URL.revokeObjectURL(preview)
@@ -26,9 +31,11 @@ export function ReportView({ report }: { report: ReportResult }) {
   const text = JSON.stringify(report, null, 2)
   const names: Record<string, string> = {
     'lab manifest': '实验信息',
-    probes: '验证探针',
-    'private browser artifacts': '浏览器失败工件（仅本机，未脱敏）',
+    probes: '检查结果',
+    'private browser artifacts': '截图与附件',
     'snapshot manifest': '快照信息',
+    'profile files present': '配置文件',
+    浏览器证据与覆盖范围: '浏览器检查',
   }
   return (
     <div className="wl-flow-actions">
@@ -69,9 +76,65 @@ export function ReportView({ report }: { report: ReportResult }) {
           {note}
         </p>
       ))}
-      {report.target.kind === 'lab' &&
+      <div className="wl-report-tabs" role="tablist" aria-label="日志与报告分类">
+        {report.sections.map((section, i) => (
+          <button
+            key={i}
+            type="button"
+            role="tab"
+            id={`${tabId}-tab-${i}`}
+            aria-controls={`${tabId}-panel-${i}`}
+            aria-selected={tab === i}
+            tabIndex={tab === i ? 0 : -1}
+            onClick={() => setTab(i)}
+            onKeyDown={(event) => {
+              const next =
+                event.key === 'ArrowRight'
+                  ? (i + 1) % report.sections.length
+                  : event.key === 'ArrowLeft'
+                    ? (i - 1 + report.sections.length) % report.sections.length
+                    : event.key === 'Home'
+                      ? 0
+                      : event.key === 'End'
+                        ? report.sections.length - 1
+                        : null
+              if (next === null) return
+              event.preventDefault()
+              setTab(next)
+              document.getElementById(`${tabId}-tab-${next}`)?.focus()
+            }}
+          >
+            {names[section.title] ?? section.title.replace('log tail: ', '日志 · ')}
+          </button>
+        ))}
+      </div>
+      {report.sections.map((section, i) =>
+        section.title === 'private browser artifacts' ? null : (
+          <section
+            key={i}
+            hidden={tab !== i}
+            role="tabpanel"
+            tabIndex={0}
+            id={`${tabId}-panel-${i}`}
+            aria-labelledby={`${tabId}-tab-${i}`}
+            className="wl-report-content"
+          >
+            {section.title !== 'private browser artifacts' && (
+              <pre>{section.text ?? JSON.stringify(section.facts, null, 2)}</pre>
+            )}
+          </section>
+        ),
+      )}
+      {report.sections[tab]?.title === 'private browser artifacts' &&
+        report.target.kind === 'lab' &&
         report.sections.some((s) => s.title === 'private browser artifacts') && (
-          <section className="wl-event-detail">
+          <section
+            className="wl-event-detail wl-report-content"
+            role="tabpanel"
+            tabIndex={0}
+            id={`${tabId}-panel-${tab}`}
+            aria-labelledby={`${tabId}-tab-${tab}`}
+          >
             <p>
               以下原始截图和 trace
               未脱敏，可能包含凭据、页面文字和网络数据。只有主动打开或下载才会读取。
@@ -157,22 +220,6 @@ export function ReportView({ report }: { report: ReportResult }) {
             )}
           </section>
         )}
-      {report.sections.map((section, i) => (
-        <details className="wl-event-detail" key={i} open={i === 0}>
-          <summary>{names[section.title] ?? section.title}</summary>
-          <pre
-            style={{
-              whiteSpace: 'pre-wrap',
-              overflowWrap: 'anywhere',
-              fontSize: 12,
-              maxHeight: 320,
-              overflow: 'auto',
-            }}
-          >
-            {section.text ?? JSON.stringify(section.facts, null, 2)}
-          </pre>
-        </details>
-      ))}
     </div>
   )
 }

@@ -128,6 +128,7 @@ async function collectLabSections(
       title: 'probes',
       facts: probes.map((entry) => ({
         check: entry.check,
+        label: entry.label,
         status: entry.status,
         required: entry.required,
         startedAt: entry.startedAt,

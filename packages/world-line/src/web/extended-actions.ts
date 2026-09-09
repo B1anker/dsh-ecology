@@ -51,6 +51,7 @@ import { exportEnvironment, importEnvironment } from '../workflows/portable.js'
 import { checkUpgrades, upgradePolicy, upgradeResults } from '../workflows/upgrades.js'
 import { checkedSnapshot, currentManifest, lineContext, snapshotEvents } from './insights.js'
 import { startJob } from './jobs.js'
+import { pluginDetails } from './plugin-details.js'
 
 function comparisonDiff(a: SnapshotManifest, b: SnapshotManifest) {
   const diff = diffManifests(a, b)
@@ -256,6 +257,7 @@ export async function extendedAction(
         profileName: target.profileName,
         adapter: adapterDsh01x,
       })
+      const details = await pluginDetails(target, a.dependencies)
       return redactData({
         id: body.id,
         at: ctx.now().toISOString(),
@@ -263,6 +265,7 @@ export async function extendedAction(
         drift: await detectDrift(target.home, target.profileName, a),
         dependencies: a.dependencies.map((dep) => ({
           ...dep,
+          ...details.find((detail) => detail.name === dep.name),
           bundle: a.manifest?.bundles.includes(dep.name) ?? false,
           core: (
             adapterDsh01x.profile.templates[target.profileName]?.bundles ??

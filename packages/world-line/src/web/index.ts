@@ -12,6 +12,22 @@ import { revisionResponse } from './revisions.js'
 
 const reads = new ReadCache()
 
+function restoreTimelineEvent(entry: PromotionJournalEntry, lineId: string): WorldEvent | null {
+  if (entry.kind !== 'restore' || entry.outcome !== 'committed' || !entry.snapshotId) return null
+  const unchanged = entry.receiptBefore === entry.receiptAfter
+  return {
+    id: `${entry.id}:restored`,
+    lineId,
+    at: entry.createdAt,
+    kind: 'restore',
+    title: unchanged ? '恢复完成 · 配置未变' : '恢复完成',
+    detail: unchanged ? '恢复前就与目标一致，无需改动。' : '已换回所选快照的插件和配置。',
+    snapshotId: entry.snapshotId,
+    afterSnapshotId: entry.afterSnapshot ?? undefined,
+    unchanged,
+  }
+}
+
 import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
@@ -48,6 +64,7 @@ import { defaultLabId, runLabDefault } from '../lab/defaults.js'
 import { journalPath, type PromotionJournalEntry } from '../lab/journal.js'
 import { labHomeDir, labRoot, listLabs } from '../lab/layout.js'
 import { currentLabId, managerHome } from '../lab/manager.js'
+import type { LabManifest } from '../lab/manifest.js'
 import { readLabManifest } from '../lab/manifest.js'
 import { classifyClientGate } from '../lab/promote.js'
 import { readService, serviceStatus } from '../lab/service.js'
@@ -59,6 +76,8 @@ import { idempotent } from './idempotency.js'
 import { compareWorlds, lineContext, snapshotDetail, snapshotEvents } from './insights.js'
 import { getJob, listJobs, startJob, subscribeJobs } from './jobs.js'
 import { commitMerge, mergePreview, prepareMerge } from './merge.js'
+import { projectMerges } from './merge-events.js'
+import { projectOperations } from './operation-events.js'
 
 export const name = '@seaveyon/dsh-world-line'
 export const inject = ['webServer', 'connection']
@@ -118,6 +137,9 @@ export async function worldLines(ctx: CliContext, currentId?: string) {
     isDefault: boolean
   }[] = []
   const completed = new Map<string, string>()
+  const operationLabs: LabManifest[] = []
+  const operationJournal: PromotionJournalEntry[] = []
+  const restored = [] as WorldEvent[]
   const journal = await readFile(journalPath(ctx.home), 'utf8').catch((error) => {
     if (error.code === 'ENOENT') return ''
     throw error
@@ -125,8 +147,13 @@ export async function worldLines(ctx: CliContext, currentId?: string) {
   for (const row of journal.split('\n').filter(Boolean)) {
     try {
       const entry = JSON.parse(row) as PromotionJournalEntry
+      if (entry.profileName === ctx.profileName) operationJournal.push(entry)
       if (entry.profileName === ctx.profileName && entry.labId && entry.outcome === 'committed')
         completed.set(entry.labId, entry.createdAt)
+      if (entry.profileName === ctx.profileName) {
+        const event = restoreTimelineEvent(entry, 'origin')
+        if (event) restored.push(event)
+      }
     } catch {
       /* A damaged journal row cannot classify an experiment as complete. */
     }
@@ -135,6 +162,7 @@ export async function worldLines(ctx: CliContext, currentId?: string) {
     ...(await reads.read(`${ctx.home}:${ctx.profileName}:snapshots`, [snapshotsDir(ctx.home)], () =>
       snapshotEvents(ctx, 'origin'),
     )),
+    ...restored,
   ]
   const eventWarnings: string[] = []
   const defaultId = await defaultLabId(ctx.home, ctx.profileName)
@@ -146,6 +174,7 @@ export async function worldLines(ctx: CliContext, currentId?: string) {
         () => readLabManifest(ctx.home, id),
       )
       if (manifest.source.profileName !== ctx.profileName) return
+      operationLabs.push(manifest)
       const status = manifest.purpose === 'mirror' ? null : await labStatus(ctx, id)
       events.push({
         id: `${id}:created`,
@@ -188,6 +217,20 @@ export async function worldLines(ctx: CliContext, currentId?: string) {
             () => snapshotEvents({ ...ctx, home: labHomeDir(ctx.home, id) }, id),
           )),
         )
+        const lineJournal = await readFile(journalPath(labHomeDir(ctx.home, id)), 'utf8').catch(
+          (error) => (error.code === 'ENOENT' ? '' : Promise.reject(error)),
+        )
+        for (const row of lineJournal.split('\n').filter(Boolean)) {
+          try {
+            const entry = JSON.parse(row) as PromotionJournalEntry
+            if (entry.profileName !== ctx.profileName) continue
+            operationJournal.push(entry)
+            const event = restoreTimelineEvent(entry, id)
+            if (event) events.push(event)
+          } catch {
+            /* A damaged journal row cannot hide the line's snapshots. */
+          }
+        }
       } catch {
         eventWarnings.push(`${manifest.alias ?? id} 的快照暂时无法读取`)
       }
@@ -241,6 +284,24 @@ export async function worldLines(ctx: CliContext, currentId?: string) {
       eventWarnings.push(`${id} 暂时无法读取，请诊断`)
     }
   })
+  // Manager journals also contain restores into child lines. Attribute them by
+  // the resulting snapshot's owner, even when the temporary restore lab is gone.
+  const restoreIds = new Set<string>()
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]!
+    if (event.kind !== 'restore') continue
+    const result = events.find(
+      (item) => item.kind === 'snapshot' && item.snapshotId === event.afterSnapshotId,
+    )
+    if (result) {
+      event.lineId = result.lineId
+      event.at = result.at
+    }
+    if (restoreIds.has(event.id)) events.splice(index, 1)
+    else restoreIds.add(event.id)
+  }
+  projectOperations(events, operationLabs, operationJournal)
+  await projectMerges(ctx, events)
   const { rescues } = await runRescueList(ctx)
   for (const rescue of rescues.filter((item) => item.profileName === ctx.profileName)) {
     const stamp = /^rescue-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/.exec(rescue.id)!
@@ -329,7 +390,8 @@ async function dispatchAction(
     if (body.targetId !== undefined && (typeof body.targetId !== 'string' || !body.targetId))
       throw new UsageError('请选择有效的目标世界线')
     if (action === 'merge-preview') return mergePreview(ctx, body.id, body.targetId)
-    if (action === 'merge-commit') return commitMerge(ctx, body.id)
+    if (action === 'merge-commit')
+      return commitMerge(ctx, body.id, { acceptReview: body.acceptReview === true })
     if (
       typeof body.revision !== 'string' ||
       !Array.isArray(body.plugins) ||
@@ -475,6 +537,13 @@ async function dispatchAction(
       throw new UsageError('指定快照与回滚到稳定世界线只能二选一')
     if (typeof body.snapshotId !== 'string' && body.lastKnownGood !== true)
       throw new UsageError('请选择要恢复的快照')
+    if (body.sourceId !== undefined && typeof body.sourceId !== 'string')
+      throw new UsageError('无效来源世界线')
+    const sourceId =
+      !body.sourceId || body.sourceId === 'origin'
+        ? 'origin'
+        : await resolveLabId(ctx.home, body.sourceId as string)
+    const source = await sourceContext(ctx, sourceId)
     const options = {
       ...(typeof body.snapshotId === 'string' ? { snapshotId: body.snapshotId } : {}),
       ...(body.lastKnownGood === true ? { lastKnownGood: true } : {}),
@@ -482,11 +551,15 @@ async function dispatchAction(
       restart: optionalFlag(body, 'restart'),
       keep: optionalFlag(body, 'keep'),
       acceptInconclusive: optionalFlag(body, 'acceptInconclusive'),
+      // Keep the recovery lab in the manager home, then promote it back to the
+      // selected source line rather than accidentally looking in main's vault.
+      manager: ctx,
+      ...(sourceId === 'origin' ? {} : { sourceId }),
     }
     const job = startJob(
       'restore',
       (handle) =>
-        (deps.restore ?? runRestoreCommand)(ctx, {
+        (deps.restore ?? runRestoreCommand)(source, {
           ...options,
           onProbe: (probe) => handle.pushProbe(probe),
           onPhase: (phase) => handle.setPhase(phase),
@@ -494,7 +567,7 @@ async function dispatchAction(
           onTransaction: (id) => handle.setTransactionId(id),
         }),
       undefined,
-      { home: ctx.home, profileName: ctx.profileName, resource: 'origin' },
+      { home: ctx.home, profileName: ctx.profileName, resource: sourceId },
     )
     return { jobId: job.id }
   }

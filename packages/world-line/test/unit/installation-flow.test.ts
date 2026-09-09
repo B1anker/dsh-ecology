@@ -1,6 +1,6 @@
 import { expect, test } from '@rstest/core'
 import { installationToResume } from '../../src/client/installation-flow.js'
-import type { Job } from '../../src/client/job-view.js'
+import { currentJobAction, type Job } from '../../src/client/job-view.js'
 
 const job = (overrides: Partial<Job> = {}): Job => ({
   id: 'a',
@@ -41,4 +41,16 @@ test('a completed merge supersedes old verification; current work takes preceden
       'branch-a',
     )?.id,
   ).toBe('c')
+})
+
+test('the active task row exposes the server phase instead of a generic loading label', () => {
+  expect(currentJobAction(job({ phase: '正在检查插件依赖和配置组合' }))).toBe(
+    '正在检查插件依赖和配置组合',
+  )
+  expect(currentJobAction(job({ phase: '', status: 'queued' }))).toContain('等待同一环境')
+})
+
+test('internal promotion phase ids are rendered as user-facing actions', () => {
+  expect(currentJobAction(job({ phase: 'gate' }))).toBe('检查合入条件')
+  expect(currentJobAction(job({ phase: 'swap' }))).toBe('将已验证配置合入来源环境')
 })

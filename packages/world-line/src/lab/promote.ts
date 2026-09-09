@@ -53,6 +53,7 @@ import { labExists, labLogDir, labProbePath, labProfileDir } from './layout.js'
 import type { LabManifest } from './manifest.js'
 import { readLabManifest } from './manifest.js'
 import { runCaptured } from './runner.js'
+import { labStorePolicy } from './store.js'
 import { transactionalReplaceFiles } from './swap.js'
 
 export type ClientGate = 'pass' | 'fail' | 'inconclusive'
@@ -239,6 +240,10 @@ async function runLabPromoteUnlocked(
   }
 
   const storageHome = ctx.home
+  // The lab's node_modules is linked to World Line's managed pnpm store. The
+  // post-swap install must keep using that store, otherwise pnpm correctly
+  // refuses to mix it with the user's global store and the promotion rolls back.
+  const store = labStorePolicy(storageHome, manifest)
   ctx = await sourceContext(ctx, manifest.source.parentLabId)
   const officialDir = profileDir(ctx.home, ctx.profileName)
   const labProfileDirPath = labProfileDir(storageHome, labId, labProfileName)
@@ -382,7 +387,7 @@ async function runLabPromoteUnlocked(
           ['plugin', '--profile', ctx.profileName, ...argv],
           {
             cwd: officialDir,
-            env: { ...ctx.env, DSH_HOME: ctx.home },
+            env: { ...store.environment(ctx.env), DSH_HOME: ctx.home },
             timeoutMs: 300_000,
           },
         )

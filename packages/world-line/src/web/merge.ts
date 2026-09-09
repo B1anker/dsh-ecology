@@ -24,6 +24,7 @@ import {
 } from '../domain/composition.js'
 import { UsageError, VerificationError } from '../domain/errors.js'
 import type { MergeCandidate, MergePreview } from '../domain/merge-types.js'
+import type { ProbeResult } from '../domain/probe.js'
 import { analyzeProfile } from '../domain/snapshot.js'
 import { writeFileAtomic } from '../fs/atomic.js'
 import { acquireLock } from '../fs/lock.js'
@@ -34,9 +35,10 @@ import { withPackageCache } from '../lab/cache-maintenance.js'
 import { createLab, WHITELIST_FILE_NAMES } from '../lab/create.js'
 import { requireKnownHost, requirePnpm } from '../lab/gate.js'
 import { inheritHome, rebaseHomePaths } from '../lab/home-inheritance.js'
-import { labHomeDir, labProfileDir, labRoot } from '../lab/layout.js'
+import { labHomeDir, labProbePath, labProfileDir, labRoot } from '../lab/layout.js'
 import { localSourceHash } from '../lab/local-source.js'
 import { readLabManifest } from '../lab/manifest.js'
+import { canAcceptReview } from '../lab/promote.js'
 import { type LabRunDeps, runLabTransaction } from '../lab/run.js'
 import { runCaptured } from '../lab/runner.js'
 import { labStorePolicy } from '../lab/store.js'
@@ -44,6 +46,8 @@ import { transactionalReplaceFiles } from '../lab/swap.js'
 import { lineContext } from './insights.js'
 
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
+const canReviewMerge = (probes: ProbeResult[]) =>
+  probes.every((probe) => probe.status !== 'fail') && canAcceptReview(probes)
 const optional = (path: string) =>
   readFile(path).catch((error) => {
     if (error.code === 'ENOENT') return null
@@ -229,6 +233,7 @@ export function portablePnpmMetadata(text: string, profile: string, artifacts: s
   return dump(visit(load(text, { schema: JSON_SCHEMA })), { schema: JSON_SCHEMA })
 }
 interface StoredCandidate extends MergeCandidate {
+  reviewProbeHash?: string
   profileName: string
   targetFingerprint: string
   sourceFingerprint: string
@@ -288,6 +293,8 @@ const publicCandidate = ({
   plugins,
   includeConfig,
   ok,
+  reviewable,
+  reviewAccepted,
   detail,
   committed,
   preSnapshot,
@@ -301,6 +308,8 @@ const publicCandidate = ({
   plugins,
   includeConfig,
   ok,
+  reviewable,
+  reviewAccepted,
   detail,
   committed,
   preSnapshot,
@@ -475,14 +484,36 @@ async function prepareMergeInternal(
       targetId: state.targetId,
       targetName: state.targetName,
       plugins: names,
+      packageVersions: await Promise.all(
+        names.map(async (name) => {
+          if (!pkg.dependencies?.[name]) return { name, version: '已移除' }
+          let version = state.source.deps.get(name)?.version ?? '版本未记录'
+          try {
+            const installed = JSON.parse(
+              await readFile(join(dir, 'node_modules', name, 'package.json'), 'utf8'),
+            )
+            if (installed.name === name && typeof installed.version === 'string')
+              version = installed.version
+          } catch {
+            /* Keep an explicit unknown version if installation metadata is absent. */
+          }
+          return { name, version }
+        }),
+      ),
       includeConfig: input.includeConfig,
       ok: run.ok && run.clientReady === 'pass',
+      reviewable: canReviewMerge(run.probes),
+      reviewProbeHash: digest(await readFile(labProbePath(ctx.home, labId))),
       detail:
         run.ok && run.clientReady === 'pass'
-          ? '插件安装、配置、启动与浏览器验证通过'
-          : run.clientReady === 'skipped'
-            ? '缺少浏览器验证环境。请安装 Chrome，或通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定 Chromium 可执行文件，重启管理实例后重新验证。目标世界线未改动。'
-            : '候选验证未通过，目标世界线未改动。请查看验证实验记录。',
+          ? run.probes.some((probe) => probe.check === 'client-observations')
+            ? '验证通过，有运行告警。核心界面可用，可直接合入；告警详情见下方记录。'
+            : '插件安装、配置、启动与浏览器验证通过'
+          : canReviewMerge(run.probes)
+            ? '核心检查通过，外部服务异常的影响待确认。确认不影响使用后可继续合入。'
+            : run.clientReady === 'skipped'
+              ? '缺少浏览器验证环境。请安装 Chrome，或通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定 Chromium 可执行文件，重启管理实例后重新验证。目标世界线未改动。'
+              : '候选验证未通过，目标世界线未改动。请查看验证实验记录。',
       targetFingerprint: state.target.fingerprint,
       sourceFingerprint: state.source.fingerprint,
       labId,
@@ -501,7 +532,7 @@ async function prepareMergeInternal(
 export async function commitMerge(
   ctx: CliContext,
   id: string,
-  deps?: { swap?: typeof transactionalReplaceFiles },
+  deps?: { swap?: typeof transactionalReplaceFiles; acceptReview?: boolean },
 ) {
   requireKnownHost(ctx)
   const root = pathFor(ctx, id)
@@ -517,7 +548,17 @@ export async function commitMerge(
     if (stored.profileName !== ctx.profileName || stored.id !== id)
       throw new UsageError('候选不属于当前 profile')
     if (stored.committed) return publicCandidate(stored)
-    if (!stored.ok) throw new VerificationError('验证未通过，不能合入')
+    if (!stored.ok) {
+      if (!stored.reviewable || !deps?.acceptReview || !stored.reviewProbeHash)
+        throw new VerificationError('验证未通过；待确认告警需先明确确认影响，才能合入')
+      const evidence = await readFile(labProbePath(ctx.home, stored.labId))
+      if (
+        digest(evidence) !== stored.reviewProbeHash ||
+        !canReviewMerge(JSON.parse(evidence.toString()).probes ?? [])
+      )
+        throw new VerificationError('验证记录已变化或存在失败项，请重新验证')
+      stored.reviewAccepted = true
+    }
     const dir = labProfileDir(ctx.home, stored.labId, ctx.profileName)
     const current = await states(ctx, stored.sourceId, stored.targetId ?? 'origin')
     const targetCtx = current.targetCtx,
@@ -591,6 +632,7 @@ export async function commitMerge(
       await (deps?.swap ?? transactionalReplaceFiles)(main, WHITELIST_FILE_NAMES, sourceOf)
       movedFiles = true
       stored.committed = true
+      stored.committedAt = new Date().toISOString()
       stored.preSnapshot = pre.id
       stored.detail = `已合入 ${current.targetName} 并保存合入前快照。目标服务未重启；重新启动后使用新能力。`
       await writeFileAtomic(join(root, 'candidate.json'), JSON.stringify(stored))

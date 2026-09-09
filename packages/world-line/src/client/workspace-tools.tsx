@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react'
 import type { ReportResult } from '../commands/report.js'
 import type { WorldEvent } from '../domain/insight-types.js'
-import type { DependencyRecord } from '../domain/snapshot.js'
 import { HudSelect } from './hud-controls.js'
 import { useJobFeed } from './job-feed.js'
 import { type Job, jobKindLabel } from './job-view.js'
+import { Panel } from './panel.js'
 import type { ToolPanel } from './panels.js'
+import { PluginList } from './plugin-list.js'
 import { RecoveryPanel } from './recovery-panel.js'
 import { ReportView } from './report-view.js'
 import { ResearchPanel } from './research-panel.js'
+import { ChangeSummary, VersionPair } from './result-visuals.js'
 import { StoragePanel } from './storage-panel.js'
 import { type Line, label } from './timeline-model.js'
 
@@ -41,11 +43,12 @@ export function WorkspaceTools({
   const [data, setData] = useState<any>(null),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
-  const [candidate, setCandidate] = useState<{ action: string; name: string; spec: string } | null>(
-    null,
-  )
+  const [candidate, setCandidate] = useState<{
+    action: string
+    name: string
+    spec: string
+  } | null>(null)
   const [text, setText] = useState(''),
-    [query, setQuery] = useState(''),
     [from, setFrom] = useState(''),
     [to, setTo] = useState('current')
   const [diff, setDiff] = useState<any>(null)
@@ -57,7 +60,7 @@ export function WorkspaceTools({
         ? (panel.lineId ?? 'origin')
         : panel.id
   const title = {
-    composition: '当前组成',
+    composition: '插件列表',
     compare: '历史比较',
     config: '验证配置变更',
     report: '诊断报告',
@@ -129,13 +132,59 @@ export function WorkspaceTools({
     ...(id === 'current' ? {} : { snapshotId: id }),
   })
   return (
-    <aside className="wl-inspector" aria-label={title}>
-      <div className="wl-row-title">
-        <h2>{title}</h2>
-        <button className="wl-button" onClick={close}>
-          关闭
-        </button>
-      </div>
+    <Panel
+      title={
+        candidate
+          ? candidate.action === 'lab-remove'
+            ? '卸载插件'
+            : candidate.action === 'lab-add'
+              ? '验证本地更新'
+              : '更换版本'
+          : title
+      }
+      close={close}
+      className="wl-inspector"
+      aria-label={title}
+      back={
+        candidate
+          ? () => {
+              setCandidate(null)
+              setError('')
+            }
+          : undefined
+      }
+      footer={
+        candidate ? (
+          <>
+            <button
+              className="wl-button"
+              disabled={busy}
+              onClick={() => {
+                setCandidate(null)
+                setError('')
+              }}
+            >
+              返回插件列表
+            </button>
+            <button
+              className="wl-button wl-primary"
+              disabled={busy || !candidate.spec.trim() || candidate.spec.endsWith('@')}
+              onClick={() =>
+                void run({
+                  action: candidate.action,
+                  spec: candidate.spec,
+                  sourceId: panel.id,
+                  keep: true,
+                  interactive: true,
+                })
+              }
+            >
+              {busy ? '正在创建实验…' : candidate.action === 'lab-remove' ? '验证卸载' : '开始验证'}
+            </button>
+          </>
+        ) : undefined
+      }
+    >
       <p>环境：{source ? label(source) : panel.id}</p>
       {error && (
         <p className="wl-error" role="alert">
@@ -144,7 +193,12 @@ export function WorkspaceTools({
       )}
       <div
         className="wl-flow-actions-row"
-        hidden={panel.section === 'research' || panel.section === 'recovery'}
+        hidden={
+          panel.section === 'research' ||
+          panel.section === 'recovery' ||
+          panel.section === 'composition' ||
+          panel.section === 'compare'
+        }
       >
         <button
           className="wl-button"
@@ -203,9 +257,9 @@ export function WorkspaceTools({
             启用任务完成通知
           </button>
           {allJobs.map((job) => (
-            <article className="wl-event-detail" key={job.id}>
+            <article className="wl-event-detail wl-task-card" data-status={job.status} key={job.id}>
               <strong>{jobKindLabel(job.kind)}</strong>
-              <span>
+              <span className="wl-task-state">
                 {
                   {
                     queued: '排队中',
@@ -220,7 +274,7 @@ export function WorkspaceTools({
                   }[job.status]
                 }
               </span>
-              <time>{new Date(job.startedAt).toLocaleString()}</time>
+              <time dateTime={job.startedAt}>{new Date(job.startedAt).toLocaleString()}</time>
               {job.error && <p className="wl-error">{job.error}</p>}
               <button className="wl-button" onClick={() => onJob(job.id)}>
                 查看进度与结果
@@ -250,7 +304,10 @@ export function WorkspaceTools({
               onClick={async () => {
                 setBusy(true)
                 try {
-                  const more = await api({ action: 'jobs', before: allJobs.at(-1)?.id })
+                  const more = await api({
+                    action: 'jobs',
+                    before: allJobs.at(-1)?.id,
+                  })
                   setOlderJobs((previous) => [...previous, ...more])
                   if (!more.length) setError('已显示全部保留任务')
                 } catch (e) {
@@ -267,151 +324,101 @@ export function WorkspaceTools({
       )}
       {panel.section === 'composition' && (
         <>
-          {data?.drift && (
-            <div className="wl-event-detail" role="status">
-              {(['latest', 'lastKnownGood'] as const).map((key) => {
-                const comparison = data.drift[key]
-                const label = key === 'latest' ? '最近记录' : '已验证稳定点'
-                return (
-                  <p key={key}>
-                    {label}：
-                    {comparison.status === 'changed'
-                      ? `已变化（${comparison.changedFiles.join('、')}）`
-                      : comparison.status === 'same'
-                        ? '内容一致'
-                        : comparison.status === 'missing'
-                          ? '尚无基线'
-                          : '暂时无法判断'}
-                  </p>
-                )
-              })}
-              <p className="wl-muted">{data.drift.note}</p>
-            </div>
-          )}
-          <div className="wl-flow-actions-row">
-            <button
-              className="wl-button"
-              onClick={() => navigate({ section: 'compare', id: panel.id })}
-            >
-              查看历史差异
-            </button>
-            <button
-              className="wl-button"
-              onClick={() => navigate({ section: 'config', id: panel.id })}
-            >
-              验证配置变更
-            </button>
+          {!data && !error && <p role="status">正在读取插件列表…</p>}
+          <div hidden={!!candidate}>
+            {data && (
+              <PluginList
+                plugins={data.dependencies ?? []}
+                onChange={(plugin, remove) =>
+                  setCandidate({
+                    action: remove
+                      ? 'lab-remove'
+                      : plugin.kind === 'file' || plugin.kind === 'link'
+                        ? 'lab-add'
+                        : 'lab-update',
+                    name: plugin.name,
+                    spec: remove
+                      ? plugin.name
+                      : plugin.kind === 'file' || plugin.kind === 'link'
+                        ? plugin.spec
+                        : `${plugin.name}@`,
+                  })
+                }
+              />
+            )}
           </div>
-          <p className="wl-muted">
-            这里是依赖声明与锁文件信息，不代表插件正在运行。所有变更先进入独立实验。
-          </p>
-          <input
-            aria-label="搜索插件"
-            placeholder="搜索插件"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          {!data && !error && <p>正在读取组成…</p>}
-          {data?.warnings?.map((x: string, i: number) => (
-            <p className="wl-error" key={i}>
-              {x}
-            </p>
-          ))}
           {candidate && (
-            <div className="wl-event-detail">
-              <strong>
-                {candidate.action === 'lab-remove' ? '确认卸载验证' : '确认版本验证'}：
-                {candidate.name}
-              </strong>
-              <p>来源与合入目标：{source ? label(source) : panel.id}。此操作只创建验证实验。</p>
+            <div
+              className="wl-plugin-action-page"
+              tabIndex={-1}
+              ref={(element) => {
+                if (element && element.parentElement) element.parentElement.scrollTop = 0
+              }}
+            >
+              <strong>{candidate.name}</strong>
+              <p>
+                先在独立实验中{candidate.action === 'lab-remove' ? '验证卸载后的情况' : '验证更新'}
+                ，不会直接修改 {source ? label(source) : panel.id}。
+              </p>
               {candidate.action !== 'lab-remove' && (
                 <label>
-                  目标规格（例如 包名@1.2.3）
+                  {candidate.action === 'lab-add' ? '本地安装来源' : '目标版本（包名@版本号）'}
                   <input
+                    autoFocus
                     value={candidate.spec}
                     onChange={(e) => setCandidate({ ...candidate, spec: e.target.value })}
                   />
                 </label>
               )}
-              <button
-                className="wl-button wl-primary"
-                disabled={busy || !candidate.spec.trim() || candidate.spec.endsWith('@')}
-                onClick={() =>
-                  void run({
-                    action: candidate.action,
-                    spec: candidate.spec,
-                    sourceId: panel.id,
-                    keep: true,
-                    interactive: true,
-                  })
-                }
-              >
-                开始验证
-              </button>
-              <button className="wl-button" onClick={() => setCandidate(null)}>
-                取消
-              </button>
             </div>
           )}
-          {data?.dependencies
-            ?.filter((d: DependencyRecord) => d.name.toLowerCase().includes(query.toLowerCase()))
-            .map((d: DependencyRecord & { bundle: boolean; core?: boolean }) => (
-              <article className="wl-event-detail" key={d.name}>
-                <strong>{d.name}</strong>
-                <span>
-                  解析版本：{d.resolved?.version ?? '未知'} · {d.bundle ? 'Bundle · ' : ''}
-                  {{
-                    registry: '注册表',
-                    file: '本地文件',
-                    link: '本地链接',
-                    git: 'Git 仓库',
-                    workspace: '工作区',
-                    tarball: '压缩包',
-                    unknown: '未知',
-                  }[d.kind] ?? d.kind}
-                  {d.core ? ' · 核心运行层' : ''}
-                </span>
-                <p>声明：{d.spec}</p>
-                {d.target && (
-                  <p className={d.targetExists ? 'wl-muted' : 'wl-error'}>
-                    {d.target} · {d.targetExists ? '路径存在' : '路径不可用'}
-                  </p>
-                )}
-                <div className="wl-experiment-actions">
-                  <button
-                    className="wl-button"
-                    onClick={() =>
-                      setCandidate({
-                        action: d.kind === 'file' || d.kind === 'link' ? 'lab-add' : 'lab-update',
-                        name: d.name,
-                        spec:
-                          d.kind === 'file' || d.kind === 'link'
-                            ? (d.target ?? d.spec)
-                            : `${d.name}@`,
-                      })
-                    }
-                  >
-                    {d.kind === 'file' || d.kind === 'link' ? '重新验证本地版本' : '升级'}
-                  </button>
-                  <button
-                    className="wl-button"
-                    disabled={d.core}
-                    title={d.core ? '核心运行层不可卸载' : undefined}
-                    onClick={() =>
-                      setCandidate({ action: 'lab-remove', name: d.name, spec: d.name })
-                    }
-                  >
-                    卸载
-                  </button>
-                  <button
-                    className="wl-button"
-                    onClick={() => navigate({ section: 'compare', id: panel.id })}
-                  >
-                    查看差异
-                  </button>
-                </div>
-              </article>
+          <details className="wl-plugin-maintenance" hidden={!!candidate}>
+            <summary>变更记录与维护</summary>
+            {data?.drift && (
+              <p>
+                {data.drift.latest.status === 'changed'
+                  ? '插件或配置与上次记录不同。'
+                  : data.drift.latest.status === 'same'
+                    ? '插件和配置与上次记录一致。'
+                    : data.drift.latest.status === 'missing'
+                      ? '还没有可比较的历史记录。'
+                      : '暂时无法比较历史记录。'}
+                {data.drift.lastKnownGood.status === 'missing' ? '尚未保存验证通过的恢复点。' : ''}
+              </p>
+            )}
+            <p className="wl-muted">记录不同不代表出错，需要时可查看具体差异。</p>
+            {data?.warnings?.map((warning: string, i: number) => (
+              <p className="wl-error" key={i}>
+                {warning}
+              </p>
             ))}
+            <div className="wl-flow-actions-row">
+              <button
+                className="wl-button"
+                onClick={() => navigate({ section: 'compare', id: panel.id })}
+              >
+                查看变更
+              </button>
+              <button
+                className="wl-button"
+                onClick={() => navigate({ section: 'config', id: panel.id })}
+              >
+                验证配置修改
+              </button>
+              <button
+                className="wl-button"
+                onClick={() => navigate({ section: 'recovery', id: workflowSource })}
+              >
+                中断恢复
+              </button>
+              <button
+                className="wl-button"
+                onClick={() => navigate({ section: 'research', id: workflowSource })}
+              >
+                排查问题
+              </button>
+            </div>
+          </details>
         </>
       )}
       {panel.section === 'config' && (
@@ -498,7 +505,13 @@ export function WorkspaceTools({
                   setBusy(true)
                   setError('')
                   try {
-                    setDiff(await api({ action: 'snapshot-compare', from: ref(from), to: ref(to) }))
+                    setDiff(
+                      await api({
+                        action: 'snapshot-compare',
+                        from: ref(from),
+                        to: ref(to),
+                      }),
+                    )
                   } catch (e) {
                     setError(String(e))
                   } finally {
@@ -514,10 +527,23 @@ export function WorkspaceTools({
           {diff && (
             <>
               <p>读取于 {new Date(diff.at).toLocaleString()}</p>
+              <ChangeSummary
+                diff={{
+                  dependencies: diff.diff.dependencies ?? [],
+                  files: diff.diff.files ?? [],
+                  patches: diff.diff.patches ?? [],
+                }}
+              />
               {['dependencies', 'files', 'patches'].map((k) => (
                 <details open className="wl-event-detail" key={k}>
                   <summary>
-                    {{ dependencies: '插件变化', files: '文件变化', patches: '配置变化' }[k]}
+                    {
+                      {
+                        dependencies: '插件变化',
+                        files: '文件变化',
+                        patches: '配置变化',
+                      }[k]
+                    }
                   </summary>
                   {(diff.diff[k] ?? []).filter((entry: any) => entry.status !== 'unchanged')
                     .length === 0 ? (
@@ -529,12 +555,15 @@ export function WorkspaceTools({
                         <div key={i} style={{ marginTop: 12, overflowWrap: 'anywhere' }}>
                           <strong>{entry.name ?? entry.id ?? entry.key ?? entry.file}</strong>
                           <p>
-                            {{ added: '新增', removed: '移除', changed: '变更' }[
-                              entry.status as string
-                            ] ?? entry.status}
-                            {k === 'dependencies' &&
-                              ` · ${entry.before ?? '未安装'} → ${entry.after ?? '未安装'}`}
+                            {{
+                              added: '新增',
+                              removed: '移除',
+                              changed: '变更',
+                            }[entry.status as string] ?? entry.status}
                           </p>
+                          {k === 'dependencies' && (
+                            <VersionPair before={entry.before} after={entry.after} />
+                          )}
                           {entry.changedFields?.length > 0 && (
                             <p className="wl-muted">
                               变化项：
@@ -561,6 +590,6 @@ export function WorkspaceTools({
           )}
         </>
       )}
-    </aside>
+    </Panel>
   )
 }

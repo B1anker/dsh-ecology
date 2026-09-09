@@ -115,6 +115,7 @@ export const actionDefinitions: Record<string, Definition> = {
   restore: {
     optional: {
       snapshotId: 'string',
+      sourceId: 'string',
       lastKnownGood: 'boolean',
       promote: 'boolean',
       restart: 'boolean',
@@ -142,10 +143,11 @@ export const actionDefinitions: Record<string, Definition> = {
   'clean-plugins': { optional: { id: 'string' }, write: false },
   'rescue-start': { optional: { allow: 'strings' }, write: true },
   'rescue-stop': { required: id, write: true },
-  'merge-preview': { required: id, write: false },
-  'merge-commit': { required: id, write: true },
+  'merge-preview': { required: id, optional: { targetId: 'string' }, write: false },
+  'merge-commit': { required: id, optional: { acceptReview: 'boolean' }, write: true },
   'merge-prepare': {
     required: { ...id, revision: 'string', plugins: 'strings', includeConfig: 'boolean' },
+    optional: { targetId: 'string' },
     write: true,
   },
 }

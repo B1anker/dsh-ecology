@@ -3,8 +3,8 @@ import { join } from 'node:path'
 import { redactText } from '../domain/redaction.js'
 import { artifactCleanup } from './artifacts.js'
 /** Browser collector for the supported host. Stable shell/loader assertions
- * are independent from console and network observations. Confirmed host asset
- * failures block; unknown impact remains inconclusive across all callers.
+ * are independent from console and network observations. Logs and failed
+ * requests are warnings; missing or broken core-shell evidence still blocks.
  * Automatic probes close owned resources; visible Web probes leave a bounded
  * result window after the runner stops the lab process.
  */
@@ -202,7 +202,7 @@ export async function runClientProbe(input: RunClientProbeInput): Promise<Client
     message: string,
     address?: string,
     resourceType?: string,
-    cancelled = false,
+    _cancelled = false,
   ) => {
     let safeAddress: string | undefined
     let source: BrowserObservation['source'] = 'unknown'
@@ -211,13 +211,8 @@ export async function runClientProbe(input: RunClientProbeInput): Promise<Client
       safeAddress = parsed.origin + parsed.pathname
       source = parsed.origin === hostOrigin ? 'host' : 'external'
     } catch {}
-    // Only a failed host document/script/stylesheet is independently blocking.
-    // API and external failures need capability evidence; a console line is not a verdict.
-    const impact = cancelled
-      ? 'warning'
-      : source === 'host' && ['document', 'script', 'stylesheet'].includes(resourceType ?? '')
-        ? 'blocking'
-        : 'review'
+    // Logs and resource failures are diagnostic. Core-shell availability decides boot success.
+    const impact = 'warning' as const
     observations.push({
       id: `event-${observations.length + 1}`,
       kind,
@@ -373,9 +368,7 @@ export async function runClientProbe(input: RunClientProbeInput): Promise<Client
         }
       }
       const finalState = lastState ?? (await evaluateShell(page))
-      const finalErrors = observations
-        .filter((o) => o.impact === 'blocking')
-        .map((o) => `${o.address ?? ''} ${o.message}`)
+      const finalErrors: string[] = []
       if (
         readyMs >= 0 &&
         (!markersReached(finalState) || finalState.loaderFailed) &&
@@ -389,7 +382,7 @@ export async function runClientProbe(input: RunClientProbeInput): Promise<Client
         }
       }
       if (readyMs >= 0 && markersReached(finalState) && !finalState.loginRequired) {
-        succeeded = !observations.some((o) => o.impact === 'review')
+        succeeded = true
         return {
           signal: { kind: 'ready', state: finalState, settledMs: readyMs },
           events,
@@ -520,13 +513,6 @@ export async function runClientProbe(input: RunClientProbeInput): Promise<Client
     }
   }
   const outcome = await execute()
-  if (outcome.signal.kind === 'ready' && observations.some((o) => o.impact === 'review')) {
-    outcome.signal = {
-      kind: 'inconclusive',
-      state: outcome.signal.state,
-      reason: '核心界面检查通过，但运行异常的影响尚未确认；请查看请求来源并试用相关功能。',
-    }
-  }
   outcome.events = outcome.events.map(redactText)
   if (outcome.signal.kind === 'fail') outcome.signal.errors = outcome.signal.errors.map(redactText)
   if (outcome.signal.kind === 'inconclusive')

@@ -188,8 +188,13 @@ AES-256-GCM，macOS 密钥存 Keychain；无安全密钥服务的平台默认跳
    materialize、apply 成功；server-only 插件不因没有 client entry 而失败，但不得让
    core 退化。
 
-server 健康而 client 失败必须是失败。无法取得可靠浏览器就绪信号为 `inconclusive`，默认
-不得 promote；仅 `--accept-inconclusive` 可由用户承担风险继续。
+验证目标是保证主流程可用，不承诺第三方插件的全部业务功能正常。页面和核心界面在稳定
+窗口内正常时，console/page error、接口连接失败和资源加载错误只记为运行告警，不阻止
+安装、重验、合入或恢复，也不需要额外确认。插件业务测试是可选检查。
+
+server 健康而核心 client 失败仍必须阻断。登录未完成、加载器失败、核心界面缺失或消失，
+以及没有可靠浏览器就绪证据都不能合入；`--accept-inconclusive` 不能绕过这些检查。
+配置有效性、备份完整性、内容指纹和事务回滚检查不因运行告警策略放宽而改变。
 
 ## 7. Promotion 与恢复
 

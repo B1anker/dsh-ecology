@@ -3,7 +3,6 @@ import { ArrowsClockwise } from '@phosphor-icons/react/dist/csr/ArrowsClockwise'
 import { CircleNotch } from '@phosphor-icons/react/dist/csr/CircleNotch'
 import { FileText } from '@phosphor-icons/react/dist/csr/FileText'
 import { Stethoscope } from '@phosphor-icons/react/dist/csr/Stethoscope'
-import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useEffect, useState } from 'react'
 import type { DoctorResult } from '../commands/doctor.js'
 import type { ReportResult } from '../commands/report.js'
@@ -17,6 +16,7 @@ import {
   useJob,
 } from './job-view.js'
 import { useLabStatus } from './lab-status.js'
+import { Panel } from './panel.js'
 import { ReportView } from './report-view.js'
 
 /** 维护面板：doctor 诊断、救援实例、回滚入口；进行中任务复用探针阶梯。 */
@@ -110,12 +110,21 @@ export function Maintenance({
       setPending('')
     }
   }
-  const runForLab = async (id: string, action: 'lab-verify' | 'promote', interactive = false) => {
+  const runForLab = async (
+    id: string,
+    action: 'lab-verify' | 'promote',
+    interactive = false,
+    acceptReview = false,
+  ) => {
     if (pending || running) return
     setPending('正在提交任务…')
     setError('')
     try {
-      const result = await api({ action, id, interactive })
+      const result = await api(
+        action === 'lab-verify'
+          ? { action, id, interactive }
+          : { action, id, restart: true, ...(acceptReview ? { acceptReview: true } : {}) },
+      )
       setInternalJob(result.jobId)
       onJobCreated(result.jobId)
       onBusy(true)
@@ -139,8 +148,12 @@ export function Maintenance({
     job && ['fail', 'review', 'awaiting_auth', 'incomplete'].includes(job.status)
       ? ((job.result as { labId?: string | null } | undefined)?.labId ?? job.labId ?? null)
       : null
+  const review = job?.status === 'review'
   return (
-    <aside
+    <Panel
+      title="维护"
+      close={close}
+      closeDisabled={!!pending}
       className="wl-inspector wl-maintenance"
       aria-label="维护"
       onKeyDown={(event) => {
@@ -151,20 +164,6 @@ export function Maintenance({
         }
       }}
     >
-      <header className="wl-header">
-        <div>
-          <span className="wl-eyebrow">MAINTENANCE</span>
-          <h2>维护</h2>
-        </div>
-        <button
-          className="wl-button wl-icon"
-          aria-label="关闭维护面板"
-          disabled={!!pending}
-          onClick={close}
-        >
-          <X size={16} />
-        </button>
-      </header>
       {activeJob && (
         <section className="wl-event-detail">
           <span className="wl-eyebrow">{job ? job.kind.toUpperCase() : 'JOB'}</span>
@@ -197,7 +196,14 @@ export function Maintenance({
             )}
           {job && ['fail', 'review', 'awaiting_auth', 'incomplete'].includes(job.status) && (
             <>
-              <p className="wl-error">验证未通过，正式环境未改动。</p>
+              {review ? (
+                <div className="wl-failure-summary">
+                  <strong>旧版验证记录</strong>
+                  <p className="wl-muted">请重新验证；核心界面可用时，运行告警不再阻止合入。</p>
+                </div>
+              ) : (
+                <p className="wl-error">验证未通过，正式环境未改动。</p>
+              )}
               {failedLabId && (
                 <div className="wl-flow-actions">
                   <button
@@ -382,6 +388,6 @@ export function Maintenance({
         </div>
       )}
       {reportData && <ReportView report={reportData} />}
-    </aside>
+    </Panel>
   )
 }

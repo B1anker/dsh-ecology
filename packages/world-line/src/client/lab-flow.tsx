@@ -4,7 +4,6 @@ import { FileText } from '@phosphor-icons/react/dist/csr/FileText'
 import { Flask } from '@phosphor-icons/react/dist/csr/Flask'
 import { Info } from '@phosphor-icons/react/dist/csr/Info'
 import { UploadSimple } from '@phosphor-icons/react/dist/csr/UploadSimple'
-import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useEffect, useId, useState } from 'react'
 import type { LabActionResult, LabPromoteCommandResult } from '../commands/lab.js'
 import type { ReportResult } from '../commands/report.js'
@@ -14,6 +13,7 @@ import { HudTabs } from './hud-controls.js'
 import { installationToResume } from './installation-flow.js'
 import { JobReceipt, jobKindLabel, ProbeLadder, useJob } from './job-view.js'
 import { useLabStatus } from './lab-status.js'
+import { Panel } from './panel.js'
 import {
   localPluginPath,
   type PluginSource,
@@ -85,8 +85,6 @@ export function LabFlow({
   useEffect(() => setReportData(null), [jobId])
   const [message, setMessage] = useState('')
 
-  const [confirmReview, setConfirmReview] = useState(false)
-  useEffect(() => setConfirmReview(false), [jobId])
   const [confirmRollback, setConfirmRollback] = useState(false)
   const { job, gone, connectionError } = useJob(api, jobId, () => {
     onBusy(false)
@@ -155,7 +153,10 @@ export function LabFlow({
     (job?.result as LabActionResult | undefined)?.spec ?? spec,
   )
   return (
-    <aside
+    <Panel
+      title="安装并验证插件"
+      close={close}
+      closeDisabled={!!pending}
       className="wl-inspector wl-lab-flow"
       aria-label="验证插件"
       onKeyDown={(event) => {
@@ -166,20 +167,6 @@ export function LabFlow({
         }
       }}
     >
-      <header className="wl-header">
-        <div>
-          <span className="wl-eyebrow">LAB FLOW</span>
-          <h2>安装并验证插件</h2>
-        </div>
-        <button
-          className="wl-button wl-icon"
-          aria-label="关闭验证向导"
-          disabled={!!pending}
-          onClick={close}
-        >
-          <X size={16} />
-        </button>
-      </header>
       {restoring && <p role="status">正在读取这条世界线的安装进度…</p>}
       {restoreError && (
         <p role="alert">
@@ -248,17 +235,28 @@ export function LabFlow({
               placeholder={
                 pluginSource === 'local'
                   ? '/Users/你的用户名/code/my-plugin'
-                  : '@seaveyon/dsh-web-login 或 @seaveyon/dsh-web-login@0.5.0'
+                  : '@seaveyon/dsh-web-login@latest'
               }
               disabled={!!pending}
             />
             <span className="wl-plugin-input-help" id={pluginHelpId}>
               <span
                 className="wl-error"
-                style={{ visibility: installInput.error ? 'visible' : 'hidden' }}
+                style={{
+                  visibility: installInput.error ? 'visible' : 'hidden',
+                }}
                 aria-hidden={!installInput.error}
               >
                 {installInput.error ?? pluginInputErrors[pluginSource]}
+              </span>
+              <span
+                className="wl-muted"
+                aria-hidden={!!installInput.error}
+                style={{ visibility: installInput.error ? 'hidden' : 'visible' }}
+              >
+                {pluginSource === 'local'
+                  ? '填写运行 DSH 的电脑上的插件目录。'
+                  : '支持包名@版本；省略版本时使用 latest。'}
               </span>
             </span>
           </label>
@@ -370,7 +368,8 @@ export function LabFlow({
                     )}
                     <p className="wl-muted">
                       合入会把实验里验证过的插件和配置应用到来源环境（
-                      {lab?.sourceName ?? sourceName}）。浏览器验证通过后才能执行。
+                      {lab?.sourceName ?? sourceName}
+                      ）。浏览器验证通过后才能执行。
                     </p>
                     {labError && <p className="wl-error">{labError}</p>}
                     <button
@@ -424,35 +423,9 @@ export function LabFlow({
                 ))}
               </details>
               {job.status === 'review' && (
-                <section className="wl-review-action" aria-label="人工确认合入">
-                  <strong>人工确认后合入</strong>
-                  <p className="wl-muted">
-                    只有必要检查通过时可接受本次未确认风险。该选择会留下记录，不自动标记稳定点，也不适用于后续安装。
-                  </p>
-                  <button
-                    className="wl-button wl-primary"
-                    disabled={!!pending || !labId}
-                    onClick={() => {
-                      if (!confirmReview) {
-                        setConfirmReview(true)
-                        return
-                      }
-                      void run('正在记录本次风险接受并合入…', {
-                        action: 'promote',
-                        id: labId,
-                        acceptReview: true,
-                        restart: true,
-                      })
-                    }}
-                  >
-                    {confirmReview ? '确认接受本次风险并合入' : '我已确认可用，继续合入'}
-                  </button>
-                  {confirmReview && (
-                    <button className="wl-button" onClick={() => setConfirmReview(false)}>
-                      取消合入
-                    </button>
-                  )}
-                </section>
+                <p className="wl-muted">
+                  这是旧版验证记录。请重新验证；核心界面可用时，运行告警不再阻止合入。
+                </p>
               )}
               <div className="wl-flow-actions">
                 {failure.login && (
@@ -479,7 +452,12 @@ export function LabFlow({
                 <button
                   className="wl-button"
                   disabled={!!pending || !labId}
-                  onClick={() => void run('正在重验当前实验…', { action: 'lab-verify', id: labId })}
+                  onClick={() =>
+                    void run('正在重验当前实验…', {
+                      action: 'lab-verify',
+                      id: labId,
+                    })
+                  }
                 >
                   重验当前实验
                 </button>
@@ -687,6 +665,6 @@ export function LabFlow({
         </button>
       )}
       {reportData && <ReportView report={reportData} />}
-    </aside>
+    </Panel>
   )
 }

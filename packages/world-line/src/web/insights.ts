@@ -34,6 +34,9 @@ export function snapshotRestorable(manifest: SnapshotManifest) {
       (manifest.homePatch.secretStored === true && manifest.secretsBundle !== null))
   )
 }
+
+import { snapshotLabel } from '../domain/snapshot-label.js'
+
 export async function snapshotEvents(ctx: CliContext, lineId: string): Promise<WorldEvent[]> {
   const { snapshots } = await listSnapshotManifests(ctx.home)
   return snapshots
@@ -43,7 +46,7 @@ export async function snapshotEvents(ctx: CliContext, lineId: string): Promise<W
       lineId,
       at: item.createdAt,
       kind: 'snapshot',
-      title: redactText(item.label || '配置快照'),
+      title: redactText(snapshotLabel(item.label)),
       detail: `${item.profile.dependencies.length} 个插件 · ${item.files.length} 份配置文件`,
       snapshotId: item.id,
       restorable: snapshotRestorable(item),
@@ -59,7 +62,7 @@ export async function snapshotDetail(ctx: CliContext, snapshotId: string): Promi
   return {
     id: item.id,
     at: item.createdAt,
-    label: redactText(item.label || '配置快照'),
+    label: redactText(snapshotLabel(item.label)),
     dependencies: item.profile.dependencies.map((dep) => ({
       name: redactText(dep.name),
       version:

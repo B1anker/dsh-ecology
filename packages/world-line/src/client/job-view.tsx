@@ -9,6 +9,7 @@ import type { LabActionResult, LabPromoteCommandResult } from '../commands/lab.j
 import type { RestoreCommandResult } from '../commands/restore.js'
 import type { ProbeResult } from '../domain/probe.js'
 import { jobsConnected, useJobFeed } from './job-feed.js'
+import { CompatibilityMatrix } from './result-visuals.js'
 
 /** Server-side job snapshot (web action `job`). Jobs are in-memory: a host restart loses them. */
 export interface Job {
@@ -101,12 +102,33 @@ const duration = (probe: ProbeResult) => {
   return ms >= 10000 ? `${Math.round(ms / 1000)} 秒` : `${(ms / 1000).toFixed(1)} 秒`
 }
 
+/** The live job phase is a real task row, not supplementary status copy. */
+export function currentJobAction(job: Job) {
+  if (job.phase) {
+    const label: Record<string, string> = {
+      gate: '检查合入条件',
+      'pre-snapshot': '创建合入前快照',
+      swap: '将已验证配置合入来源环境',
+      'restart-verify': '重启来源环境并验证',
+      'after-snapshot': '创建合入后快照',
+      journal: '记录合入结果',
+      committed: '完成合入',
+    }
+    return label[job.phase] ?? job.phase
+  }
+  if (job.status === 'queued') return '等待同一环境的前一个任务完成。'
+  return job.probes.some((probe) => probe.check.startsWith('plugin-'))
+    ? '准备配置检查和实验启动。'
+    : '准备隔离环境和验证工具。'
+}
+
 /** Live probe ladder: current phase on top, then one row per finished probe. */
 export function ProbeLadder({ job, onLogs }: { job: Job; onLogs?(): void }) {
+  const active = ['running', 'queued'].includes(job.status)
   return (
     <div className="wl-ladder" role="status" aria-label="验证进度">
       <p className="wl-ladder-phase">
-        {job.status === 'running' || job.status === 'queued' ? (
+        {active ? (
           <>
             <CircleNotch size={15} className="wl-spin" />
             {job.status === 'queued' ? '等待执行' : '进行中…'}
@@ -126,18 +148,20 @@ export function ProbeLadder({ job, onLogs }: { job: Job; onLogs?(): void }) {
           </>
         )}
       </p>
-      {['running', 'queued'].includes(job.status) && (
-        <p className="wl-current-action">
-          {job.phase ||
-            (job.status === 'queued'
-              ? '等待同一环境的前一个任务完成。'
-              : job.probes.some((p) => p.check.startsWith('plugin-'))
-                ? '依赖步骤已结束，正在准备配置检查和实验启动。'
-                : '正在准备隔离环境和验证工具。')}
-        </p>
-      )}
-      {!!job.probes.length && (
+      {(active || !!job.probes.length) && (
         <ul>
+          {active && (
+            <li className="wl-ladder-current" aria-live="polite">
+              <CircleNotch size={18} className="wl-spin" aria-hidden="true" />
+              <span>
+                <strong>当前事项</strong>
+                {currentJobAction(job)}
+              </span>
+              <span className="wl-status-text">
+                {job.status === 'queued' ? '等待中' : '进行中'}
+              </span>
+            </li>
+          )}
           {job.probes.map((probe, index) => (
             <li key={`${probe.check}-${index}`}>
               <StatusMark status={probe.status} />
@@ -173,6 +197,8 @@ export function ProbeLadder({ job, onLogs }: { job: Job; onLogs?(): void }) {
 
 /** Receipt facts of a terminal ok job (promote receipt, or restore/lab-add result highlights). */
 export function JobReceipt({ job }: { job: Job }) {
+  if (job.kind === 'version-matrix' && (job.result as any)?.rows)
+    return <CompatibilityMatrix rows={(job.result as any).rows} />
   if (job.status !== 'ok') return null
   if (
     [

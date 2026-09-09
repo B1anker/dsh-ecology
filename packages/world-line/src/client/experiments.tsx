@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Panel } from './panel.js'
 import { type Line, label, stateLabel } from './timeline-model.js'
 
 export function Experiments({
@@ -34,13 +35,7 @@ export function Experiments({
     )
     .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))
   return (
-    <aside className="wl-inspector" aria-label="验证实验">
-      <div className="wl-row-title">
-        <h2>验证实验</h2>
-        <button className="wl-button" onClick={close}>
-          关闭
-        </button>
-      </div>
+    <Panel title="验证实验" close={close} className="wl-inspector" aria-label="验证实验">
       <p>来源：{sourceName}</p>
       <p className="wl-muted">实验默认收在这里。定位时只展开一个实验；收起不会删除数据。</p>
       <div className="wl-row-title">
@@ -114,6 +109,6 @@ export function Experiments({
           再显示 20 条（剩余 {matches.length - limit}）
         </button>
       )}
-    </aside>
+    </Panel>
   )
 }

@@ -32,12 +32,45 @@ export const stateLabel = (state: string) =>
 export const TRACK_LEFT = 48
 export const TRACK_END = 820
 export const ROW_HEIGHT = 90
+/** A restore is an appended operation; its target must be an actual snapshot on this line. */
+export function restoreRelation(events: WorldEvent[], lineId: string) {
+  const history = events.filter((event) => event.lineId === lineId)
+  const restore = history
+    .filter((event) => event.kind === 'restore')
+    .toSorted((a, b) => b.at.localeCompare(a.at))[0]
+  if (!restore) return null
+  const target = history.find(
+    (event) => event.kind === 'snapshot' && event.snapshotId === restore.snapshotId,
+  )
+  if (!target || Date.parse(target.at) > Date.parse(restore.at)) return null
+  return {
+    restore,
+    target,
+    later: history.some((event) => Date.parse(event.at) > Date.parse(restore.at)),
+  }
+}
+/** A missing parent still gets a visual anchor; never rewrite the operational source. */
+export function canvasConnections(lines: Line[]) {
+  const ids = new Set(lines.map((line) => line.id))
+  return lines.flatMap((line) => {
+    if (line.id === 'origin') return []
+    const parent = line.parentId ?? 'origin'
+    const missing = parent === line.id || !ids.has(parent)
+    const source = missing ? 'origin' : parent
+    return ids.has(source) ? [{ source, target: line.id, missing }] : []
+  })
+}
 export const timeX = (at: number, start: number, end: number) =>
   TRACK_LEFT +
   Math.max(0, Math.min(1, (at - start) / Math.max(1, end - start))) * (TRACK_END - TRACK_LEFT)
 
 /** Piecewise time mapping: preserve event order while bounding empty spans. */
-export function timelineScale(start: number, end: number, instants: number[]) {
+export function timelineScale(
+  start: number,
+  end: number,
+  instants: number[],
+  focus: number[] = [],
+) {
   end = Math.max(start + 1, end)
   const hour = 3600000
   const anchors = [
@@ -62,7 +95,10 @@ export function timelineScale(start: number, end: number, instants: number[]) {
   let offset = TRACK_LEFT
   const mapped = segments.map((segment) => {
     const left = offset
-    offset += (segment.weight / total) * (TRACK_END - TRACK_LEFT)
+    const width = (segment.weight / total) * (TRACK_END - TRACK_LEFT)
+    const expanded =
+      focus.length > 0 && segment.to >= Math.min(...focus) && segment.from <= Math.max(...focus)
+    offset += expanded ? Math.max(56, width) : width
     return { ...segment, left, right: offset }
   })
   const toX = (at: number) => {
@@ -71,11 +107,17 @@ export function timelineScale(start: number, end: number, instants: number[]) {
     return s.left + ((at - s.from) / s.duration) * (s.right - s.left)
   }
   const toTime = (x: number) => {
-    x = Math.max(TRACK_LEFT, Math.min(TRACK_END, x))
+    x = Math.max(TRACK_LEFT, Math.min(offset, x))
     const s = mapped.find((segment) => x <= segment.right) ?? mapped[mapped.length - 1]!
     return s.from + ((x - s.left) / (s.right - s.left)) * s.duration
   }
-  return { toX, toTime, compressed, gaps: mapped.filter((s) => s.duration > 6 * hour) }
+  return {
+    toX,
+    toTime,
+    right: offset,
+    compressed,
+    gaps: mapped.filter((s) => s.duration > 6 * hour),
+  }
 }
 export function pointTime(x: number, line: Line, start: number, end: number) {
   const at = start + ((x - TRACK_LEFT) / (TRACK_END - TRACK_LEFT)) * (end - start)
@@ -109,49 +151,77 @@ export function eventMarkers(
   start: number,
   end: number,
   toX = (at: number) => timeX(at, start, end),
+  expandedIds: string[] = [],
 ) {
   const markers: { x: number; events: WorldEvent[] }[] = []
   const born = toX(Date.parse(line.createdAt))
   for (const event of events
-    .filter((item) => item.lineId === line.id)
+    .filter(
+      (item) =>
+        item.lineId === line.id &&
+        (!item.parentEventId ||
+          expandedIds.includes(item.id) ||
+          events.some(
+            (event) =>
+              event.lineId === line.id &&
+              event.kind === 'restore' &&
+              event.snapshotId === item.snapshotId,
+          )),
+    )
     .toSorted((a, b) => a.at.localeCompare(b.at))) {
     const x = toX(Date.parse(event.at)) - born
     const last = markers.at(-1)
-    if (last && x - last.x < 20) last.events.push(event)
-    else markers.push({ x, events: [event] })
+    const expanded = expandedIds.includes(event.id)
+    const previousExpanded = last?.events.some((item) => expandedIds.includes(item.id))
+    if (last && x - last.x < 20 && !expanded && !previousExpanded) last.events.push(event)
+    else
+      markers.push({
+        x: last && (expanded || previousExpanded) ? Math.max(x, last.x + 36) : x,
+        events: [event],
+      })
   }
   return markers
 }
 // Vivid light-trail palette from the supplied reference. IDs keep colors stable.
 const linePalette = [
-  '#e83e52',
-  '#269b68',
-  '#ed940a',
-  '#d62cb7',
-  '#00b6c8',
-  '#5254e8',
-  '#bd693b',
-  '#8e4bdb',
-  '#008f91',
-  '#db587a',
-  '#587fdf',
-  '#99a51b',
-  '#c7511f',
-  '#ba4290',
-  '#43783e',
-  '#a17a24',
-  '#8364ed',
-  '#df6942',
+  '#268bcc',
+  '#13a4bc',
+  '#557ce0',
+  '#8b75db',
+  '#21a99e',
+  '#458ccf',
+  '#5470c6',
+  '#996fc5',
+  '#178caa',
+  '#499db7',
+  '#667cce',
+  '#379abf',
+  '#587ee1',
+  '#2b9da5',
+  '#7186c9',
+  '#427fc2',
+  '#877bd4',
+  '#459fb0',
   '#208dc3',
-  '#cc4570',
-  '#3f9c87',
-  '#8d69a8',
-  '#b29317',
-  '#4969a5',
+  '#6d83c0',
+  '#32a59f',
+  '#7684d5',
+  '#2999d0',
+  '#496fae',
 ]
 export function lineColor(id: string) {
   if (id === 'origin') return '#00dedf'
   let hash = 0
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
   return linePalette[hash % linePalette.length]!
+}
+
+/** Leave the source marker's right edge and enter the merge node from below.
+ * Keep control points inside the horizontal span; never bulge past the target.
+ */
+export function mergeConnectionPath(fromX: number, fromY: number, nodeX: number, nodeY: number) {
+  const endY = nodeY + 18
+  const bend = Math.max(20, Math.abs(fromY - endY) / 3)
+  const departure = Math.min(18, Math.max(0, nodeX - fromX) / 2)
+  return `M ${fromX} ${fromY} C ${fromX + departure} ${fromY}, ${nodeX} ${endY + bend}, ${nodeX} ${endY}`
 }

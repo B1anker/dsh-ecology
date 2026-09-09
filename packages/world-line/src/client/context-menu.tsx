@@ -90,7 +90,9 @@ export function ContextMenu({
           main.current?.getBoundingClientRect().right ??
           parent.current.getBoundingClientRect().right,
         top:
-          parent.current.getBoundingClientRect().top -
+          main.current!.getBoundingClientRect().top +
+          parent.current.offsetTop -
+          main.current!.scrollTop -
           (child.current.querySelector<HTMLElement>('[role=menuitem]')?.offsetTop ?? 0),
       },
       child.current.getBoundingClientRect(),
@@ -169,7 +171,7 @@ export function ContextMenu({
     }
   }
   const buttons = (actions: MenuAction[], submenu = false) =>
-    actions.map((item) => (
+    actions.map((item, index) => (
       <button
         type="button"
         role="menuitem"
@@ -178,6 +180,12 @@ export function ContextMenu({
         title={item.hint}
         data-action={item.id}
         className="wl-system-item"
+        style={
+          {
+            '--wl-item-index': index,
+            '--wl-stack-offset': `${(actions.length - index) * 42}px`,
+          } as CSSProperties
+        }
         data-danger={!!item.danger}
         aria-haspopup={item.children ? 'menu' : undefined}
         aria-expanded={item.children ? group === item.id : undefined}
@@ -219,7 +227,11 @@ export function ContextMenu({
         </span>
         <CaretLeft size={12} weight="fill" className="wl-system-pointer" aria-hidden="true" />
         <span className="wl-system-label">{item.label}</span>
-        {item.children && <CaretRight size={13} className="wl-system-chevron" aria-hidden="true" />}
+        {item.children && (
+          <span className="wl-system-chevron" aria-hidden="true">
+            <CaretRight size={13} />
+          </span>
+        )}
       </button>
     ))
   const drill = compact && selectedGroup
@@ -258,21 +270,33 @@ export function ContextMenu({
             <X size={14} />
           </button>
         </div>
-        {drill ? (
-          <>
-            <button className="wl-system-back" type="button" onClick={back}>
-              <CaretLeft size={14} />
-              {selectedGroup.label}
-            </button>
-            {buttons(selectedGroup.children ?? [], true)}
-          </>
-        ) : (
-          buttons(items)
-        )}
-        <div className="wl-system-footer">{drill ? '返回上级 · Esc' : '选择操作 · Esc 关闭'}</div>
+        <div className="wl-system-items" key={drill ? selectedGroup.id : 'root'}>
+          {drill ? (
+            <>
+              <button className="wl-system-back" type="button" onClick={back}>
+                <CaretLeft size={14} />
+                {selectedGroup.label}
+              </button>
+              {buttons(selectedGroup.children ?? [], true)}
+            </>
+          ) : (
+            buttons(items)
+          )}
+        </div>
+        <div
+          className="wl-system-footer"
+          style={
+            {
+              '--wl-item-index': drill ? (selectedGroup.children?.length ?? 0) : items.length,
+            } as CSSProperties
+          }
+        >
+          {drill ? '返回上级 · Esc' : '选择操作 · Esc 关闭'}
+        </div>
       </div>
       {selectedGroup && !compact && (
         <div
+          key={selectedGroup.id}
           ref={child}
           className="wl-system-menu wl-system-submenu"
           role="menu"
@@ -282,7 +306,7 @@ export function ContextMenu({
           onKeyDown={(event) => keyboard(event, true)}
         >
           <div className="wl-system-subheading">{selectedGroup.label}</div>
-          {buttons(selectedGroup.children ?? [], true)}
+          <div className="wl-system-items">{buttons(selectedGroup.children ?? [], true)}</div>
         </div>
       )}
     </div>,

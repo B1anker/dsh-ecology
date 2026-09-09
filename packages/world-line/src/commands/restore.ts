@@ -172,7 +172,9 @@ export async function runRestoreCommand(
     return { ok: true, kind: 'verify', snapshotId, labId, clientGate }
   }
 
-  const promoted = await runLabPromote(ctx, {
+  // The recovery lab is stored in `manager` even when the snapshot belongs to
+  // a nested source line. Promotion resolves that line from the manifest.
+  const promoted = await runLabPromote(manager, {
     labId,
     acceptInconclusive: options.acceptInconclusive ?? false,
     restart: options.restart ?? false,
