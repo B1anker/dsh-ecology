@@ -35,6 +35,7 @@ import { type CSSProperties, type MouseEvent, useEffect, useMemo, useRef, useSta
 import type { WorldEvent } from '../domain/insight-types.js'
 import { ContextMenu, type MenuAction } from './context-menu.js'
 import {
+  canvasConnections,
   eventMarkers,
   type Line,
   label,
@@ -50,6 +51,7 @@ export { type Line, label, stateLabel } from './timeline-model.js'
 
 type TrackData = {
   line: Line
+  missingParent: boolean
   experiments: Line[]
   showExperiments(): void
   width: number
@@ -66,7 +68,10 @@ type TrackData = {
   open(event: MouseEvent<HTMLElement>, line: Line): void
 }
 type Track = Node<TrackData, 'worldline'>
-type Branch = Edge<{ active: boolean; color: string; stopped: boolean }, 'branch'>
+type Branch = Edge<
+  { active: boolean; color: string; stopped: boolean; missingParent: boolean },
+  'branch'
+>
 function TrackNode({ id, data }: NodeProps<Track>) {
   const update = useUpdateNodeInternals()
   const handles = data.forks.map((fork) => `${fork.id}:${fork.x}`).join(',')
@@ -177,6 +182,15 @@ function TrackNode({ id, data }: NodeProps<Track>) {
                       ? '验证失败'
                       : '未校验'}
         </span>
+        {data.missingParent && (
+          <span
+            className="wl-muted"
+            style={{ display: 'block', whiteSpace: 'nowrap', fontSize: 10 }}
+            title={`原来源：${line.parentId}。虚线仅连接画布主干，不改变实际来源。`}
+          >
+            来源缺失 · 虚线连接主干
+          </span>
+        )}
       </div>
       <button
         className="wl-button wl-icon wl-point-action nodrag nopan"
@@ -204,7 +218,7 @@ function BranchEdge({ sourceX, sourceY, targetX, targetY, data, ...props }: Edge
       interactionWidth={24}
       style={{
         stroke: data?.color,
-        strokeDasharray: data?.stopped ? '6 4' : undefined,
+        strokeDasharray: data?.stopped || data?.missingParent ? '6 4' : undefined,
         opacity: data?.active ? 1 : 0.7,
         strokeWidth: data?.active ? 2 : 1.5,
         strokeLinecap: 'round',
@@ -393,6 +407,7 @@ export function Timeline({
       y: event.clientY,
     })
   }
+  const connections = canvasConnections(lines)
   const nodes: Track[] = lines.map((line, index) => {
     const born = timeX(Date.parse(line.createdAt))
     const markers = eventMarkers(events, line, start, end, scale.toX)
@@ -405,7 +420,9 @@ export function Timeline({
       handles: [
         { type: 'target', position: Position.Left, x: 0, y: 35.5, width: 1, height: 1 },
         ...lines
-          .filter((child) => child.parentId === line.id)
+          .filter((child) =>
+            connections.some((edge) => edge.source === line.id && edge.target === child.id),
+          )
           .map((child) => ({
             id: child.id,
             type: 'source' as const,
@@ -424,6 +441,7 @@ export function Timeline({
       ariaLabel: `世界线 ${label(line)}，${stateLabel(line.state)}${line.initialization === 'clean' ? ' · 从干净环境创建' : ''}，Shift+F10 打开时间点菜单`,
       data: {
         line,
+        missingParent: connections.some((edge) => edge.target === line.id && edge.missing),
         time,
         compared: comparisonIds.includes(line.id),
         markers,
@@ -440,7 +458,9 @@ export function Timeline({
               timeX(time) - born)
             : null,
         forks: lines
-          .filter((child) => child.parentId === line.id)
+          .filter((child) =>
+            connections.some((edge) => edge.source === line.id && edge.target === child.id),
+          )
           .map((child) => ({
             id: child.id,
             x: Math.max(0, timeX(Date.parse(child.forkedAt ?? child.createdAt)) - born - 40),
@@ -453,22 +473,22 @@ export function Timeline({
       },
     }
   })
-  const edges: Branch[] = lines
-    .filter((line) => lines.some((parent) => parent.id === line.parentId))
-    .map((line) => ({
-      id: `branch-${line.id}`,
-      source: line.parentId!,
-      sourceHandle: line.id,
-      target: line.id,
-      type: 'branch',
-      deletable: false,
-      selectable: false,
-      data: {
-        active: selected === line.id,
-        color: lineColor(line.id),
-        stopped: line.state === 'stopped',
-      },
-    }))
+  const edges: Branch[] = connections.map((connection) => ({
+    id: `branch-${connection.target}`,
+    source: connection.source,
+    sourceHandle: connection.target,
+    target: connection.target,
+    type: 'branch',
+    deletable: false,
+    selectable: false,
+    ariaLabel: connection.missing ? '原来源已删除或未显示，仅在画布中连接主干' : undefined,
+    data: {
+      active: selected === connection.target,
+      color: lineColor(connection.target),
+      stopped: lines.find((line) => line.id === connection.target)?.state === 'stopped',
+      missingParent: connection.missing,
+    },
+  }))
   const lineIds = lines.map((line) => line.id).join(',')
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -995,9 +1015,11 @@ export function Timeline({
                 {line.port ? ` · ${line.port}` : ''}
               </span>
               <span className="wl-muted">
-                {line.parentId
-                  ? `源自 ${label(lines.find((item) => item.id === line.parentId) ?? { ...line, alias: '未显示的来源' })}`
-                  : '正式环境'}{' '}
+                {connections.some((edge) => edge.target === line.id && edge.missing)
+                  ? '原来源已删除或未显示 · 虚线连接主干'
+                  : line.parentId
+                    ? `源自 ${label(lines.find((item) => item.id === line.parentId) ?? { ...line, alias: '未显示的来源' })}`
+                    : '正式环境'}{' '}
                 ·{' '}
                 {new Date(line.createdAt).toLocaleTimeString([], {
                   hour: '2-digit',

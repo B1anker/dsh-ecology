@@ -32,6 +32,17 @@ export const stateLabel = (state: string) =>
 export const TRACK_LEFT = 48
 export const TRACK_END = 820
 export const ROW_HEIGHT = 90
+/** A missing parent still gets a visual anchor; never rewrite the operational source. */
+export function canvasConnections(lines: Line[]) {
+  const ids = new Set(lines.map((line) => line.id))
+  return lines.flatMap((line) => {
+    if (line.id === 'origin') return []
+    const parent = line.parentId ?? 'origin'
+    const missing = parent === line.id || !ids.has(parent)
+    const source = missing ? 'origin' : parent
+    return ids.has(source) ? [{ source, target: line.id, missing }] : []
+  })
+}
 export const timeX = (at: number, start: number, end: number) =>
   TRACK_LEFT +
   Math.max(0, Math.min(1, (at - start) / Math.max(1, end - start))) * (TRACK_END - TRACK_LEFT)

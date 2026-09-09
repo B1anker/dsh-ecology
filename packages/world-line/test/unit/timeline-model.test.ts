@@ -2,6 +2,7 @@ import { describe, expect, test } from '@rstest/core'
 import {
   adjacentEvent,
   aliasValidation,
+  canvasConnections,
   cursorTime,
   eventMarkers,
   type Line,
@@ -22,6 +23,33 @@ const line: Line = {
   verdict: null,
   isDefault: false,
 }
+describe('canvas connections after parent removal', () => {
+  const origin = { ...line, id: 'origin', kind: 'origin' }
+  const parent = { ...line, id: 'old-login', parentId: 'origin' }
+  const child = { ...line, id: 'new-login', parentId: parent.id }
+  test('deleting the parent keeps a marked visual connection without changing the source', () => {
+    expect(canvasConnections([origin, parent, child])).toEqual([
+      { source: 'origin', target: parent.id, missing: false },
+      { source: parent.id, target: child.id, missing: false },
+    ])
+    expect(canvasConnections([origin, child])).toEqual([
+      { source: 'origin', target: child.id, missing: true },
+    ])
+    expect(child.parentId).toBe(parent.id)
+    expect(canvasConnections([origin, parent, child])[1]?.missing).toBe(false)
+  })
+  test('keeps descendants attached and never creates edges to absent anchors or self', () => {
+    const descendant = { ...line, id: 'descendant', parentId: child.id }
+    expect(canvasConnections([origin, child, descendant])).toEqual([
+      { source: 'origin', target: child.id, missing: true },
+      { source: child.id, target: descendant.id, missing: false },
+    ])
+    expect(canvasConnections([child])).toEqual([])
+    expect(canvasConnections([origin, { ...child, parentId: child.id }])).toEqual([
+      { source: 'origin', target: child.id, missing: true },
+    ])
+  })
+})
 describe('creation alias polling race', () => {
   test('a submitted alias stays neutral when its own lab appears before startup completes', () => {
     expect(aliasValidation('branch', [])).toBe('')
