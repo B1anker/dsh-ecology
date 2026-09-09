@@ -1,10 +1,10 @@
 import { CheckCircle } from '@phosphor-icons/react/dist/csr/CheckCircle'
 import { CircleNotch } from '@phosphor-icons/react/dist/csr/CircleNotch'
 import { GitMerge } from '@phosphor-icons/react/dist/csr/GitMerge'
-import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useEffect, useState } from 'react'
 import type { MergeCandidate, MergePreview } from '../domain/merge-types.js'
 import { HudSelect } from './hud-controls.js'
+import { Panel } from './panel.js'
 import { type Line, label } from './timeline-model.js'
 export function MergePanel({
   id,
@@ -93,21 +93,13 @@ export function MergePanel({
     }
   }
   return (
-    <aside className="wl-inspector wl-merge-panel" aria-label="合入世界线">
-      <header className="wl-header">
-        <div>
-          <span className="wl-eyebrow">CONVERGENCE</span>
-          <h2>合入到另一条世界线</h2>
-        </div>
-        <button
-          className="wl-button wl-icon"
-          aria-label="关闭合入面板"
-          disabled={!!pending}
-          onClick={close}
-        >
-          <X size={16} />
-        </button>
-      </header>
+    <Panel
+      title="合入到另一条世界线"
+      close={close}
+      closeDisabled={!!pending}
+      className="wl-inspector wl-merge-panel"
+      aria-label="合入世界线"
+    >
       <label>
         合入目标
         <HudSelect
@@ -254,6 +246,6 @@ export function MergePanel({
           </button>
         </div>
       )}
-    </aside>
+    </Panel>
   )
 }

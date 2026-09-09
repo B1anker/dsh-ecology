@@ -219,7 +219,11 @@ export function ContextMenu({
         </span>
         <CaretLeft size={12} weight="fill" className="wl-system-pointer" aria-hidden="true" />
         <span className="wl-system-label">{item.label}</span>
-        {item.children && <CaretRight size={13} className="wl-system-chevron" aria-hidden="true" />}
+        {item.children && (
+          <span className="wl-system-chevron" aria-hidden="true">
+            <CaretRight size={13} />
+          </span>
+        )}
       </button>
     ))
   const drill = compact && selectedGroup
@@ -273,6 +277,7 @@ export function ContextMenu({
       </div>
       {selectedGroup && !compact && (
         <div
+          key={selectedGroup.id}
           ref={child}
           className="wl-system-menu wl-system-submenu"
           role="menu"

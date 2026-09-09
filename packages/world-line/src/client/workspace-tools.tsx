@@ -5,6 +5,7 @@ import type { DependencyRecord } from '../domain/snapshot.js'
 import { HudSelect } from './hud-controls.js'
 import { useJobFeed } from './job-feed.js'
 import { type Job, jobKindLabel } from './job-view.js'
+import { Panel } from './panel.js'
 import type { ToolPanel } from './panels.js'
 import { RecoveryPanel } from './recovery-panel.js'
 import { ReportView } from './report-view.js'
@@ -41,9 +42,11 @@ export function WorkspaceTools({
   const [data, setData] = useState<any>(null),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
-  const [candidate, setCandidate] = useState<{ action: string; name: string; spec: string } | null>(
-    null,
-  )
+  const [candidate, setCandidate] = useState<{
+    action: string
+    name: string
+    spec: string
+  } | null>(null)
   const [text, setText] = useState(''),
     [query, setQuery] = useState(''),
     [from, setFrom] = useState(''),
@@ -129,13 +132,7 @@ export function WorkspaceTools({
     ...(id === 'current' ? {} : { snapshotId: id }),
   })
   return (
-    <aside className="wl-inspector" aria-label={title}>
-      <div className="wl-row-title">
-        <h2>{title}</h2>
-        <button className="wl-button" onClick={close}>
-          关闭
-        </button>
-      </div>
+    <Panel title={title} close={close} className="wl-inspector" aria-label={title}>
       <p>环境：{source ? label(source) : panel.id}</p>
       {error && (
         <p className="wl-error" role="alert">
@@ -250,7 +247,10 @@ export function WorkspaceTools({
               onClick={async () => {
                 setBusy(true)
                 try {
-                  const more = await api({ action: 'jobs', before: allJobs.at(-1)?.id })
+                  const more = await api({
+                    action: 'jobs',
+                    before: allJobs.at(-1)?.id,
+                  })
                   setOlderJobs((previous) => [...previous, ...more])
                   if (!more.length) setError('已显示全部保留任务')
                 } catch (e) {
@@ -323,7 +323,10 @@ export function WorkspaceTools({
                 {candidate.action === 'lab-remove' ? '确认卸载验证' : '确认版本验证'}：
                 {candidate.name}
               </strong>
-              <p>来源与合入目标：{source ? label(source) : panel.id}。此操作只创建验证实验。</p>
+              <p>
+                来源与合入目标：{source ? label(source) : panel.id}
+                。此操作只创建验证实验。
+              </p>
               {candidate.action !== 'lab-remove' && (
                 <label>
                   目标规格（例如 包名@1.2.3）
@@ -398,7 +401,11 @@ export function WorkspaceTools({
                     disabled={d.core}
                     title={d.core ? '核心运行层不可卸载' : undefined}
                     onClick={() =>
-                      setCandidate({ action: 'lab-remove', name: d.name, spec: d.name })
+                      setCandidate({
+                        action: 'lab-remove',
+                        name: d.name,
+                        spec: d.name,
+                      })
                     }
                   >
                     卸载
@@ -498,7 +505,13 @@ export function WorkspaceTools({
                   setBusy(true)
                   setError('')
                   try {
-                    setDiff(await api({ action: 'snapshot-compare', from: ref(from), to: ref(to) }))
+                    setDiff(
+                      await api({
+                        action: 'snapshot-compare',
+                        from: ref(from),
+                        to: ref(to),
+                      }),
+                    )
                   } catch (e) {
                     setError(String(e))
                   } finally {
@@ -517,7 +530,13 @@ export function WorkspaceTools({
               {['dependencies', 'files', 'patches'].map((k) => (
                 <details open className="wl-event-detail" key={k}>
                   <summary>
-                    {{ dependencies: '插件变化', files: '文件变化', patches: '配置变化' }[k]}
+                    {
+                      {
+                        dependencies: '插件变化',
+                        files: '文件变化',
+                        patches: '配置变化',
+                      }[k]
+                    }
                   </summary>
                   {(diff.diff[k] ?? []).filter((entry: any) => entry.status !== 'unchanged')
                     .length === 0 ? (
@@ -529,9 +548,11 @@ export function WorkspaceTools({
                         <div key={i} style={{ marginTop: 12, overflowWrap: 'anywhere' }}>
                           <strong>{entry.name ?? entry.id ?? entry.key ?? entry.file}</strong>
                           <p>
-                            {{ added: '新增', removed: '移除', changed: '变更' }[
-                              entry.status as string
-                            ] ?? entry.status}
+                            {{
+                              added: '新增',
+                              removed: '移除',
+                              changed: '变更',
+                            }[entry.status as string] ?? entry.status}
                             {k === 'dependencies' &&
                               ` · ${entry.before ?? '未安装'} → ${entry.after ?? '未安装'}`}
                           </p>
@@ -561,6 +582,6 @@ export function WorkspaceTools({
           )}
         </>
       )}
-    </aside>
+    </Panel>
   )
 }

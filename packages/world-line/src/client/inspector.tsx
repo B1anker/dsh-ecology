@@ -5,9 +5,9 @@ import { CircleNotch } from '@phosphor-icons/react/dist/csr/CircleNotch'
 import { FileText } from '@phosphor-icons/react/dist/csr/FileText'
 import { GitBranch } from '@phosphor-icons/react/dist/csr/GitBranch'
 import { UploadSimple } from '@phosphor-icons/react/dist/csr/UploadSimple'
-import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useEffect, useState } from 'react'
 import type { SnapshotDetail, WorldComparison, WorldEvent } from '../domain/insight-types.js'
+import { Panel } from './panel.js'
 import { Select } from './select.js'
 import { type Line, label } from './timeline-model.js'
 
@@ -95,7 +95,9 @@ export function Inspector({
     .filter((item) => item.lineId === id)
     .toSorted((a, b) => b.at.localeCompare(a.at))
   return (
-    <aside
+    <Panel
+      title={state.type === 'compare' ? '两种可能，逐项对照' : line ? label(line) : '世界线事件'}
+      close={close}
       className="wl-inspector"
       aria-label={state.type === 'compare' ? '双线对比' : '世界线事件'}
       onKeyDown={(e) => {
@@ -106,19 +108,6 @@ export function Inspector({
         }
       }}
     >
-      <header className="wl-header">
-        <div>
-          <span className="wl-eyebrow">
-            {state.type === 'compare' ? 'DIVERGENCE' : 'CHRONICLE'}
-          </span>
-          <h2>
-            {state.type === 'compare' ? '两种可能，逐项对照' : line ? label(line) : '世界线事件'}
-          </h2>
-        </div>
-        <button className="wl-button wl-icon" aria-label="关闭详情面板" onClick={close}>
-          <X size={16} />
-        </button>
-      </header>
       {state.type === 'compare' ? (
         <>
           <p className="wl-muted">选择两条线比较当前状态，也可以 Shift + 单击图中的世界线。</p>
@@ -341,6 +330,6 @@ export function Inspector({
           </button>
         </div>
       )}
-    </aside>
+    </Panel>
   )
 }

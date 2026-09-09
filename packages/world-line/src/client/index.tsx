@@ -18,6 +18,7 @@ import { useJobFeed } from './job-feed.js'
 import { LabFlow } from './lab-flow.js'
 import { Maintenance } from './maintenance.js'
 import { MergePanel } from './merge-panel.js'
+import { Panel } from './panel.js'
 import { usePanels } from './panels.js'
 import { styles } from './styles.js'
 import { TaskNotifier } from './task-notifier.js'
@@ -55,7 +56,10 @@ async function api(body?: unknown, signal?: AbortSignal) {
           method: 'POST',
           signal,
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ ...(body as object), requestId: requestKeys.get(fingerprint) }),
+          body: JSON.stringify({
+            ...(body as object),
+            requestId: requestKeys.get(fingerprint),
+          }),
         }
       : { cache: 'no-store', signal },
   )
@@ -379,7 +383,12 @@ function WorldLine({
     setClean(cleanStart)
     setCleanPlugins([])
     setCopyPluginConfig(false)
-    setDialog({ type: 'create', from: from === 'origin' ? undefined : from, at, snapshotId })
+    setDialog({
+      type: 'create',
+      from: from === 'origin' ? undefined : from,
+      at,
+      snapshotId,
+    })
     setAlias('')
     setError('')
   }
@@ -588,7 +597,12 @@ function WorldLine({
           </label>
           {commandMode && (
             <div
-              style={{ display: 'grid', gap: 6, maxHeight: '50vh', overflow: 'auto' }}
+              style={{
+                display: 'grid',
+                gap: 6,
+                maxHeight: '50vh',
+                overflow: 'auto',
+              }}
               aria-label="命令结果"
             >
               {(['composition', 'compare', 'config', 'tasks', 'storage'] as const)
@@ -764,7 +778,10 @@ function WorldLine({
               id === 'origin'
                 ? close()
                 : void perform(
-                    { action: id.startsWith('rescue-') ? 'rescue-enter' : 'start', id },
+                    {
+                      action: id.startsWith('rescue-') ? 'rescue-enter' : 'start',
+                      id,
+                    },
                     true,
                   )
             }
@@ -938,11 +955,62 @@ function WorldLine({
       )}
       {dialog && (
         <div className="wl-dialog-backdrop">
-          <form
+          <Panel
+            as="form"
+            title={
+              dialog.type === 'create'
+                ? dialog.snapshotId
+                  ? '从快照开启世界线'
+                  : '开启新的世界线'
+                : dialog.type === 'snapshot'
+                  ? '留下一个可返回的起点'
+                  : dialog.type === 'alias'
+                    ? '修改世界线别名'
+                    : dialog.type === 'restore'
+                      ? '恢复到此快照'
+                      : '删除世界线'
+            }
+            close={() => setDialog(null)}
+            closeDisabled={!!busy}
+            footer={
+              <>
+                <button
+                  className="wl-button"
+                  type="button"
+                  disabled={!!busy}
+                  onClick={() => setDialog(null)}
+                >
+                  取消
+                </button>
+                <button
+                  className="wl-button wl-primary"
+                  disabled={
+                    !!busy ||
+                    (dialog.type !== 'create' && !dialogLine) ||
+                    (dialog.type === 'restore'
+                      ? false
+                      : dialog.type !== 'destroy'
+                        ? !!aliasError
+                        : deleteConfirmation !== (dialogLine && label(dialogLine)))
+                  }
+                  type="submit"
+                >
+                  {busy && <CircleNotch size={16} className="wl-spin" />}
+                  {dialog.type === 'create'
+                    ? '创建并启动'
+                    : dialog.type === 'snapshot'
+                      ? '保存快照'
+                      : dialog.type === 'alias'
+                        ? '保存别名'
+                        : dialog.type === 'restore'
+                          ? '确认恢复'
+                          : '确认删除'}
+                </button>
+              </>
+            }
             className="wl-dialog"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="wl-dialog-title"
             onKeyDown={(event) => {
               if (event.key !== 'Tab') return
               const elements = Array.from(
@@ -993,30 +1061,6 @@ function WorldLine({
               )
             }}
           >
-            <div className="wl-header">
-              <h2 id="wl-dialog-title">
-                {dialog.type === 'create'
-                  ? dialog.snapshotId
-                    ? '从快照开启世界线'
-                    : '开启新的世界线'
-                  : dialog.type === 'snapshot'
-                    ? '留下一个可返回的起点'
-                    : dialog.type === 'alias'
-                      ? '修改世界线别名'
-                      : dialog.type === 'restore'
-                        ? '恢复到此快照'
-                        : '删除世界线'}
-              </h2>
-              <button
-                type="button"
-                className="wl-button wl-icon"
-                aria-label="关闭"
-                disabled={!!busy}
-                onClick={() => setDialog(null)}
-              >
-                <X size={18} />
-              </button>
-            </div>
             {dialog.type === 'create' && !dialog.snapshotId && (
               <fieldset className="wl-origin-options" disabled={!!busy}>
                 <legend>创建起点</legend>
@@ -1159,41 +1203,7 @@ function WorldLine({
                 </div>
               </div>
             )}
-            <footer>
-              <button
-                className="wl-button"
-                type="button"
-                disabled={!!busy}
-                onClick={() => setDialog(null)}
-              >
-                取消
-              </button>
-              <button
-                className="wl-button wl-primary"
-                disabled={
-                  !!busy ||
-                  (dialog.type !== 'create' && !dialogLine) ||
-                  (dialog.type === 'restore'
-                    ? false
-                    : dialog.type !== 'destroy'
-                      ? !!aliasError
-                      : deleteConfirmation !== (dialogLine && label(dialogLine)))
-                }
-                type="submit"
-              >
-                {busy && <CircleNotch size={16} className="wl-spin" />}
-                {dialog.type === 'create'
-                  ? '创建并启动'
-                  : dialog.type === 'snapshot'
-                    ? '保存快照'
-                    : dialog.type === 'alias'
-                      ? '保存别名'
-                      : dialog.type === 'restore'
-                        ? '确认恢复'
-                        : '确认删除'}
-              </button>
-            </footer>
-          </form>
+          </Panel>
         </div>
       )}
     </section>
@@ -1231,7 +1241,10 @@ export function apply(ctx: {
   const close = () => setOpen(false)
   function Navigator({ locked, hidden }: { locked: boolean; hidden: boolean }) {
     const open = useOpen()
-    const [identity, setIdentity] = useState<{ id: string | null; name: string }>({
+    const [identity, setIdentity] = useState<{
+      id: string | null
+      name: string
+    }>({
       id: null,
       name: 'main',
     })

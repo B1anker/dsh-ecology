@@ -4,7 +4,6 @@ import { FileText } from '@phosphor-icons/react/dist/csr/FileText'
 import { Flask } from '@phosphor-icons/react/dist/csr/Flask'
 import { Info } from '@phosphor-icons/react/dist/csr/Info'
 import { UploadSimple } from '@phosphor-icons/react/dist/csr/UploadSimple'
-import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useEffect, useId, useState } from 'react'
 import type { LabActionResult, LabPromoteCommandResult } from '../commands/lab.js'
 import type { ReportResult } from '../commands/report.js'
@@ -14,6 +13,7 @@ import { HudTabs } from './hud-controls.js'
 import { installationToResume } from './installation-flow.js'
 import { JobReceipt, jobKindLabel, ProbeLadder, useJob } from './job-view.js'
 import { useLabStatus } from './lab-status.js'
+import { Panel } from './panel.js'
 import {
   localPluginPath,
   type PluginSource,
@@ -155,7 +155,10 @@ export function LabFlow({
     (job?.result as LabActionResult | undefined)?.spec ?? spec,
   )
   return (
-    <aside
+    <Panel
+      title="安装并验证插件"
+      close={close}
+      closeDisabled={!!pending}
       className="wl-inspector wl-lab-flow"
       aria-label="验证插件"
       onKeyDown={(event) => {
@@ -166,20 +169,6 @@ export function LabFlow({
         }
       }}
     >
-      <header className="wl-header">
-        <div>
-          <span className="wl-eyebrow">LAB FLOW</span>
-          <h2>安装并验证插件</h2>
-        </div>
-        <button
-          className="wl-button wl-icon"
-          aria-label="关闭验证向导"
-          disabled={!!pending}
-          onClick={close}
-        >
-          <X size={16} />
-        </button>
-      </header>
       {restoring && <p role="status">正在读取这条世界线的安装进度…</p>}
       {restoreError && (
         <p role="alert">
@@ -255,7 +244,9 @@ export function LabFlow({
             <span className="wl-plugin-input-help" id={pluginHelpId}>
               <span
                 className="wl-error"
-                style={{ visibility: installInput.error ? 'visible' : 'hidden' }}
+                style={{
+                  visibility: installInput.error ? 'visible' : 'hidden',
+                }}
                 aria-hidden={!installInput.error}
               >
                 {installInput.error ?? pluginInputErrors[pluginSource]}
@@ -370,7 +361,8 @@ export function LabFlow({
                     )}
                     <p className="wl-muted">
                       合入会把实验里验证过的插件和配置应用到来源环境（
-                      {lab?.sourceName ?? sourceName}）。浏览器验证通过后才能执行。
+                      {lab?.sourceName ?? sourceName}
+                      ）。浏览器验证通过后才能执行。
                     </p>
                     {labError && <p className="wl-error">{labError}</p>}
                     <button
@@ -479,7 +471,12 @@ export function LabFlow({
                 <button
                   className="wl-button"
                   disabled={!!pending || !labId}
-                  onClick={() => void run('正在重验当前实验…', { action: 'lab-verify', id: labId })}
+                  onClick={() =>
+                    void run('正在重验当前实验…', {
+                      action: 'lab-verify',
+                      id: labId,
+                    })
+                  }
                 >
                   重验当前实验
                 </button>
@@ -687,6 +684,6 @@ export function LabFlow({
         </button>
       )}
       {reportData && <ReportView report={reportData} />}
-    </aside>
+    </Panel>
   )
 }
