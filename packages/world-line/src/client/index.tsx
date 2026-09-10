@@ -11,6 +11,7 @@ import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorldEvent } from '../domain/insight-types.js'
 import { CleanOptions } from './clean-options.js'
+import { CloseButton } from './close-button.js'
 import { useWorldLineEntry } from './entry.js'
 import { Experiments } from './experiments.js'
 import { Inspector } from './inspector.js'
@@ -214,6 +215,16 @@ function WorldLine({
     }
   }, [dialog])
   useEffect(() => {
+    if (!searchOpen) return
+    const dismiss = (event: PointerEvent) => {
+      if (!(event.target instanceof Element)) return
+      if (event.target.closest('.wl-search-popover,[aria-label="搜索世界线"]')) return
+      setSearchOpen(false)
+    }
+    document.addEventListener('pointerdown', dismiss)
+    return () => document.removeEventListener('pointerdown', dismiss)
+  }, [searchOpen])
+  useEffect(() => {
     if (!notice) return
     const timer = window.setTimeout(() => setNotice(''), 6000)
     return () => clearTimeout(timer)
@@ -246,6 +257,7 @@ function WorldLine({
       if (frame.firstElementChild) resize.observe(frame.firstElementChild)
     }
     const key = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
       if (
         !event.isComposing &&
         !(
@@ -707,13 +719,7 @@ function WorldLine({
           <div className="wl-alert wl-success" role="status">
             <CheckCircle size={18} />
             <span>{notice}</span>
-            <button
-              className="wl-button wl-icon"
-              aria-label="关闭提示"
-              onClick={() => setNotice('')}
-            >
-              <X size={14} />
-            </button>
+            <CloseButton aria-label="关闭提示" onClick={() => setNotice('')} />
           </div>
         )}
       </div>
@@ -935,6 +941,10 @@ function WorldLine({
           )}
           {maintenanceOpen && (
             <Maintenance
+              onOpenTools={(section) => {
+                setMaintenanceOpen(false)
+                setToolPanel({ section, id: selected || 'origin' })
+              }}
               api={api}
               jobId={panelJob}
               onJobCreated={setPanelJob}
@@ -1302,7 +1312,7 @@ export function apply(ctx: {
     // the dialog backdrop, so rendering nothing removes the misclick target.
     if (hidden) return null
     return (
-      <div className="wl-corner" data-world-line-entry="true">
+      <div className="wl-corner" data-world-line-entry="true" data-open={open}>
         <button
           disabled={locked}
           className="wl-corner-button"

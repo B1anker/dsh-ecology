@@ -1,12 +1,16 @@
 import { ArrowLeft } from '@phosphor-icons/react/dist/csr/ArrowLeft'
-import { X } from '@phosphor-icons/react/dist/csr/X'
 import {
   type ComponentPropsWithoutRef,
   createContext,
   type ReactNode,
   useContext,
+  useEffect,
   useId,
+  useRef,
 } from 'react'
+import { CloseButton } from './close-button.js'
+
+const panelStack: HTMLElement[] = []
 
 export const PanelNavigation = createContext<(() => void) | null>(null)
 
@@ -31,11 +35,42 @@ export function Panel({
   className = '',
   ...props
 }: PanelProps) {
+  const surface = useRef<HTMLElement | null>(null)
+  const dismiss = useRef({ close, closeDisabled })
+  dismiss.current = { close, closeDisabled }
+  useEffect(() => {
+    const element = surface.current
+    if (!element) return
+    panelStack.push(element)
+    const outside = (event: PointerEvent) => {
+      if (panelStack[panelStack.length - 1] !== element || dismiss.current.closeDisabled) return
+      const target = event.target
+      if (!(target instanceof Element) || element.contains(target)) return
+      // Portaled menus and selects belong to their owning panel.
+      if (target.closest('.wl-menu-layer,[role=listbox],[role=menu],.wl-hud-popup')) return
+      // Let other controls navigate normally; dismiss on the surrounding blank surface.
+      if (target.closest('button,a,input,textarea,select,[role=button],[role=tab]')) return
+      dismiss.current.close()
+    }
+    document.addEventListener('pointerdown', outside)
+    return () => {
+      const index = panelStack.indexOf(element)
+      if (index !== -1) panelStack.splice(index, 1)
+      document.removeEventListener('pointerdown', outside)
+    }
+  }, [])
   const titleId = useId()
   const navigationBack = useContext(PanelNavigation)
   const goBack = back ?? navigationBack
   return (
-    <Surface {...props} className={`${className} wl-panel`} aria-labelledby={titleId}>
+    <Surface
+      {...props}
+      ref={(element) => {
+        surface.current = element
+      }}
+      className={`${className} wl-panel`}
+      aria-labelledby={titleId}
+    >
       <header className="wl-panel-header">
         {goBack && (
           <button
@@ -50,15 +85,7 @@ export function Panel({
           </button>
         )}
         <h2 id={titleId}>{title}</h2>
-        <button
-          type="button"
-          className="wl-button wl-icon"
-          aria-label="关闭"
-          disabled={closeDisabled}
-          onClick={close}
-        >
-          <X size={18} />
-        </button>
+        <CloseButton disabled={closeDisabled} onClick={close} />
       </header>
       <div className="wl-panel-body">{children}</div>
       {footer && <footer className="wl-panel-footer">{footer}</footer>}

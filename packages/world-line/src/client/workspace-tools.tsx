@@ -194,6 +194,7 @@ export function WorkspaceTools({
       <div
         className="wl-flow-actions-row"
         hidden={
+          panel.section === 'storage' ||
           panel.section === 'research' ||
           panel.section === 'recovery' ||
           panel.section === 'composition' ||

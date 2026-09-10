@@ -28,9 +28,11 @@ export function Maintenance({
   onSettled,
   onJobCreated,
   lastKnownGood,
+  onOpenTools,
 }: {
   api(body: unknown, signal?: AbortSignal): Promise<any>
   jobId: string | null
+  onOpenTools(section: 'recovery' | 'research'): void
   close(): void
   onBusy(running: boolean): void
   onSettled(): void
@@ -250,6 +252,14 @@ export function Maintenance({
           )}
         </section>
       )}
+      <div className="wl-flow-actions-row">
+        <button className="wl-button" onClick={() => onOpenTools('recovery')}>
+          中断恢复
+        </button>
+        <button className="wl-button" onClick={() => onOpenTools('research')}>
+          排障与交付
+        </button>
+      </div>
       <HudTabs
         value={topic}
         onChange={setTopic}

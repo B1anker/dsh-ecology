@@ -17,27 +17,53 @@ export function StoragePanel({
   const [data, setData] = useState<StorageSize | null>(null),
     [plan, setPlan] = useState<any>(null),
     [kind, setKind] = useState(''),
-    [error, setError] = useState(''),
+    [errors, setErrors] = useState<Record<string, string>>({}),
     [busy, setBusy] = useState(false),
     [record, setRecord] = useState(''),
-    [message, setMessage] = useState('')
+    [messages, setMessages] = useState<Record<string, string>>({})
   const [legacy, setLegacy] = useState(''),
     [cacheConfirmed, setCacheConfirmed] = useState(false)
   const [records, setRecords] = useState<{ id: string; at: string; remaining: number }[]>([])
+  const [recordsLoading, setRecordsLoading] = useState(true)
+  const [recordsError, setRecordsError] = useState('')
+  const [recordsRevision, setRecordsRevision] = useState(0)
+  const error = errors[topic]
+  const message = messages[topic]
+  const setError = (text: string, target = topic) =>
+    setErrors((current) => ({ ...current, [target]: text }))
+  const setMessage = (text: string) => setMessages((current) => ({ ...current, [topic]: text }))
+  const changeTopic = (next: string) => {
+    setErrors({})
+    setMessages({})
+    setTopic(next)
+  }
+  useEffect(() => {
+    if (topic !== 'restore') return
+    let active = true
+    setRecordsLoading(true)
+    setRecordsError('')
+    void api({ action: 'gc-records', id })
+      .then((result) => {
+        if (active) setRecords(result)
+      })
+      .catch((e) => {
+        if (active) setRecordsError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (active) setRecordsLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [api, id, topic, recordsRevision])
   useEffect(() => {
     let active = true
-    void api({ action: 'gc-records', id })
-      .then((x) => {
-        if (active) setRecords(x)
-        return undefined
-      })
-      .catch(() => {})
     void api({ action: 'storage', id })
       .then((x) => {
         if (active) setData(x)
       })
       .catch((e) => {
-        if (active) setError(e.message)
+        if (active) setError(e.message, 'usage')
       })
     return () => {
       active = false
@@ -59,7 +85,7 @@ export function StoragePanel({
     <>
       <HudTabs
         value={topic}
-        onChange={setTopic}
+        onChange={changeTopic}
         label="存储功能"
         items={[
           { id: 'usage', title: '空间概览' },
@@ -131,7 +157,7 @@ export function StoragePanel({
       {topic === 'usage' &&
         (data ? (
           <>
-            <StorageOverview data={data} names={names} onCleanup={() => setTopic('cleanup')} />
+            <StorageOverview data={data} names={names} onCleanup={() => changeTopic('cleanup')} />
             {data.warnings.map((w, i) => (
               <p key={i} className="wl-error">
                 {w}
@@ -161,7 +187,7 @@ export function StoragePanel({
         ))}
       </div>
       {topic === 'cleanup' && plan && (
-        <section className="wl-event-detail">
+        <section className="wl-event-detail wl-storage-preview">
           <h3>{kind === 'gc' ? '待隔离对象' : '快照清理预览'}</h3>
           <CleanupSummary plan={plan} kind={kind} />
           <button
@@ -173,7 +199,7 @@ export function StoragePanel({
                 setMessage(result.note ?? `已清理 ${result.removed.length} 份快照`)
                 if (result.id) {
                   setRecord(result.id)
-                  setRecords(await api({ action: 'gc-records', id }).catch(() => []))
+                  setRecordsRevision((value) => value + 1)
                 }
                 setPlan(null)
               }
@@ -188,17 +214,36 @@ export function StoragePanel({
       )}
       <section hidden={topic !== 'restore'} className="wl-event-detail">
         <h3>恢复隔离对象</h3>
-        <label>
-          选择回收记录
-          <HudSelect value={record} onChange={(e) => setRecord(e.target.value)}>
-            <option value="">请选择</option>
-            {records.map((r) => (
-              <option key={r.id} value={r.id}>
-                {new Date(r.at).toLocaleString()} · {r.remaining} 个对象 · {r.id}
-              </option>
-            ))}
-          </HudSelect>
-        </label>
+        {recordsLoading ? (
+          <p role="status">正在加载回收记录…</p>
+        ) : recordsError ? (
+          <p className="wl-error" role="alert">
+            回收记录加载失败：{recordsError}
+          </p>
+        ) : records.length === 0 ? (
+          <p className="wl-muted" role="status">
+            暂无回收记录。预览不会生成记录，执行对象隔离后才会显示在这里。
+          </p>
+        ) : (
+          <label>
+            选择回收记录
+            <HudSelect value={record} onChange={(e) => setRecord(e.target.value)}>
+              <option value="">请选择</option>
+              {records.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {new Date(r.at).toLocaleString()} · {r.remaining} 个对象 · {r.id}
+                </option>
+              ))}
+            </HudSelect>
+          </label>
+        )}
+        <button
+          className="wl-button"
+          disabled={recordsLoading}
+          onClick={() => setRecordsRevision((value) => value + 1)}
+        >
+          {recordsError ? '重新加载回收记录' : '刷新回收记录'}
+        </button>
         <label>
           回收记录 ID
           <input value={record} onChange={(e) => setRecord(e.target.value)} placeholder="gc-…" />
@@ -210,7 +255,7 @@ export function StoragePanel({
             const r = await request('gc-restore', { recordId: record })
             if (r) {
               setMessage(`已恢复 ${r.restored} 个对象`)
-              setRecords(await api({ action: 'gc-records', id }).catch(() => []))
+              setRecordsRevision((value) => value + 1)
             }
           }}
         >

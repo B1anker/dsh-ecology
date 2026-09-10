@@ -3,7 +3,7 @@ import { ClockCounterClockwise } from '@phosphor-icons/react/dist/csr/ClockCount
 import { Crosshair } from '@phosphor-icons/react/dist/csr/Crosshair'
 import { SkipBack } from '@phosphor-icons/react/dist/csr/SkipBack'
 import { SkipForward } from '@phosphor-icons/react/dist/csr/SkipForward'
-import { type CSSProperties, useState } from 'react'
+import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import type { WorldEvent } from '../domain/insight-types.js'
 import { adjacentEvent, lineColor } from './timeline-model.js'
 
@@ -33,12 +33,22 @@ export function TimeControls({
   onNow(): void
 }) {
   const [expanded, setExpanded] = useState(false)
+  const dock = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!expanded) return
+    const dismiss = (event: PointerEvent) => {
+      if (!dock.current?.contains(event.target as Node)) setExpanded(false)
+    }
+    document.addEventListener('pointerdown', dismiss)
+    return () => document.removeEventListener('pointerdown', dismiss)
+  }, [expanded])
   const previous = adjacentEvent(events, time, -1)
   const next = adjacentEvent(events, time, 1)
   const percent = (at: number) =>
     Math.max(0, Math.min(100, ((at - start) / Math.max(1, end - start)) * 100))
   return (
     <div
+      ref={dock}
       className="wl-time-dock"
       data-expanded={expanded}
       onKeyDown={(event) => {

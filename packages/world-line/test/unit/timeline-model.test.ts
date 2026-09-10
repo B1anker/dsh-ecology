@@ -3,6 +3,7 @@ import {
   adjacentEvent,
   aliasValidation,
   canvasConnections,
+  clusterZoom,
   cursorTime,
   eventMarkers,
   type Line,
@@ -16,10 +17,18 @@ import {
   timeX,
 } from '../../src/client/timeline-model.js'
 
-test('merge curve leaves the source marker edge and enters below the target without overshooting', () => {
-  expect(mergeConnectionPath(500, 300, 500, 102)).toBe('M 500 300 C 500 300, 500 180, 500 120')
-  expect(mergeConnectionPath(500, 300, 560, 102)).toBe('M 500 300 C 518 300, 560 180, 560 120')
-  expect(mergeConnectionPath(550, 300, 560, 102)).toBe('M 550 300 C 555 300, 560 180, 560 120')
+test('merge curves leave the right edge horizontally and finish with a vertical arrow', () => {
+  expect(mergeConnectionPath(500, 300, 500, 102)).toBe(
+    'M 514 300 L 522 300 C 538 300, 500 209, 500 130 L 500 118',
+  )
+  expect(mergeConnectionPath(500, 300, 560, 102)).toBe('M 514 300 L 522 300 A 38 182 0 0 0 560 118')
+  expect(mergeConnectionPath(550, 300, 530, 102)).toBe(
+    'M 564 300 L 572 300 C 589 300, 530 209, 530 130 L 530 118',
+  )
+  expect(mergeConnectionPath(100, 216, 500, 126)).toBe(
+    'M 114 216 L 381.6 216 A 118.4 74 0 0 0 500 142',
+  )
+  expect(mergeConnectionPath(500, 102, 560, 300)).toBe('M 514 102 L 522 102 A 38 182 0 0 1 560 284')
 })
 
 const line: Line = {
@@ -31,6 +40,38 @@ const line: Line = {
   verdict: null,
   isDefault: false,
 }
+test('shared spacing keeps a merge after its source despite expanded restoration markers', () => {
+  const source = { ...line, createdAt: new Date(0).toISOString() }
+  const target = { ...source, id: 'origin' }
+  const records = [
+    { id: 'snapshot', at: 10000, lineId: source.id, kind: 'snapshot' },
+    { id: 'restore', at: 10001, lineId: source.id, kind: 'restore' },
+    { id: 'applied', at: 10002, lineId: source.id, kind: 'operation' },
+    { id: 'merge', at: 10003, lineId: target.id, kind: 'merge' },
+    { id: 'merge-again', at: 20000, lineId: target.id, kind: 'merge' },
+  ].map((event) => ({
+    ...event,
+    kind: event.kind as 'snapshot' | 'restore' | 'operation' | 'merge',
+    at: new Date(event.at).toISOString(),
+    title: event.id,
+    detail: '',
+  }))
+  const ids = ['snapshot', 'restore', 'merge', 'merge-again']
+  const scale = timelineScale(
+    0,
+    86400000,
+    records.map((event) => Date.parse(event.at)),
+    records.filter((event) => ids.includes(event.id)).map((event) => Date.parse(event.at)),
+  )
+  const sourceMarkers = eventMarkers(records, source, 0, 86400000, scale.toX, ids)
+  const targetMarkers = eventMarkers(records, target, 0, 86400000, scale.toX, ids)
+  const applied = sourceMarkers.find((marker) =>
+    marker.events.some((event) => event.id === 'applied'),
+  )!
+  expect(applied.x).toBeLessThan(targetMarkers[0]!.x)
+  for (const marker of [...sourceMarkers, ...targetMarkers])
+    expect(marker.x + scale.toX(0)).toBeCloseTo(scale.toX(Date.parse(marker.events[0]!.at)))
+})
 describe('canvas connections after parent removal', () => {
   const origin = { ...line, id: 'origin', kind: 'origin' }
   const parent = { ...line, id: 'old-login', parentId: 'origin' }
@@ -190,7 +231,7 @@ describe('long idle timeline spacing', () => {
     expect(restoreRelation([later, target, restore], line.id)?.later).toBe(true)
     expect(restoreRelation([restore, { ...target, lineId: 'other' }], line.id)).toBeNull()
   })
-  test('expanded events cannot rejoin neighboring clusters, including identical timestamps', () => {
+  test('identical timestamps stay grouped without shifting later events', () => {
     const records = [10000, 10000, 10001, 10002].map((at, index) => ({
       id: String(index),
       lineId: line.id,
@@ -206,13 +247,11 @@ describe('long idle timeline spacing', () => {
       [10000, 10000],
     )
     const markers = eventMarkers(records, line, 0, 3600000, scale.toX, ['0', '1'])
-    expect(
-      markers.find((marker) => marker.events.some((event) => event.id === '0'))?.events,
-    ).toHaveLength(1)
-    expect(
-      markers.find((marker) => marker.events.some((event) => event.id === '1'))?.events,
-    ).toHaveLength(1)
-    expect(markers[1]!.x - markers[0]!.x).toBeGreaterThanOrEqual(36)
+    expect(markers[0]!.events.map((event) => event.id)).toEqual(['0', '1'])
+    for (const marker of markers)
+      expect(marker.x + scale.toX(Date.parse(line.createdAt))).toBeCloseTo(
+        scale.toX(Date.parse(marker.events[0]!.at)),
+      )
     expect(markers.flatMap((marker) => marker.events)).toEqual(records)
   })
   test('expanding a cluster separates its events and preserves inverse time coordinates', () => {
@@ -251,4 +290,36 @@ describe('long idle timeline spacing', () => {
     expect(scale.toX(1800000)).toBeCloseTo(timeX(1800000, 0, 3600000))
     expect(scale.gaps).toEqual([])
   })
+})
+
+test('screen-space clustering splits on zoom in and regroups on zoom out without losing records', () => {
+  const records = [10000, 10036, 10072, 10108].map((at, index) => ({
+    id: `zoom-${index}`,
+    lineId: line.id,
+    at: new Date(at).toISOString(),
+    kind: 'snapshot' as const,
+    title: 'Snapshot',
+    detail: '',
+  }))
+  const ids = records.map((event) => event.id)
+  for (const [zoom, count] of [
+    [0.25, 1],
+    [1, 2],
+    [2, 4],
+    [0.25, 1],
+  ]) {
+    const markers = eventMarkers(records, line, 0, 20000, (at) => at, ids, zoom)
+    expect(markers).toHaveLength(count!)
+    expect(markers.flatMap((marker) => marker.events)).toEqual(records)
+    for (const marker of markers)
+      expect(marker.x).toBe(Date.parse(marker.events[0]!.at) - Date.parse(line.createdAt))
+  }
+})
+
+test('small zoom fluctuations keep the current clustering scale', () => {
+  expect(clusterZoom(1, 1.05)).toBe(1)
+  expect(clusterZoom(1, 0.95)).toBe(1)
+  expect(clusterZoom(1, 1.2)).toBe(1.2)
+  expect(clusterZoom(1.2, 1.15)).toBe(1.2)
+  expect(clusterZoom(1.2, 1)).toBe(1)
 })

@@ -43,8 +43,11 @@ import {
 } from 'react'
 import type { WorldEvent } from '../domain/insight-types.js'
 import { ContextMenu, type MenuAction } from './context-menu.js'
+import { menuItemMotion } from './menu-motion.js'
+import { useMenuEscape, useMenuPresence } from './menu-presence.js'
 import {
   canvasConnections,
+  clusterZoom,
   eventMarkers,
   type Line,
   label,
@@ -76,6 +79,7 @@ type TrackData = {
   markers: { x: number; events: WorldEvent[] }[]
   expandedIds: string[]
   focusedEventId?: string
+  menuOpen: boolean
   restoration:
     | (NonNullable<ReturnType<typeof restoreRelation>> & { fromX: number; toX: number })
     | null
@@ -164,6 +168,10 @@ function TrackNode({ id, data }: NodeProps<Track>) {
               tooltipDescription={
                 grouped ? (
                   <>
+                    <p>
+                      {timestamp(Date.parse(marker.events[0]!.at))} –{' '}
+                      {timestamp(Date.parse(marker.events.at(-1)!.at))}
+                    </p>
                     {marker.events.slice(0, 4).map((item) => (
                       <p key={item.id}>{item.title}</p>
                     ))}
@@ -181,7 +189,13 @@ function TrackNode({ id, data }: NodeProps<Track>) {
                   </>
                 )
               }
-              tooltipAction={grouped ? '放大查看' : '查看详情'}
+              tooltipAction={
+                grouped
+                  ? marker.events.every((item) => item.at === event.at)
+                    ? '查看历史记录'
+                    : '放大展开'
+                  : '查看详情'
+              }
               tooltipColor={lineColor(line.id)}
               aria-label={
                 grouped
@@ -301,6 +315,10 @@ function TrackNode({ id, data }: NodeProps<Track>) {
       <button
         className="wl-button wl-icon wl-point-action nodrag nopan"
         aria-label={`${label(line)} 时间点操作`}
+        title={`${label(line)} 时间点操作`}
+        data-wl-menu-toggle
+        aria-expanded={data.menuOpen}
+        onPointerDown={(event) => event.stopPropagation()}
         aria-haspopup="menu"
         disabled={data.busy}
         onClick={(event) => {
@@ -417,6 +435,22 @@ export function Timeline({
   dissolvingId?: string | null
 }) {
   const [expanded, setExpanded] = useState<WorldEvent[]>([])
+  const [markerZoom, setMarkerZoom] = useState(1)
+  // Reserve spacing on the shared time axis for every independently visible marker.
+  // Per-row nudges can otherwise put an earlier source to the right of its merge.
+  const separatedIds = useMemo(() => {
+    const ids = new Set(expanded.map((event) => event.id))
+    if (eventFocus) ids.add(eventFocus.id)
+    for (const event of events) if (event.kind === 'merge') ids.add(event.id)
+    for (const line of lines) {
+      const relation = restoreRelation(events, line.id)
+      if (relation) {
+        ids.add(relation.restore.id)
+        ids.add(relation.target.id)
+      }
+    }
+    return [...ids]
+  }, [expanded, eventFocus, events, lines])
   const scale = useMemo(
     () =>
       timelineScale(
@@ -429,9 +463,11 @@ export function Timeline({
             Date.parse(line.forkedAt ?? line.createdAt),
           ]),
         ],
-        expanded.map((event) => Date.parse(event.at)),
+        events
+          .filter((event) => separatedIds.includes(event.id))
+          .map((event) => Date.parse(event.at)),
       ),
-    [start, end, events, lines, expanded],
+    [start, end, events, lines, separatedIds],
   )
   const timeX = scale.toX
   const pointTime = (x: number, line: Line) => Math.max(Date.parse(line.createdAt), scale.toTime(x))
@@ -454,9 +490,15 @@ export function Timeline({
     }
     const line = lines.find((line) => line.id === focusEvent.lineId)
     if (!line) return
-    const cluster = eventMarkers(events, line, start, end, scale.toX, [focusEvent.id]).find(
-      (marker) => marker.events.some((event) => event.id === focusEvent.id),
-    )
+    const cluster = eventMarkers(
+      events,
+      line,
+      start,
+      end,
+      scale.toX,
+      [focusEvent.id],
+      markerZoom,
+    ).find((marker) => marker.events.some((event) => event.id === focusEvent.id))
     if (cluster && cluster.events.length > 1) {
       if (!expanded.length) beforeExpandZoom.current = instance.current?.getZoom() ?? 1
       setExpanded(cluster.events)
@@ -478,13 +520,24 @@ export function Timeline({
       { zoom: 1.5, duration: 300 },
     )
   }, [expanded])
-  const [menu, setMenu] = useState<{
+  const [menu, setMenu, menuClosing] = useMenuPresence<{
     id: string
     at: number
     x: number
     y: number
     event?: WorldEvent
-  } | null>(null)
+  }>()
+  const [toolsOpen, setToolsOpen, toolsClosing] = useMenuPresence<boolean>()
+  useMenuEscape(() => setToolsOpen(null), !!toolsOpen)
+  const toolsRoot = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!toolsOpen) return
+    const dismiss = (event: PointerEvent) => {
+      if (!toolsRoot.current?.contains(event.target as globalThis.Node)) setToolsOpen(null)
+    }
+    document.addEventListener('pointerdown', dismiss)
+    return () => document.removeEventListener('pointerdown', dismiss)
+  }, [toolsOpen, setToolsOpen])
   const [motion, setMotion] = useState(true)
   useEffect(() => {
     let frame = 0
@@ -571,16 +624,17 @@ export function Timeline({
       y: event.clientY,
     })
   }
+  const toggleLineMenu = (event: MouseEvent<HTMLElement>, line: Line) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (menu?.id === line.id && !menuClosing) setMenu(null)
+    else open(event, line, Math.max(Date.parse(line.createdAt), time))
+  }
   const connections = canvasConnections(lines)
   const nodes: Track[] = lines.map((line, index) => {
     const born = timeX(Date.parse(line.createdAt))
     const relation = restoreRelation(events, line.id)
-    const markers = eventMarkers(events, line, start, end, scale.toX, [
-      ...expanded.map((event) => event.id),
-      ...(focusEvent ? [focusEvent.id] : []),
-      ...(relation ? [relation.restore.id, relation.target.id] : []),
-      ...events.filter((event) => event.kind === 'merge').map((event) => event.id),
-    ])
+    const markers = eventMarkers(events, line, start, end, scale.toX, separatedIds, markerZoom)
     return {
       id: line.id,
       type: 'worldline',
@@ -616,21 +670,29 @@ export function Timeline({
         compared: comparisonIds.includes(line.id),
         markers,
         expandedIds: expanded.map((event) => event.id),
+        menuOpen: menu?.id === line.id && !menuClosing,
         focusedEventId: focusEvent?.lineId === line.id ? focusEvent.id : undefined,
-        restoration: relation
-          ? {
-              ...relation,
-              fromX: markers.find((marker) =>
-                marker.events.some((event) => event.id === relation.restore.id),
-              )!.x,
-              toX: markers.find((marker) =>
-                marker.events.some((event) => event.id === relation.target.id),
-              )!.x,
-            }
-          : null,
+        restoration:
+          relation &&
+          !markers.some(
+            (marker) =>
+              marker.events.some((event) => event.id === relation.restore.id) &&
+              marker.events.some((event) => event.id === relation.target.id),
+          )
+            ? {
+                ...relation,
+                fromX: markers.find((marker) =>
+                  marker.events.some((event) => event.id === relation.restore.id),
+                )!.x,
+                toX: markers.find((marker) =>
+                  marker.events.some((event) => event.id === relation.target.id),
+                )!.x,
+              }
+            : null,
         enter: () => onEnter(line.id),
         inspect: (records) => {
           if (records.length === 1) onEvent(records[0]!)
+          else if (records.every((record) => record.at === records[0]!.at)) onHistory(line.id)
           else {
             setMenu(null)
             onSelect(line.id)
@@ -663,7 +725,7 @@ export function Timeline({
         dissolving: line.id === dissolvingId,
         experiments: experiments.filter((item) => (item.parentId ?? 'origin') === line.id),
         showExperiments: () => onExperiments(line.id),
-        open: (event, target) => open(event, target, Math.max(Date.parse(target.createdAt), time)),
+        open: toggleLineMenu,
       },
     }
   })
@@ -1025,6 +1087,7 @@ export function Timeline({
     group('settings', '世界线设置', ['default', 'alias'], <DotsThree size={17} />),
   ].filter((item) => item.children!.length > 0)
 
+  const renderedMergeLinks = new Set<string>()
   return (
     <div
       className="wl-map wl-flow-map"
@@ -1089,6 +1152,7 @@ export function Timeline({
           edgeTypes={edgeTypes}
           onInit={(flow) => {
             instance.current = flow
+            setMarkerZoom(flow.getZoom())
           }}
           fitView
           fitViewOptions={fitOptions}
@@ -1124,6 +1188,9 @@ export function Timeline({
           }}
           onPaneClick={() => setMenu(null)}
           onMoveStart={() => setMenu(null)}
+          onMove={(_, viewport) =>
+            setMarkerZoom((previous) => clusterZoom(previous, viewport.zoom))
+          }
           aria-label="世界线时间轴，拖动画布平移，捏合缩放，右键时间点打开操作"
         >
           <ViewportPortal>
@@ -1150,7 +1217,7 @@ export function Timeline({
                   if (!source || !target || !marker || source === target) return null
                   const x = target.position.x + marker.x
                   // Connect the last visible source event that existed when this merge completed.
-                  // Use its rendered marker edge so zoom/cluster expansion cannot detach the curve.
+                  // Use its rendered center; the path offsets to the source’s right edge.
                   const sourceMarker = source.data.markers
                     .flatMap((marker) =>
                       marker.events
@@ -1158,7 +1225,10 @@ export function Timeline({
                         .map((item) => ({ marker, at: Date.parse(item.at) })),
                     )
                     .sort((a, b) => b.at - a.at)[0]?.marker
-                  const fromX = source.position.x + (sourceMarker ? sourceMarker.x + 14 : 0)
+                  const fromX = source.position.x + (sourceMarker ? sourceMarker.x : 0)
+                  const linkKey = `${source.id}:${fromX}:${target.id}:${x}`
+                  if (renderedMergeLinks.has(linkKey)) return null
+                  renderedMergeLinks.add(linkKey)
                   const fromY = source.position.y + 36
                   const toY = target.position.y + 36
                   const arrow = `wl-merge-arrow-${event.id.replace(/[^a-zA-Z0-9-]/g, '-')}`
@@ -1249,39 +1319,81 @@ export function Timeline({
             ◆ 快照 · ○ 事件
           </Panel>
           <Panel position="bottom-left" className="wl-flow-controls">
-            <details className="wl-map-tools">
-              <summary aria-label="画布工具" title="画布工具">
-                <SlidersHorizontal size={18} />
-              </summary>
-              <div>
-                <button
-                  className="wl-button wl-icon"
-                  aria-label="放大图谱"
-                  onClick={() => void instance.current?.zoomIn()}
+            <div
+              ref={toolsRoot}
+              className="wl-map-tools"
+              data-open={!!toolsOpen}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setToolsOpen(null)
+                  event.currentTarget.querySelector<HTMLButtonElement>('.wl-map-toggle')?.focus()
+                }
+              }}
+            >
+              <button
+                type="button"
+                className="wl-map-toggle"
+                aria-label="画布工具"
+                title="画布工具"
+                aria-expanded={!!toolsOpen && !toolsClosing}
+                aria-controls="wl-canvas-tools"
+                onClick={() => setToolsOpen(toolsOpen && !toolsClosing ? null : true)}
+              >
+                <span className="wl-system-icon">
+                  <SlidersHorizontal size={18} />
+                </span>
+              </button>
+              {toolsOpen && (
+                <div
+                  id="wl-canvas-tools"
+                  className="wl-system-menu wl-map-menu"
+                  role="group"
+                  aria-label="画布缩放工具"
+                  data-closing={toolsClosing}
+                  inert={toolsClosing}
                 >
-                  <Plus size={16} />
-                </button>
-                <button
-                  className="wl-button wl-icon"
-                  aria-label="缩小图谱"
-                  onClick={() => void instance.current?.zoomOut()}
-                >
-                  <Minus size={16} />
-                </button>
-                <button
-                  className="wl-button wl-icon"
-                  aria-label="适应全部世界线"
-                  onClick={() => {
-                    if (expanded.length) {
-                      resetView.current = true
-                      setExpanded([])
-                    } else void instance.current?.fitView(fitOptions)
-                  }}
-                >
-                  <CornersOut size={16} />
-                </button>
-              </div>
-            </details>
+                  <div className="wl-system-items">
+                    {[
+                      {
+                        label: '放大图谱',
+                        icon: <Plus size={16} />,
+                        run: () => void instance.current?.zoomIn(),
+                      },
+                      {
+                        label: '缩小图谱',
+                        icon: <Minus size={16} />,
+                        run: () => void instance.current?.zoomOut(),
+                      },
+                      {
+                        label: '适应全部世界线',
+                        icon: <CornersOut size={16} />,
+                        run: () => {
+                          if (expanded.length) {
+                            resetView.current = true
+                            setExpanded([])
+                          } else void instance.current?.fitView(fitOptions)
+                        },
+                      },
+                    ].map((action, index) => (
+                      <button
+                        key={action.label}
+                        className="wl-system-item"
+                        aria-label={action.label}
+                        style={menuItemMotion(index, 3, true)}
+                        onClick={action.run}
+                      >
+                        <span className="wl-system-icon" aria-hidden="true">
+                          {action.icon}
+                        </span>
+                        <span className="wl-system-label">{action.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </Panel>
         </ReactFlow>
       </div>
@@ -1340,7 +1452,10 @@ export function Timeline({
               aria-label={`${label(line)} 时间点操作`}
               aria-haspopup="menu"
               disabled={busy}
-              onClick={(event) => open(event, line, Math.max(Date.parse(line.createdAt), time))}
+              data-wl-menu-toggle
+              aria-expanded={menu?.id === line.id && !menuClosing}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => toggleLineMenu(event, line)}
             >
               <DotsThree size={20} />
             </button>
@@ -1357,6 +1472,7 @@ export function Timeline({
           status={`${stateLabel(menuLine.state)}${menuLine.port ? ` · ${menuLine.port}` : ''}${menuLine.id === currentId ? ' · 当前所在' : ''}`}
           host={container.current.closest<HTMLElement>('.wl-page')!}
           items={menuItems}
+          closing={menuClosing}
           close={() => setMenu(null)}
         />
       )}
