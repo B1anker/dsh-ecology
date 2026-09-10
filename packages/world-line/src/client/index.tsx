@@ -579,11 +579,12 @@ function WorldLine({
           <button
             className="wl-button wl-icon"
             aria-label="维护"
-            title="维护 · 诊断 / 回滚"
+            title="维护 · 检查、恢复与环境工具"
             aria-pressed={maintenanceOpen}
             onClick={() => {
               if (maintenanceOpen) closeMaintenance()
               else {
+                setPanelJob(null)
                 setMaintenanceOpen(true)
                 setLabFlowOpen(false)
               }
@@ -883,6 +884,7 @@ function WorldLine({
             <WorkspaceTools
               key={`${toolPanel.section}:${toolPanel.id}`}
               panel={toolPanel}
+              events={data?.events ?? []}
               lines={[origin, ...(data?.lines ?? [])]}
               api={api}
               close={() => setToolPanel(null)}
@@ -941,9 +943,17 @@ function WorldLine({
           )}
           {maintenanceOpen && (
             <Maintenance
-              onOpenTools={(section) => {
-                setMaintenanceOpen(false)
-                setToolPanel({ section, id: selected || 'origin' })
+              onOpenTools={(section, researchTopic, sourceId) => {
+                const source = data?.lines.find((line) => line.id === sourceId)
+                const id =
+                  section === 'research' && source?.kind === 'verification'
+                    ? (source.parentId ?? 'origin')
+                    : sourceId || 'origin'
+                setToolPanel({
+                  section,
+                  id: researchTopic === 'deployment' ? 'origin' : id,
+                  researchTopic,
+                })
               }}
               api={api}
               jobId={panelJob}

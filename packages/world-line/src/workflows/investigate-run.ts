@@ -26,7 +26,7 @@ export async function runInvestigation(
         const trial = nextTrial(s)
         if (!trial) {
           await saveInvestigation(ctx, s)
-          return s
+          return { ...s, ok: s.status === 'complete' }
         }
         s.active = trial
         s.status = 'running'
@@ -34,6 +34,7 @@ export async function runInvestigation(
         handle.setPhase(
           `第 ${s.trials.length + 1} 次试验：${s.kind === 'time' ? trial.snapshotId : `保留 ${trial.plugins?.length} 个非核心插件`}`,
         )
+        let preparationError: string | undefined
         try {
           const source = await sourceContext(ctx, s.sourceId)
           const result = await runRestoreCommand(source, {
@@ -50,10 +51,21 @@ export async function runInvestigation(
               handle.setLabId(labId)
               await saveInvestigation(ctx, s)
             },
-            onProbe: (probe) => handle.pushProbe(probe),
+            onProbe: (probe) => {
+              handle.pushProbe(probe)
+              if (
+                probe.status === 'fail' &&
+                ['dependency-install', 'plugin-add', 'plugin-update', 'plugin-remove'].includes(
+                  probe.check,
+                )
+              ) {
+                preparationError ??= redactText(probe.detail ?? probe.label ?? probe.check)
+              }
+            },
           })
+          if (preparationError) trial.error = `实验环境准备失败：${preparationError}`
           trial.suggested =
-            result.clientGate === 'inconclusive' || result.clientGate === 'skipped'
+            trial.error || result.clientGate === 'inconclusive' || result.clientGate === 'skipped'
               ? 'skip'
               : result.ok
                 ? 'good'
@@ -64,7 +76,10 @@ export async function runInvestigation(
         }
         s.status = 'review'
         await saveInvestigation(ctx, s)
-        if (!automatic) return s
+        // Preparation errors are not evidence against a plugin. Stop automatic trials
+        // and retain this trial for review instead of repeatedly creating broken labs.
+        if (trial.error || !automatic)
+          return { ...s, ok: !trial.error && trial.suggested !== 'skip' }
         trial.verdict = trial.suggested as Verdict
         s.trials.push(trial)
         delete s.active

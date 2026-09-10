@@ -8,6 +8,7 @@ import {
   useId,
   useRef,
 } from 'react'
+import { ChromeButton } from './chrome-button.js'
 import { CloseButton } from './close-button.js'
 
 const panelStack: HTMLElement[] = []
@@ -73,16 +74,15 @@ export function Panel({
     >
       <header className="wl-panel-header">
         {goBack && (
-          <button
-            type="button"
-            className="wl-button wl-icon wl-panel-back"
+          <ChromeButton
+            className="wl-panel-back"
             onClick={goBack}
             aria-label="返回上个面板"
             title="返回上个面板"
             disabled={closeDisabled}
           >
-            <ArrowLeft size={18} />
-          </button>
+            <ArrowLeft size={15} weight="light" aria-hidden="true" />
+          </ChromeButton>
         )}
         <h2 id={titleId}>{title}</h2>
         <CloseButton disabled={closeDisabled} onClick={close} />

@@ -6,7 +6,6 @@ import { Stethoscope } from '@phosphor-icons/react/dist/csr/Stethoscope'
 import { useEffect, useState } from 'react'
 import type { DoctorResult } from '../commands/doctor.js'
 import type { ReportResult } from '../commands/report.js'
-import { HudTabs } from './hud-controls.js'
 import {
   JobReceipt,
   jobKindLabel,
@@ -18,6 +17,7 @@ import {
 import { useLabStatus } from './lab-status.js'
 import { Panel } from './panel.js'
 import { ReportView } from './report-view.js'
+import { jobResearchTopic, type ResearchTopic, researchGoals } from './workflow-navigation.js'
 
 /** 维护面板：doctor 诊断、救援实例、回滚入口；进行中任务复用探针阶梯。 */
 export function Maintenance({
@@ -32,7 +32,7 @@ export function Maintenance({
 }: {
   api(body: unknown, signal?: AbortSignal): Promise<any>
   jobId: string | null
-  onOpenTools(section: 'recovery' | 'research'): void
+  onOpenTools(section: 'recovery' | 'research', topic?: ResearchTopic, sourceId?: string): void
   close(): void
   onBusy(running: boolean): void
   onSettled(): void
@@ -40,7 +40,7 @@ export function Maintenance({
   /** last-known-good 快照 id；为 null 时没有可回滚的稳定世界线。 */
   lastKnownGood: string | null
 }) {
-  const [topic, setTopic] = useState('diagnose')
+  const [topic, setTopic] = useState('overview')
   const [internalJob, setInternalJob] = useState<string | null>(null)
   const activeJob = externalJob ?? internalJob
   const { job, gone, connectionError } = useJob(api, activeJob, () => {
@@ -61,6 +61,7 @@ export function Maintenance({
   const [confirmRestore, setConfirmRestore] = useState(false)
   const [restoreRestart, setRestoreRestart] = useState(true)
   useEffect(() => {
+    if (topic !== 'diagnose' || activeJob) return
     const controller = new AbortController()
     setChecking(true)
     setDoctorError('')
@@ -76,7 +77,7 @@ export function Maintenance({
         if (!controller.signal.aborted) setChecking(false)
       })
     return () => controller.abort()
-  }, [api, revision])
+  }, [api, revision, topic, activeJob])
   const rollback = async () => {
     if (pending) return
     setPending('正在启动回滚…')
@@ -153,11 +154,11 @@ export function Maintenance({
   const review = job?.status === 'review'
   return (
     <Panel
-      title="维护"
+      title={activeJob ? '任务进度与结果' : '维护'}
       close={close}
       closeDisabled={!!pending}
       className="wl-inspector wl-maintenance"
-      aria-label="维护"
+      aria-label={activeJob ? '任务进度与结果' : '维护'}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault()
@@ -179,7 +180,20 @@ export function Maintenance({
             </p>
           )}
           {gone && <p className="wl-muted">任务已结束，结果以世界线状态为准。</p>}
-          {job && job.status === 'ok' && <JobReceipt job={job} />}
+          {job && job.status === 'ok' && (
+            <JobReceipt
+              job={job}
+              onOpenDetails={
+                job.kind === 'environment-import' && (job.result as { labId?: string })?.labId
+                  ? () => {
+                      void reportJob((job.result as { labId: string }).labId)
+                    }
+                  : jobResearchTopic(job.kind)
+                    ? () => onOpenTools('research', jobResearchTopic(job.kind), job.resource)
+                    : undefined
+              }
+            />
+          )}
           {labStatusError && <p className="wl-error">{labStatusError}</p>}
           {verifiedLabId && (
             <button
@@ -211,16 +225,11 @@ export function Maintenance({
                   <button
                     className="wl-button"
                     disabled={!!pending}
-                    onClick={() => void runForLab(failedLabId, 'lab-verify')}
+                    onClick={() =>
+                      void runForLab(failedLabId, 'lab-verify', job.status === 'awaiting_auth')
+                    }
                   >
-                    重验当前实验
-                  </button>
-                  <button
-                    className="wl-button"
-                    disabled={!!pending}
-                    onClick={() => void runForLab(failedLabId, 'lab-verify', true)}
-                  >
-                    登录后重验
+                    {job.status === 'awaiting_auth' ? '登录后重新验证' : '重新验证当前实验'}
                   </button>
                 </div>
               )}
@@ -252,130 +261,197 @@ export function Maintenance({
           )}
         </section>
       )}
-      <div className="wl-flow-actions-row">
-        <button className="wl-button" onClick={() => onOpenTools('recovery')}>
-          中断恢复
-        </button>
-        <button className="wl-button" onClick={() => onOpenTools('research')}>
-          排障与交付
-        </button>
-      </div>
-      <HudTabs
-        value={topic}
-        onChange={setTopic}
-        label="维护功能"
-        items={[
-          { id: 'diagnose', title: '健康诊断' },
-          { id: 'restore', title: '恢复稳定点' },
-        ]}
-      />
-      <section hidden={topic !== 'restore'} className="wl-event-detail">
-        <span className="wl-eyebrow">ROLLBACK</span>
-        <h3>回滚到稳定世界线</h3>
-        <p className="wl-muted">
-          将最近一次记录为稳定的快照（last-known-good）在验证实验中还原验证，通过后合入
-          到正式环境。验证期间正式环境不受影响。
-        </p>
-        {lastKnownGood === null ? (
-          <>
-            <button
-              className="wl-button"
-              disabled
-              title="还没有稳定世界线：先跑一次合入并完成重启验证 建立基线"
-            >
-              <ArrowCounterClockwise size={15} />
-              回滚到稳定世界线
-            </button>
-            <p className="wl-muted">还没有稳定世界线：先跑一次合入并完成重启验证 建立基线。</p>
-          </>
-        ) : confirmRestore ? (
-          <div className="wl-lab-form">
-            <label className="wl-merge-config">
-              <input
-                type="checkbox"
-                checked={restoreRestart}
-                disabled={!!pending}
-                onChange={(event) => setRestoreRestart(event.target.checked)}
-              />
-              合入后重启验证（记录新的稳定世界线）
-            </label>
-            <div className="wl-toolbar">
-              <button
-                className="wl-button wl-primary"
-                disabled={!!pending || running}
-                onClick={() => void rollback()}
-              >
-                {pending ? <CircleNotch size={16} className="wl-spin" /> : null}
-                确认回滚
+      {!activeJob && (
+        <>
+          {topic === 'overview' ? (
+            <section className="wl-maintenance-goals" aria-label="选择维护目标">
+              <p className="wl-muted">维护对象：main（正式环境）。不确定原因时，从检查环境开始。</p>
+              <button className="wl-goal-option" onClick={() => setTopic('diagnose')}>
+                <strong>
+                  检查环境<span className="wl-badge">建议先做</span>
+                </strong>
+                <span>查看启动、依赖和快照引用是否正常，不修改当前环境。</span>
               </button>
+              <button
+                className="wl-goal-option"
+                onClick={() => {
+                  setConfirmRestore(false)
+                  setError('')
+                  setTopic('restore')
+                }}
+              >
+                <strong>恢复稳定版本</strong>
+                <span>已知当前版本有问题时，验证并恢复最近一次稳定快照。</span>
+              </button>
+              <button className="wl-goal-option" onClick={() => onOpenTools('recovery')}>
+                <strong>修复未完成的操作</strong>
+                <span>上次安装或合入被中断时，检查并处理遗留的文件交换。</span>
+              </button>
+              <button
+                className="wl-goal-option"
+                onClick={() => onOpenTools('research', 'diagnose')}
+              >
+                <strong>{researchGoals.diagnose.title}</strong>
+                <span>{researchGoals.diagnose.description}</span>
+              </button>
+              <details className="wl-advanced-tools">
+                <summary>迁移、升级与独立部署</summary>
+                {(['transfer', 'updates', 'deployment'] as const).map((key) => (
+                  <button
+                    key={key}
+                    className="wl-goal-option"
+                    onClick={() => onOpenTools('research', key)}
+                  >
+                    <strong>{researchGoals[key].title}</strong>
+                    <span>{researchGoals[key].description}</span>
+                  </button>
+                ))}
+              </details>
+            </section>
+          ) : (
+            <button
+              className="wl-button wl-goal-back"
+              onClick={() => {
+                setTopic('overview')
+                setError('')
+                setMessage('')
+              }}
+            >
+              返回维护选项
+            </button>
+          )}
+          <section hidden={topic !== 'restore'} className="wl-event-detail">
+            <span className="wl-eyebrow">ROLLBACK</span>
+            <h3>恢复稳定版本</h3>
+            <p className="wl-muted">
+              将最近一次记录为稳定的快照（last-known-good）在验证实验中还原验证，通过后合入
+              到正式环境。验证期间正式环境不受影响。
+            </p>
+            {lastKnownGood === null ? (
+              <>
+                <button
+                  className="wl-button"
+                  disabled
+                  title="还没有稳定世界线：先跑一次合入并完成重启验证 建立基线"
+                >
+                  <ArrowCounterClockwise size={15} />
+                  回滚到稳定世界线
+                </button>
+                <p className="wl-muted">还没有稳定世界线：先跑一次合入并完成重启验证 建立基线。</p>
+              </>
+            ) : confirmRestore ? (
+              <div className="wl-lab-form">
+                <label className="wl-merge-config">
+                  <input
+                    type="checkbox"
+                    checked={restoreRestart}
+                    disabled={!!pending}
+                    onChange={(event) => setRestoreRestart(event.target.checked)}
+                  />
+                  合入后重启验证（记录新的稳定世界线）
+                </label>
+                <div className="wl-toolbar">
+                  <button
+                    className="wl-button wl-primary"
+                    disabled={!!pending || running}
+                    onClick={() => void rollback()}
+                  >
+                    {pending ? <CircleNotch size={16} className="wl-spin" /> : null}
+                    确认回滚
+                  </button>
+                  <button
+                    className="wl-button"
+                    disabled={!!pending}
+                    onClick={() => setConfirmRestore(false)}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : (
               <button
                 className="wl-button"
-                disabled={!!pending}
-                onClick={() => setConfirmRestore(false)}
+                disabled={!!pending || running}
+                onClick={() => setConfirmRestore(true)}
               >
-                取消
+                <ArrowCounterClockwise size={15} />
+                回滚到稳定世界线
+              </button>
+            )}
+          </section>
+          <section hidden={topic !== 'diagnose'}>
+            <div className="wl-toolbar">
+              <h3>
+                <Stethoscope size={16} aria-hidden="true" /> 环境诊断
+              </h3>
+              <button
+                className="wl-button"
+                disabled={checking}
+                onClick={() => setRevision((value) => value + 1)}
+              >
+                <ArrowsClockwise size={15} className={checking ? 'wl-spin' : ''} />
+                重新检查
               </button>
             </div>
-          </div>
-        ) : (
-          <button
-            className="wl-button"
-            disabled={!!pending || running}
-            onClick={() => setConfirmRestore(true)}
-          >
-            <ArrowCounterClockwise size={15} />
-            回滚到稳定世界线
-          </button>
-        )}
-      </section>
-      <section hidden={topic !== 'diagnose'}>
-        <div className="wl-toolbar">
-          <h3>
-            <Stethoscope size={16} aria-hidden="true" /> 环境诊断
-          </h3>
-          <button
-            className="wl-button"
-            disabled={checking}
-            onClick={() => setRevision((value) => value + 1)}
-          >
-            <ArrowsClockwise size={15} className={checking ? 'wl-spin' : ''} />
-            重新检查
-          </button>
-        </div>
-        {!doctor && checking && (
-          <p className="wl-insight-loading" role="status">
-            <CircleNotch size={18} className="wl-spin" />
-            正在诊断环境…
-          </p>
-        )}
-        {doctor && (
-          <>
-            <p className="wl-muted">
-              {doctor.summary.ok} 通过 · {doctor.summary.failed} 失败 · {doctor.summary.warned} 警告
-              · {doctor.summary.skipped} 跳过
-            </p>
-            {doctor.checks.map((check) => (
-              <div className="wl-diff-row" key={check.id}>
-                <strong>{check.title}</strong>
-                <span className="wl-status-text">
-                  <StatusMark status={check.status} />
-                  {statusText(check.status)}
-                </span>
-                {check.detail && <p>{check.detail}</p>}
+            {!doctor && checking && (
+              <p className="wl-insight-loading" role="status">
+                <CircleNotch size={18} className="wl-spin" />
+                正在诊断环境…
+              </p>
+            )}
+            {doctor && (
+              <>
+                <p className="wl-muted">
+                  {doctor.summary.ok} 通过 · {doctor.summary.failed} 失败 · {doctor.summary.warned}{' '}
+                  警告 · {doctor.summary.skipped} 跳过
+                </p>
+                {doctor.summary.failed === 0 && doctor.summary.warned > 0 && (
+                  <p className="wl-muted">
+                    检查未发现失败项，以下提示供确认；与快照不同不一定是故障。
+                  </p>
+                )}
+                {doctor.checks
+                  .filter((check) => check.status !== 'ok')
+                  .map((check) => (
+                    <div className="wl-diff-row" key={check.id}>
+                      <strong>{check.title}</strong>
+                      <span className="wl-status-text">
+                        <StatusMark status={check.status} />
+                        {statusText(check.status)}
+                      </span>
+                      {check.detail && <p>{check.detail}</p>}
+                    </div>
+                  ))}
+                {doctor.summary.ok > 0 && (
+                  <details className="wl-advanced">
+                    <summary>已通过的检查（{doctor.summary.ok}）</summary>
+                    {doctor.checks
+                      .filter((check) => check.status === 'ok')
+                      .map((check) => (
+                        <div className="wl-diff-row" key={check.id}>
+                          <strong>{check.title}</strong>
+                          <span className="wl-status-text">
+                            <StatusMark status={check.status} />
+                            {statusText(check.status)}
+                          </span>
+                          {check.detail && <p>{check.detail}</p>}
+                        </div>
+                      ))}
+                  </details>
+                )}
+              </>
+            )}
+            {doctorError && (
+              <div className="wl-error" role="alert">
+                <p>{doctorError}</p>
+                <button className="wl-button" onClick={() => setRevision((value) => value + 1)}>
+                  重试
+                </button>
               </div>
-            ))}
-          </>
-        )}
-        {doctorError && (
-          <div className="wl-error" role="alert">
-            <p>{doctorError}</p>
-            <button className="wl-button" onClick={() => setRevision((value) => value + 1)}>
-              重试
-            </button>
-          </div>
-        )}
-      </section>
-
+            )}
+          </section>
+        </>
+      )}
       {message && (
         <div className="wl-alert wl-success" role="status">
           <span>{message}</span>

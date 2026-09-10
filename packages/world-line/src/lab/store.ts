@@ -17,8 +17,8 @@ export function installationStorePolicy(directory: string, shared = true) {
   if (shared) {
     flags.push(
       '--package-import-method=clone-or-copy',
-      '--side-effects-cache=false',
-      '--verify-store-integrity=true',
+      '--config.side-effects-cache=false',
+      '--config.verify-store-integrity=true',
       '--virtual-store-dir=node_modules/.pnpm',
       '--config.enable-global-virtual-store=false',
     )

@@ -167,13 +167,17 @@ export function StoragePanel({
         ) : (
           <p>正在统计…</p>
         ))}
-      <div hidden={topic !== 'cleanup'} className="wl-flow-actions-row">
+      <div hidden={topic !== 'cleanup'} className="wl-maintenance-goals">
         {[
-          ['storage-prune', '预览快照保留策略'],
-          ['gc', '预览对象回收'],
-        ].map(([action, title]) => (
+          [
+            'storage-prune',
+            '预览旧快照清理',
+            '按保留策略筛选旧快照。仍被恢复流程使用的快照会受到保护。',
+          ],
+          ['gc', '预览对象回收', '隔离已不被任何快照引用的文件对象；隔离后可在找回对象中恢复。'],
+        ].map(([action, title, description]) => (
           <button
-            className="wl-button"
+            className="wl-goal-option"
             key={action}
             disabled={busy}
             onClick={async () => {
@@ -182,7 +186,8 @@ export function StoragePanel({
               setPlan(await request(`${action}-preview`))
             }}
           >
-            {title}
+            <strong>{title}</strong>
+            <span>{description}</span>
           </button>
         ))}
       </div>
@@ -244,10 +249,13 @@ export function StoragePanel({
         >
           {recordsError ? '重新加载回收记录' : '刷新回收记录'}
         </button>
-        <label>
-          回收记录 ID
-          <input value={record} onChange={(e) => setRecord(e.target.value)} placeholder="gc-…" />
-        </label>
+        <details>
+          <summary>按记录编号找回（高级）</summary>
+          <label>
+            回收记录编号
+            <input value={record} onChange={(e) => setRecord(e.target.value)} placeholder="gc-…" />
+          </label>
+        </details>
         <button
           className="wl-button"
           disabled={busy || !/^gc-\d+-[a-f0-9]{8}$/.test(record)}
@@ -261,9 +269,12 @@ export function StoragePanel({
         >
           恢复对象
         </button>
-        <p className="wl-muted">
-          永久删除使用 CLI：vault purge 记录ID --yes。服务端会再次检查七天保留期和快照引用。
-        </p>
+        <details>
+          <summary>永久删除隔离对象（高级）</summary>
+          <p className="wl-muted">
+            使用 CLI：vault purge 记录ID --yes。服务端会再次检查七天保留期和快照引用。
+          </p>
+        </details>
       </section>
     </>
   )

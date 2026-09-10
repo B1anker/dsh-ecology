@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+
+type RecoverySelection = { recordId: string; transaction: boolean; labId?: string }
 export function RecoveryPanel({
   id,
   api,
@@ -11,41 +13,64 @@ export function RecoveryPanel({
   const [data, setData] = useState<any>(null),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
-  const [selected, setSelected] = useState<{
-    recordId: string
-    transaction: boolean
-    labId?: string
-  } | null>(null)
+  const [selected, setSelected] = useState<RecoverySelection | null>(null)
   const [stopped, setStopped] = useState(false),
     [breakStale, setBreakStale] = useState(false)
-  const refresh = () =>
-    api({ action: 'recovery-list', id })
-      .then(setData)
-      .catch((e) => setError(e.message))
+  const [loading, setLoading] = useState(false)
+  const loadVersion = useRef(0)
+  const refresh = useCallback(async () => {
+    const version = ++loadVersion.current
+    setLoading(true)
+    setError('')
+    try {
+      const result = await api({ action: 'recovery-list', id })
+      if (loadVersion.current === version) setData(result)
+    } catch (e) {
+      if (loadVersion.current === version)
+        setError(e instanceof Error ? e.message : '恢复记录读取失败')
+    } finally {
+      if (loadVersion.current === version) setLoading(false)
+    }
+  }, [api, id])
+  const selectRecord = (record: RecoverySelection | null) => {
+    setSelected(record)
+    setStopped(false)
+    setBreakStale(false)
+    setError('')
+  }
   useEffect(() => {
+    setData(null)
+    setSelected(null)
+    setStopped(false)
+    setBreakStale(false)
     void refresh()
-  }, [id])
+    return () => {
+      loadVersion.current += 1
+    }
+  }, [refresh])
+  const completed = data?.transactions.filter((record: any) => !record.pending) ?? []
   return (
     <div className="wl-flow-actions">
-      <p>先恢复受管文件和事务记录，再重新验证实例。外部修改冲突不会被覆盖。</p>
+      <p>安装或合入意外中断时，在这里修复未完成的操作，再重新验证环境。外部修改冲突不会被覆盖。</p>
       {error && (
         <p className="wl-error" role="alert">
           {error}
         </p>
       )}
-      <button className="wl-button" disabled={busy} onClick={() => void refresh()}>
-        刷新恢复记录
+      <button className="wl-button" disabled={busy || loading} onClick={() => void refresh()}>
+        {loading ? '正在读取…' : '刷新恢复记录'}
       </button>
       {data && !data.swaps.length && !data.transactions.some((r: any) => r.pending) && (
-        <p>没有待恢复记录。</p>
+        <p>没有需要修复的中断操作。</p>
       )}
       {data?.swaps.map((recordId: string) => (
         <button
           className="wl-button"
           key={recordId}
-          onClick={() => setSelected({ recordId, transaction: false })}
+          disabled={busy}
+          onClick={() => selectRecord({ recordId, transaction: false })}
         >
-          恢复文件交换 {recordId}
+          修复中断的文件更新 {recordId}
         </button>
       ))}
       {data?.transactions
@@ -57,16 +82,17 @@ export function RecoveryPanel({
             </p>
             <button
               className="wl-button"
-              onClick={() => setSelected({ recordId: r.id, transaction: true, labId: r.labId })}
+              disabled={busy}
+              onClick={() => selectRecord({ recordId: r.id, transaction: true, labId: r.labId })}
             >
-              检查并恢复
+              检查并修复
             </button>
           </article>
         ))}
       {selected && (
         <section className="wl-event-detail">
           <p>
-            恢复 {selected.recordId}
+            修复 {selected.recordId}
             ：未提交事务恢复原文件，已决定提交的事务补齐记录。此操作本身不表示实例已健康。
           </p>
           <label>
@@ -86,7 +112,7 @@ export function RecoveryPanel({
             允许移除已确认失效的锁（活动锁仍会阻止操作）
           </label>
           <button
-            className="wl-button primary"
+            className="wl-button wl-primary"
             disabled={busy || !stopped}
             onClick={async () => {
               setBusy(true)
@@ -102,6 +128,8 @@ export function RecoveryPanel({
                 setData(null)
                 await refresh()
                 setSelected(null)
+                setStopped(false)
+                setBreakStale(false)
               } catch (e) {
                 setError(e instanceof Error ? e.message : '恢复失败')
               } finally {
@@ -109,25 +137,31 @@ export function RecoveryPanel({
               }
             }}
           >
-            确认恢复
+            确认修复
           </button>
-          <button className="wl-button" onClick={() => setSelected(null)}>
+          <button className="wl-button" disabled={busy} onClick={() => selectRecord(null)}>
             取消
           </button>
         </section>
       )}
-      {data?.transactions
-        .filter((r: any) => !r.pending)
-        .map((r: any) => (
-          <article className="wl-event-detail" key={r.id}>
-            <p>
-              {r.id} · {r.phase}
-            </p>
-            <button className="wl-button" onClick={() => onVerify(r.labId)}>
-              重新验证实验
-            </button>
-          </article>
-        ))}
+      {completed.length > 0 && (
+        <details className="wl-advanced">
+          <summary>已处理记录（{completed.length}）</summary>
+          <p className="wl-muted">这些操作已处理。只有仍需确认环境状态时，才需要重新验证。</p>
+          {completed.map((r: any) => (
+            <article className="wl-event-detail" key={r.id}>
+              <p>
+                {r.id} · {r.phase}
+              </p>
+              {r.labId && (
+                <button className="wl-button" disabled={busy} onClick={() => onVerify(r.labId)}>
+                  重新验证环境
+                </button>
+              )}
+            </article>
+          ))}
+        </details>
+      )}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import { type SetStateAction, useRef, useState } from 'react'
 import type { InspectorState } from './inspector.js'
+import type { ResearchTopic } from './workflow-navigation.js'
 export type ToolPanel = {
   section:
     | 'composition'
@@ -12,6 +13,7 @@ export type ToolPanel = {
     | 'research'
   id: string
   lineId?: string
+  researchTopic?: ResearchTopic
 }
 type Panel =
   | { kind: 'inspector'; value: InspectorState }

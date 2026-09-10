@@ -196,7 +196,7 @@ export function ProbeLadder({ job, onLogs }: { job: Job; onLogs?(): void }) {
 }
 
 /** Receipt facts of a terminal ok job (promote receipt, or restore/lab-add result highlights). */
-export function JobReceipt({ job }: { job: Job }) {
+export function JobReceipt({ job, onOpenDetails }: { job: Job; onOpenDetails?: () => void }) {
   if (job.kind === 'version-matrix' && (job.result as any)?.rows)
     return <CompatibilityMatrix rows={(job.result as any).rows} />
   if (job.status !== 'ok') return null
@@ -211,10 +211,27 @@ export function JobReceipt({ job }: { job: Job }) {
   )
     return (
       <div className="wl-event-detail">
-        <p>任务已结算，请回到排障与交付面板查看逐项结果。</p>
-        <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto' }}>
-          {JSON.stringify(job.result, null, 2)}
-        </pre>
+        <p>
+          {job.kind === 'environment-import'
+            ? '环境已导入隔离实验，尚未合入来源环境。'
+            : '任务已完成。'}
+        </p>
+        {job.kind === 'environment-import' && (
+          <p className="wl-muted">
+            实验：{String((job.result as { labId?: string })?.labId ?? '未记录')}
+          </p>
+        )}
+        {onOpenDetails && (
+          <button className="wl-button" onClick={onOpenDetails}>
+            {job.kind === 'environment-import' ? '查看导入验证报告' : '查看完整结果'}
+          </button>
+        )}
+        <details>
+          <summary>技术详情</summary>
+          <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto' }}>
+            {JSON.stringify(job.result, null, 2)}
+          </pre>
+        </details>
       </div>
     )
   if (job.kind === 'lab-verify') return <p className="wl-muted">实验验证通过，尚未合入来源环境。</p>
