@@ -8,45 +8,15 @@ import { useEffect, useRef, useState } from 'react'
 import type { LabActionResult, LabPromoteCommandResult } from '../commands/lab.js'
 import type { RestoreCommandResult } from '../commands/restore.js'
 import type { ProbeResult } from '../domain/probe.js'
+// 前后端单一来源：web/jobs.ts；此处 re-export 供 job-feed.ts 等既有导入方使用。
+import type { Job } from '../web/jobs.js'
+import type { ApiFn } from './api-types.js'
+import { errorMessage } from './async.js'
 import { jobsConnected, useJobFeed } from './job-feed.js'
 import { CompatibilityMatrix } from './result-visuals.js'
+import { probeStatusText } from './status-text.js'
 
-/** Server-side job snapshot (web action `job`). Jobs are in-memory: a host restart loses them. */
-export interface Job {
-  id: string
-  labId?: string
-  resource?: string
-  kind:
-    | 'lab-add'
-    | 'lab-update'
-    | 'lab-remove'
-    | 'lab-config-apply'
-    | 'lab-verify'
-    | 'promote'
-    | 'restore'
-    | 'deployment-stage'
-    | 'investigate'
-    | 'environment-import'
-    | 'version-matrix'
-    | 'upgrade-check'
-  /** fail = 验证未通过（业务结果），error = 异常 */
-  status:
-    | 'queued'
-    | 'running'
-    | 'ok'
-    | 'fail'
-    | 'review'
-    | 'awaiting_auth'
-    | 'incomplete'
-    | 'error'
-    | 'interrupted'
-  phase: string
-  probes: ProbeResult[]
-  result?: unknown
-  error?: string
-  startedAt: string
-  finishedAt?: string
-}
+export type { Job, JobKind } from '../web/jobs.js'
 
 const KIND_LABEL: Record<string, string> = {
   'lab-add': '安装并验证插件',
@@ -64,19 +34,7 @@ const KIND_LABEL: Record<string, string> = {
 }
 export const jobKindLabel = (kind: string) => KIND_LABEL[kind] ?? kind
 
-const STATUS_TEXT: Record<string, string> = {
-  pass: '通过',
-  ok: '通过',
-  fail: '失败',
-  review: '异常待确认',
-  awaiting_auth: '等待登录',
-  incomplete: '验证未完成',
-  warn: '警告',
-  inconclusive: '不确定',
-  info: '提示',
-  skip: '跳过',
-}
-export const statusText = (status: string) => STATUS_TEXT[status] ?? status
+export const statusText = probeStatusText
 
 export function StatusMark({ status }: { status: string }) {
   const Icon =
@@ -196,7 +154,7 @@ export function ProbeLadder({ job, onLogs }: { job: Job; onLogs?(): void }) {
 }
 
 /** Receipt facts of a terminal ok job (promote receipt, or restore/lab-add result highlights). */
-export function JobReceipt({ job }: { job: Job }) {
+export function JobReceipt({ job, onOpenDetails }: { job: Job; onOpenDetails?: () => void }) {
   if (job.kind === 'version-matrix' && (job.result as any)?.rows)
     return <CompatibilityMatrix rows={(job.result as any).rows} />
   if (job.status !== 'ok') return null
@@ -211,10 +169,27 @@ export function JobReceipt({ job }: { job: Job }) {
   )
     return (
       <div className="wl-event-detail">
-        <p>任务已结算，请回到排障与交付面板查看逐项结果。</p>
-        <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto' }}>
-          {JSON.stringify(job.result, null, 2)}
-        </pre>
+        <p>
+          {job.kind === 'environment-import'
+            ? '环境已导入隔离实验，尚未合入来源环境。'
+            : '任务已完成。'}
+        </p>
+        {job.kind === 'environment-import' && (
+          <p className="wl-muted">
+            实验：{String((job.result as { labId?: string })?.labId ?? '未记录')}
+          </p>
+        )}
+        {onOpenDetails && (
+          <button className="wl-button" onClick={onOpenDetails}>
+            {job.kind === 'environment-import' ? '查看导入验证报告' : '查看完整结果'}
+          </button>
+        )}
+        <details>
+          <summary>技术详情</summary>
+          <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto' }}>
+            {JSON.stringify(job.result, null, 2)}
+          </pre>
+        </details>
       </div>
     )
   if (job.kind === 'lab-verify') return <p className="wl-muted">实验验证通过，尚未合入来源环境。</p>
@@ -257,11 +232,7 @@ export function JobReceipt({ job }: { job: Job }) {
  * terminal status; a lost job (host restarted) reports `gone` and settles with
  * null — 结果以世界线状态为准.
  */
-export function useJob(
-  api: (body: unknown, signal?: AbortSignal) => Promise<unknown>,
-  jobId: string | null,
-  onSettled?: (job: Job | null) => void,
-) {
+export function useJob(api: ApiFn, jobId: string | null, onSettled?: (job: Job | null) => void) {
   const feed = useJobFeed()
   const notified = useRef<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
@@ -308,7 +279,7 @@ export function useJob(
         }
       } catch (error) {
         if (!active) return
-        const message = error instanceof Error ? error.message : '连接暂时中断'
+        const message = errorMessage(error, '连接暂时中断')
         if (message.includes('任务不存在')) {
           setGone(true)
           settled.current?.(null)

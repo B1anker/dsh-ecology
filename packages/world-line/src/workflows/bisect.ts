@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { readdir, readFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { runSnapshotCreate } from '../commands/snapshot.js'
 import type { CliContext } from '../context.js'
@@ -7,6 +7,7 @@ import { UsageError } from '../domain/errors.js'
 import { analyzeProfile } from '../domain/snapshot.js'
 import { writeFileAtomic } from '../fs/atomic.js'
 import { withOperations } from '../fs/operation.js'
+import { readdirIfExists } from '../fs/read-json.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
 import { sourceContext } from '../lab/source.js'
 import { readSnapshotManifest } from '../vault/manifests.js'
@@ -57,10 +58,7 @@ export async function saveInvestigation(ctx: CliContext, s: Investigation) {
   await writeFileAtomic(path(ctx, s.id), JSON.stringify(s))
 }
 export async function listInvestigations(ctx: CliContext) {
-  const files = await readdir(join(ctx.home, 'world-line', 'investigations')).catch((e) => {
-    if (e.code === 'ENOENT') return []
-    throw e
-  })
+  const files = await readdirIfExists(join(ctx.home, 'world-line', 'investigations'))
   const sessions: Investigation[] = []
   for (const file of files.filter((f) => validId.test(f.replace(/\.json$/, '')))) {
     const raw = JSON.parse(await readFile(path(ctx, file.slice(0, -5)), 'utf8'))

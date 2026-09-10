@@ -2,15 +2,13 @@ import { readFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { parsePatchListText } from '../domain/composition.js'
 import { UsageError } from '../domain/errors.js'
+import { readTextIfExists } from '../fs/read-json.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
 
 export async function rescueBundles(profile: string, profileName: string) {
   const core =
     adapterDsh01x.profile.templates[profileName]?.bundles ?? adapterDsh01x.profile.defaultBundles
-  const raw = await readFile(join(profile, 'package.json'), 'utf8').catch((e) => {
-    if (e.code === 'ENOENT') return '{}'
-    throw e
-  })
+  const raw = (await readTextIfExists(join(profile, 'package.json'))) ?? '{}'
   const manifest = JSON.parse(raw)
   const names: string[] = manifest.dsh?.profile?.bundles ?? []
   const bundles = []

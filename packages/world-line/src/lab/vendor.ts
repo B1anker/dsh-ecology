@@ -6,6 +6,7 @@ import { UsageError } from '../domain/errors.js'
 import { writeFileAtomic } from '../fs/atomic.js'
 import { cloneFile, cloneTree } from '../fs/clone.js'
 import { sha256Hex } from '../fs/hash.js'
+import { readTextIfExists } from '../fs/read-json.js'
 import { localSourceHash } from './local-source.js'
 export interface LocalMapping {
   name: string
@@ -82,11 +83,8 @@ export async function freezeLocalProfile(
   if (mappings.length) {
     await writeFileAtomic(path, JSON.stringify(pkg, null, 2))
     const lock = join(profile, 'pnpm-lock.yaml'),
-      text = await readFile(lock, 'utf8').catch((e) => {
-        if (e.code === 'ENOENT') return null
-        throw e
-      })
-    if (text !== null)
+      text = await readTextIfExists(lock)
+    if (text !== undefined)
       await writeFileAtomic(
         lock,
         dump(rewriteLocalLock(load(text, { schema: JSON_SCHEMA }), sourceProfile, mappings), {

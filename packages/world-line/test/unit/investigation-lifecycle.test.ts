@@ -2,6 +2,7 @@ import { expect, rs, test } from '@rstest/core'
 import {
   answerInvestigation,
   createInvestigation,
+  type Investigation,
   listInvestigations,
   readInvestigation,
   saveInvestigation,
@@ -47,7 +48,7 @@ test('investigation persists trial evidence, demands verdicts and never replays 
       options.onProbe({ check: 'fixture', status: 'pass' })
       return { ok: true, clientGate: 'passed' }
     })
-    let state = await runInvestigation(ctx, s.id, handle)
+    let state: Investigation = await runInvestigation(ctx, s.id, handle)
     expect(state.status).toBe('review')
     expect(state.active?.suggested).toBe('good')
     await expect(runInvestigation(ctx, s.id, handle)).rejects.toThrow('判断')
@@ -61,6 +62,7 @@ test('investigation persists trial evidence, demands verdicts and never replays 
     restore.mockRejectedValue(new Error('probe unavailable'))
     state = await runInvestigation(ctx, s.id, handle)
     expect(state.active?.suggested).toBe('skip')
+    expect(state).toMatchObject({ ok: false, active: { error: 'probe unavailable' } })
     state.status = 'running'
     await saveInvestigation(ctx, state)
     const calls = restore.mock.calls.length
@@ -73,6 +75,37 @@ test('investigation persists trial evidence, demands verdicts and never replays 
     restore.mockResolvedValue({ ok: false, clientGate: 'inconclusive' })
     const ended = await runInvestigation(ctx, another.id, handle, true)
     expect(['complete', 'inconclusive']).toContain(ended.status)
+    expect(ended.ok).toBe(ended.status === 'complete')
+
+    const broken = await createInvestigation(ctx, 'plugins')
+    restore.mockImplementation(async (_ctx, options) => {
+      options.onProbe({ check: 'plugin-remove', status: 'fail', detail: 'Unknown options' })
+      return { ok: false, clientGate: 'skipped' }
+    })
+    const before = restore.mock.calls.length
+    const failed = await runInvestigation(ctx, broken.id, handle, true)
+    expect(restore.mock.calls.length).toBe(before + 1)
+    expect(failed).toMatchObject({
+      ok: false,
+      status: 'review',
+      trials: [],
+      active: {
+        suggested: 'skip',
+        error: '实验环境准备失败：Unknown options',
+      },
+    })
+    expect((await readInvestigation(ctx, broken.id)).active?.error).toBe(failed.active?.error)
+
+    // A functioning experiment that reproduces the problem is valid evidence.
+    const reproduced = await createInvestigation(ctx, 'plugins')
+    restore.mockImplementation(async (_ctx, options) => {
+      options.onProbe({ check: 'plugin-function', status: 'fail' })
+      return { ok: false, clientGate: 'fail' }
+    })
+    expect(await runInvestigation(ctx, reproduced.id, handle)).toMatchObject({
+      ok: true,
+      active: { suggested: 'bad' },
+    })
   } finally {
     await destroyTempHome(home)
   }

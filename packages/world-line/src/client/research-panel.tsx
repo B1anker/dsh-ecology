@@ -1,28 +1,58 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { WorldEvent } from '../domain/insight-types.js'
+import type { ApiFn } from './api-types.js'
+import { errorMessage, useActionRunner, useApiQuery } from './async.js'
+import { BackupSelect } from './backup-select.js'
+import { ErrorText } from './error-text.js'
 import { HudSelect, HudTabs } from './hud-controls.js'
 import type { Job } from './job-view.js'
 import { CompatibilityMatrix, UpgradeResults } from './result-visuals.js'
+import type { ResearchTopic } from './workflow-navigation.js'
+
+type RefreshResult =
+  | { kind: 'diagnose'; records: any[]; points: any[] }
+  | { kind: 'transfer'; points: any[] }
+  | { kind: 'updates'; policy: any; results: any[]; jobs: Job[] | null }
+  | { kind: 'deployment'; status: any }
+
 export function ResearchPanel({
   id,
   api,
   onJob,
+  events,
+  initialTopic = 'diagnose',
 }: {
   id: string
-  api(body: unknown): Promise<any>
+  api: ApiFn
   onJob(id: string): void
+  events: WorldEvent[]
+  initialTopic?: ResearchTopic
 }) {
   const [matrixJobs, setMatrixJobs] = useState<Job[]>([])
   const [matrixError, setMatrixError] = useState('')
-  const [topic, setTopic] = useState('diagnose')
+  const topic = initialTopic
+  const [diagnosisTab, setDiagnosisTab] = useState('new')
+  const [refreshMessage, setRefreshMessage] = useState('')
+  const [diagnosisMethod, setDiagnosisMethod] = useState('plugins')
+  const [exportSnapshot, setExportSnapshot] = useState('')
+  const scope = useRef('')
+  scope.current = `${id}:${topic}`
+  const viewVersion = useRef(0)
+  const bundleVersion = useRef(0)
+  const alive = useRef(true)
+  const manualRefresh = useRef(false)
+  const pendingRecordsTab = useRef(false)
   const [historyLimit, setHistoryLimit] = useState(5)
   const [breakStale, setBreakStale] = useState(false)
+  const [interruptedConfirmations, setInterruptedConfirmations] = useState<
+    Record<string, { accepted?: boolean; breakStale?: boolean }>
+  >({})
+  const [promoteLab, setPromoteLab] = useState<string | null>(null)
   const [entry, setEntry] = useState<{ id: string; url: string } | null>(null)
   const [sessions, setSessions] = useState<any[]>([]),
     [snapshots, setSnapshots] = useState<any[]>([]),
     [good, setGood] = useState(''),
-    [bad, setBad] = useState(''),
-    [error, setError] = useState(''),
-    [busy, setBusy] = useState(false)
+    [bad, setBad] = useState('')
   const [versions, setVersions] = useState(''),
     [policy, setPolicy] = useState<any>(null),
     [upgrades, setUpgrades] = useState<any[]>([]),
@@ -31,45 +61,134 @@ export function ResearchPanel({
     [accepted, setAccepted] = useState(false)
   const [bundle, setBundle] = useState(''),
     [requirements, setRequirements] = useState<Record<string, string>>({})
-  const refresh = async () => {
-    const [a, b] = await Promise.all([
-      api({ action: 'investigations' }),
-      api({ action: 'snapshot-list', id }),
-    ])
-    setSessions(a.filter((s: any) => s.sourceId === id))
-    setSnapshots(b)
-    const [p, u, d] = await Promise.all([
-      api({ action: 'upgrade-policy', id }),
-      api({ action: 'upgrade-results' }),
-      api({ action: 'deployment-status' }),
-    ])
-    setPolicy(p)
-    setUpgrades(u.filter((r: any) => r.sourceId === id))
-    setDeployment(d)
-    try {
-      const jobs = (await api({ action: 'jobs' })) as Job[]
-      setMatrixJobs(jobs.filter((job) => job.kind === 'version-matrix' && job.resource === id))
-      setMatrixError('')
-    } catch {
-      setMatrixError('兼容验证历史读取失败，请刷新进度重试。')
-    }
-  }
+  const { pending, error: actionError, setError: setActionError, run } = useActionRunner()
+  const busy = !!pending
+  const request = useCallback(
+    async (signal: AbortSignal): Promise<RefreshResult> => {
+      setRefreshMessage('')
+      setPromoteLab(null)
+      setInterruptedConfirmations({})
+      setActionError('')
+      if (topic === 'diagnose') {
+        const [records, points] = await Promise.all([
+          api({ action: 'investigations' }, signal),
+          api({ action: 'snapshot-list', id }, signal),
+        ])
+        return { kind: 'diagnose', records, points }
+      }
+      if (topic === 'transfer') {
+        const points = await api({ action: 'snapshot-list', id }, signal)
+        return { kind: 'transfer', points }
+      }
+      if (topic === 'updates') {
+        const [nextPolicy, results, jobs] = await Promise.all([
+          api({ action: 'upgrade-policy', id }, signal),
+          api({ action: 'upgrade-results' }, signal),
+          api({ action: 'jobs' }, signal).catch(() => null),
+        ])
+        return { kind: 'updates', policy: nextPolicy, results, jobs }
+      }
+      const status = await api({ action: 'deployment-status' }, signal)
+      return { kind: 'deployment', status }
+    },
+    [api, id, topic],
+  )
+  const {
+    error: loadError,
+    loading,
+    reload,
+  } = useApiQuery<RefreshResult>(api, request, [request], {
+    fallback: '读取失败，请重试。',
+    onSuccess: (result) => {
+      const manual = manualRefresh.current
+      manualRefresh.current = false
+      if (result.kind === 'diagnose') {
+        const records = result.records.filter((record: any) => record.sourceId === id)
+        const points = result.points.filter((point: any) => point.snapshotId)
+        setSessions(records)
+        setSnapshots(points)
+        if (manual)
+          setRefreshMessage(
+            `已重新读取 ${records.length} 条排查记录、${points.length} 份备份 · ${new Date().toLocaleTimeString()}`,
+          )
+      } else if (result.kind === 'transfer') {
+        setSnapshots(result.points.filter((point: any) => point.snapshotId))
+      } else if (result.kind === 'updates') {
+        setPolicy(result.policy)
+        setUpgrades(result.results.filter((record: any) => record.sourceId === id))
+        setMatrixError(result.jobs === null ? '兼容验证历史读取失败，请刷新重试。' : '')
+        if (result.jobs)
+          setMatrixJobs(
+            result.jobs.filter((job: Job) => job.kind === 'version-matrix' && job.resource === id),
+          )
+      } else {
+        setDeployment(result.status)
+      }
+      if (manual && result.kind !== 'diagnose')
+        setRefreshMessage(`数据已更新 · ${new Date().toLocaleTimeString()}`)
+      if (pendingRecordsTab.current) {
+        pendingRecordsTab.current = false
+        setDiagnosisTab('records')
+      }
+    },
+  })
+  const error = loadError || actionError
   useEffect(() => {
-    void refresh().catch((e) => setError(e.message))
+    setAccepted(false)
+    setBreakStale(false)
+    setPromoteLab(null)
+    setInterruptedConfirmations({})
+    setEntry(null)
+    setActionError('')
+  }, [id, topic])
+  useEffect(
+    () => () => {
+      alive.current = false
+      viewVersion.current += 1
+      bundleVersion.current += 1
+    },
+    [],
+  )
+  useEffect(() => {
+    if (loadError && pendingRecordsTab.current) {
+      pendingRecordsTab.current = false
+      setDiagnosisTab('records')
+    }
+  }, [loadError])
+  useEffect(() => {
+    setGood('')
+    setBad('')
+    setExportSnapshot('')
+    setSnapshots([])
+    setSessions([])
+    setPolicy(null)
+    setUpgrades([])
+    setMatrixJobs([])
+    setMatrixError('')
+    setDeployment(null)
+    setLab('')
+    setHistoryLimit(5)
+    setDiagnosisTab('new')
   }, [id])
   const act = async (body: object) => {
-    setBusy(true)
-    setError('')
-    try {
-      const r = await api(body)
-      if (r.jobId) onJob(r.jobId)
-      else await refresh()
-      return r
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '操作失败')
-    } finally {
-      setBusy(false)
-    }
+    let value: any
+    await run(
+      '处理中…',
+      () => api(body),
+      (r) => {
+        if (!alive.current) return
+        value = r
+        if (r.jobId) {
+          onJob(r.jobId)
+        } else {
+          pendingRecordsTab.current =
+            (body as { action?: string }).action === 'investigation-create'
+          reload()
+        }
+      },
+      '操作失败',
+    )
+    return value
   }
   const download = (value: unknown, name: string) => {
     const url = URL.createObjectURL(
@@ -87,104 +206,151 @@ export function ResearchPanel({
   } catch {}
   return (
     <div className="wl-flow-actions wl-workflow-body">
-      <HudTabs
-        value={topic}
-        onChange={setTopic}
-        label="排障与交付功能"
-        items={[
-          { id: 'diagnose', title: '定位问题' },
-          { id: 'transfer', title: '环境交付' },
-          { id: 'updates', title: '升级验证' },
-          { id: 'deployment', title: '部署守护' },
-        ]}
-      />
       <p className="wl-workflow-intro">
         {
           {
-            diagnose: '最近哪里变坏了？在隔离实验中逐步缩小范围，正式环境保持可用。',
+            diagnose: '查找导致问题的插件或历史变更。排查在独立环境中进行，不影响当前使用。',
             transfer: '带走一套可复现的配置。在目标电脑补充秘密，再验证是否适用。',
             updates: '先确认兼容，再决定升级。验证结果不会直接替换你正在使用的环境。',
             deployment: '把已验证环境保留为完整部署。准备、切换、启用守护是三个明确步骤。',
           }[topic]
         }
       </p>
-      <label>
-        <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
-        {topic === 'deployment'
-          ? '我已核对目标环境，允许下方明确选择的部署操作'
-          : '我已核对来源环境，下一步先在隔离环境中操作'}
-      </label>
-      <details className="wl-advanced">
-        <summary>中断处理选项</summary>
-        <label>
-          <input
-            type="checkbox"
-            checked={breakStale}
-            onChange={(e) => setBreakStale(e.target.checked)}
-          />
-          允许清理已确认死亡进程的失效锁；活动进程仍受保护。
-        </label>
-      </details>
-      {error && (
-        <p className="wl-error" role="alert">
-          {error}
-        </p>
+      {error && <ErrorText message={error} />}
+      {topic === 'diagnose' && (
+        <HudTabs
+          label="排查功能"
+          value={diagnosisTab}
+          onChange={(value) => {
+            setDiagnosisTab(value)
+            setRefreshMessage('')
+          }}
+          items={[
+            { id: 'new', title: '新建排查' },
+            { id: 'records', title: `排查记录（${sessions.length}）` },
+          ]}
+        />
       )}
-      <button
-        className="wl-button"
-        disabled={busy}
-        onClick={() => void refresh().catch((e) => setError(e.message))}
-      >
-        刷新进度
-      </button>
-      <section hidden={topic !== 'diagnose'} className="wl-event-detail">
-        <h3>定位什么时候开始出问题</h3>
-        <p>从同一祖先链选择好点与坏点。每步建立独立实验，先复验两端。</p>
+      {(topic !== 'diagnose' ||
+        diagnosisTab === 'records' ||
+        diagnosisMethod === 'time' ||
+        error) && (
+        <>
+          <button
+            className="wl-button"
+            disabled={busy || loading}
+            onClick={() => {
+              manualRefresh.current = true
+              reload()
+            }}
+          >
+            {loading
+              ? '正在读取…'
+              : {
+                  diagnose: diagnosisTab === 'records' ? '刷新排查记录' : '刷新备份列表',
+                  transfer: '刷新备份列表',
+                  updates: '刷新升级结果',
+                  deployment: '刷新部署状态',
+                }[topic]}
+          </button>
+          {refreshMessage && (
+            <p className="wl-muted" role="status">
+              {refreshMessage}
+            </p>
+          )}
+        </>
+      )}
+      <section hidden={topic !== 'diagnose' || diagnosisTab !== 'new'} className="wl-event-detail">
+        <h3>选择问题定位方式</h3>
         <label>
-          好点
-          <HudSelect value={good} onChange={(e) => setGood(e.target.value)}>
-            <option value="">选择快照</option>
-            {snapshots.map((s: any) => (
-              <option key={s.snapshotId ?? s.id} value={s.snapshotId ?? s.id}>
-                {s.label ?? s.title ?? s.snapshotId ?? s.id}
-              </option>
-            ))}
+          你掌握哪些线索？
+          <HudSelect value={diagnosisMethod} onChange={(e) => setDiagnosisMethod(e.target.value)}>
+            <option value="plugins">不知道何时出错，先排查当前插件</option>
+            <option value="time">从历史备份查找问题</option>
           </HudSelect>
         </label>
-        <label>
-          坏点
-          <HudSelect value={bad} onChange={(e) => setBad(e.target.value)}>
-            <option value="">选择快照</option>
-            {snapshots.map((s: any) => (
-              <option key={s.snapshotId ?? s.id} value={s.snapshotId ?? s.id}>
-                {s.label ?? s.title ?? s.snapshotId ?? s.id}
-              </option>
-            ))}
-          </HudSelect>
-        </label>
-        <button
-          className="wl-button"
-          disabled={busy || !good || !bad}
-          onClick={() =>
-            void act({ action: 'investigation-create', kind: 'time', sourceId: id, good, bad })
-          }
-        >
-          创建时间排障
-        </button>
-        <button
-          className="wl-button"
-          disabled={busy}
-          onClick={() =>
-            void act({ action: 'investigation-create', kind: 'plugins', sourceId: id })
-          }
-        >
-          排查当前插件组合
-        </button>
+        {diagnosisMethod === 'time' ? (
+          <>
+            <p>选择一份可正常使用的备份和一份需要排查的备份，系统会在这段历史中查找问题原因。</p>
+            {!loading && snapshots.length < 2 && (
+              <p className="wl-muted">
+                {snapshots.length === 0
+                  ? '还没有可用的历史备份。可以切换到“排查当前插件”，无需准备备份。'
+                  : '至少需要两份历史备份才能比较。现在可以先排查当前插件。'}
+              </p>
+            )}
+            <BackupSelect
+              label="可正常使用的备份"
+              value={good}
+              onChange={setGood}
+              points={snapshots}
+              events={events}
+              id={id}
+              api={api}
+              disabled={loading || snapshots.length < 2}
+            />
+            <BackupSelect
+              label="需要排查的备份"
+              value={bad}
+              onChange={setBad}
+              points={snapshots}
+              events={events}
+              id={id}
+              api={api}
+              disabled={loading || snapshots.length < 2}
+            />
+            {good && good === bad && <p className="wl-muted">请选择两份不同的备份。</p>}
+            <button
+              className="wl-button wl-primary"
+              disabled={
+                busy ||
+                loading ||
+                good === bad ||
+                !snapshots.some((point) => point.snapshotId === good) ||
+                !snapshots.some((point) => point.snapshotId === bad)
+              }
+              onClick={() =>
+                void act({ action: 'investigation-create', kind: 'time', sourceId: id, good, bad })
+              }
+            >
+              开始查找问题原因
+            </button>
+          </>
+        ) : (
+          <>
+            <p>在隔离环境中逐组验证当前插件，缩小问题范围。无需历史快照。</p>
+            <button
+              className="wl-button wl-primary"
+              disabled={busy}
+              onClick={() =>
+                void act({ action: 'investigation-create', kind: 'plugins', sourceId: id })
+              }
+            >
+              开始排查当前插件
+            </button>
+          </>
+        )}
       </section>
       {topic === 'diagnose' &&
+        diagnosisTab === 'records' &&
+        !loading &&
+        !error &&
+        !sessions.length && (
+          <div className="wl-event-detail">
+            <p>还没有排查记录。</p>
+            <button className="wl-button" onClick={() => setDiagnosisTab('new')}>
+              新建排查
+            </button>
+          </div>
+        )}
+      {topic === 'diagnose' && diagnosisTab === 'records' && (
+        <p className="wl-muted">刷新只更新记录状态。要继续排查，请选择记录中的下一步操作。</p>
+      )}
+      {topic === 'diagnose' &&
+        diagnosisTab === 'records' &&
         sessions.slice(0, historyLimit).map((s) => (
           <article className="wl-event-detail" key={s.id}>
-            <strong>{s.kind === 'time' ? '时间二分' : '插件组合排障'}</strong>
+            <strong>{s.kind === 'time' ? '按历史定位问题' : '排查当前插件'}</strong>
             <p>
               {s.id} ·{' '}
               {
@@ -215,17 +381,23 @@ export function ResearchPanel({
                   disabled={busy}
                   onClick={() => void act({ action: 'investigation-run', id: s.id })}
                 >
-                  运行下一步，手动判断
+                  验证下一步并试用
                 </button>
-                <button
-                  className="wl-button"
-                  disabled={busy}
-                  onClick={() =>
-                    void act({ action: 'investigation-run', id: s.id, automatic: true })
-                  }
-                >
-                  按浏览器探针自动排查
-                </button>
+                <details className="wl-advanced">
+                  <summary>自动判断（高级）</summary>
+                  <p className="wl-muted">
+                    适合页面无法启动等可自动检测的问题；需要人工体验的问题，请使用上方试用流程。
+                  </p>
+                  <button
+                    className="wl-button"
+                    disabled={busy}
+                    onClick={() =>
+                      void act({ action: 'investigation-run', id: s.id, automatic: true })
+                    }
+                  >
+                    按页面检查结果自动排查
+                  </button>
+                </details>
               </>
             )}
             {s.status === 'review' && (
@@ -275,20 +447,53 @@ export function ResearchPanel({
               </>
             )}
             {s.status === 'running' && (
-              <button
-                className="wl-button"
-                disabled={busy || !accepted}
-                onClick={() =>
-                  void act({ action: 'investigation-skip-interrupted', id: s.id, breakStale })
-                }
-              >
-                处理已中断的这一步
-              </button>
+              <details className="wl-advanced">
+                <summary>这一步已中断？</summary>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={!!interruptedConfirmations[s.id]?.accepted}
+                    onChange={(e) =>
+                      setInterruptedConfirmations((previous) => ({
+                        ...previous,
+                        [s.id]: { ...previous[s.id], accepted: e.target.checked },
+                      }))
+                    }
+                  />
+                  我已确认这一步不再运行，允许处理其中断状态
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={!!interruptedConfirmations[s.id]?.breakStale}
+                    onChange={(e) =>
+                      setInterruptedConfirmations((previous) => ({
+                        ...previous,
+                        [s.id]: { ...previous[s.id], breakStale: e.target.checked },
+                      }))
+                    }
+                  />
+                  允许清理已确认死亡进程的失效锁；活动进程仍受保护
+                </label>
+                <button
+                  className="wl-button"
+                  disabled={busy || !interruptedConfirmations[s.id]?.accepted}
+                  onClick={() =>
+                    void act({
+                      action: 'investigation-skip-interrupted',
+                      id: s.id,
+                      breakStale: !!interruptedConfirmations[s.id]?.breakStale,
+                    })
+                  }
+                >
+                  处理已中断的这一步
+                </button>
+              </details>
             )}
             {!!s.candidates.length && <pre>{s.candidates.join('\n')}</pre>}
           </article>
         ))}
-      {topic === 'diagnose' && sessions.length > historyLimit && (
+      {topic === 'diagnose' && diagnosisTab === 'records' && sessions.length > historyLimit && (
         <button className="wl-button" onClick={() => setHistoryLimit((n) => n + 5)}>
           再显示 5 条排障记录（剩余 {sessions.length - historyLimit}）
         </button>
@@ -297,7 +502,12 @@ export function ResearchPanel({
         <h3>导出和导入环境</h3>
         <label>
           要带走的快照
-          <HudSelect aria-label="要导出的快照" value={bad} onChange={(e) => setBad(e.target.value)}>
+          <HudSelect
+            aria-label="要导出的快照"
+            value={exportSnapshot}
+            disabled={loading || !snapshots.length}
+            onChange={(e) => setExportSnapshot(e.target.value)}
+          >
             <option value="">选择快照</option>
             {snapshots.map((s) => (
               <option key={s.snapshotId} value={s.snapshotId}>
@@ -306,15 +516,29 @@ export function ResearchPanel({
             ))}
           </HudSelect>
         </label>
+        {!loading && !snapshots.length && (
+          <p className="wl-muted">
+            尚无可导出的快照。先在画布保存当前快照，再来导出；导入已有环境包不受影响。
+          </p>
+        )}
         <p>
           导出包含受管配置与固定的本地插件源码，秘密文件只声明所需输入。导入先进入实验验证，通过后再手动合入。
         </p>
         <button
           className="wl-button"
-          disabled={busy || !bad}
+          disabled={
+            busy ||
+            loading ||
+            !exportSnapshot ||
+            !snapshots.some((point) => point.snapshotId === exportSnapshot)
+          }
           onClick={async () => {
-            const value = await act({ action: 'environment-export', id, snapshotId: bad })
-            if (value) download(value, `${bad}.world-line.json`)
+            const value = await act({
+              action: 'environment-export',
+              id,
+              snapshotId: exportSnapshot,
+            })
+            if (value) download(value, `${exportSnapshot}.world-line.json`)
           }}
         >
           导出所选快照
@@ -326,13 +550,31 @@ export function ResearchPanel({
             accept=".json"
             onChange={async (e) => {
               const f = e.target.files?.[0]
+              const expectedScope = scope.current
+              const expectedView = viewVersion.current
+              const version = ++bundleVersion.current
+              const current = () =>
+                scope.current === expectedScope &&
+                viewVersion.current === expectedView &&
+                bundleVersion.current === version
+              setAccepted(false)
+              setRequirements({})
+              setBundle('')
+              setActionError('')
               if (!f) return
               if (f.size > 32 * 1024 * 1024) {
-                setError('环境包超过 32 MiB')
+                setActionError('环境包超过 32 MiB')
                 return
               }
-              setBundle(await f.text())
-              setRequirements({})
+              try {
+                const text = await f.text()
+                if (current()) {
+                  setBundle(text)
+                  setAccepted(false)
+                }
+              } catch (e) {
+                if (current()) setActionError(errorMessage(e, '环境包读取失败'))
+              }
             }}
           />
         </label>
@@ -345,8 +587,16 @@ export function ResearchPanel({
             />
           </label>
         ))}
+        <label>
+          <input
+            type="checkbox"
+            checked={accepted}
+            onChange={(e) => setAccepted(e.target.checked)}
+          />
+          已核对环境包和必要凭据，先导入隔离环境验证
+        </label>
         <button
-          className="wl-button primary"
+          className="wl-button wl-primary"
           disabled={busy || !accepted || !bundle || required.some((n) => !requirements[n])}
           onClick={() =>
             void act({
@@ -361,61 +611,16 @@ export function ResearchPanel({
         </button>
       </section>
       <section hidden={topic !== 'updates'} className="wl-event-detail">
-        <h3>宿主版本兼容验证</h3>
-        <p>每个版本安装到独立目录。结果不修改宿主认证清单，也不直接升级正式宿主。</p>
-        <input
-          aria-label="精确宿主版本，以逗号分隔"
-          value={versions}
-          onChange={(e) => setVersions(e.target.value)}
-          placeholder="0.1.2-rc.1, …"
-        />
-        <button
-          className="wl-button"
-          disabled={busy || !accepted || !versions}
-          onClick={() =>
-            void act({
-              action: 'version-matrix',
-              sourceId: id,
-              versions: versions
-                .split(',')
-                .map((v) => v.trim())
-                .filter(Boolean),
-            })
-          }
-        >
-          开始矩阵验证
-        </button>
-      </section>
-      {topic === 'updates' && (
-        <>
-          {matrixError && <p className="wl-error">{matrixError}</p>}
-          {!matrixError && !matrixJobs.length && (
-            <p className="wl-muted">
-              最近任务中暂无此环境的兼容验证记录。运行验证后，这里会显示版本矩阵。
-            </p>
-          )}
-          {matrixJobs.slice(0, 5).map((job) => (
-            <section className="wl-viz" key={job.id}>
-              <small>{new Date(job.startedAt).toLocaleString()}</small>
-              {(job.result as any)?.rows ? (
-                <CompatibilityMatrix rows={(job.result as any).rows} />
-              ) : (
-                <p>{job.phase || '尚无矩阵结果'}</p>
-              )}
-              {job.error && <p className="wl-error">{job.error}</p>}
-              <button className="wl-button" onClick={() => onJob(job.id)}>
-                查看验证任务
-              </button>
-            </section>
-          ))}
-        </>
-      )}
-      <section hidden={topic !== 'updates'} className="wl-event-detail">
-        <h3>升级建议</h3>
-        <p>
-          以已验证稳定点为基线，独立验证新版本，通过后才显示合入入口。管理宿主运行期间按周期检查；也可用
-          CLI 的 upgrade watch 独立运行。
-        </p>
+        <h3>检查插件升级</h3>
+        <p>检查当前环境中的插件是否有新版本，并在隔离环境验证。通过后再由你决定是否合入。</p>
+        <label>
+          <input
+            type="checkbox"
+            checked={accepted}
+            onChange={(e) => setAccepted(e.target.checked)}
+          />
+          已核对来源环境，允许在隔离环境中检查和验证升级
+        </label>
         <p>
           {policy?.enabled
             ? `已启用，每 ${policy.hours} 小时；下次 ${policy.nextAt}`
@@ -426,7 +631,7 @@ export function ResearchPanel({
           disabled={busy || !accepted}
           onClick={() => void act({ action: 'upgrade-check', id })}
         >
-          现在检查并验证
+          检查插件更新并验证
         </button>
         <button
           className="wl-button"
@@ -448,9 +653,18 @@ export function ResearchPanel({
                   <p>
                     {p.name} {p.from} → {p.to} · 已通过验证
                   </p>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={promoteLab === p.labId}
+                      disabled={busy || !p.labId}
+                      onChange={(e) => setPromoteLab(e.target.checked ? p.labId : null)}
+                    />
+                    确认将 {p.name} {p.to} 合入来源环境，并重启验证
+                  </label>
                   <button
                     className="wl-button"
-                    disabled={busy || !accepted}
+                    disabled={busy || !p.labId || promoteLab !== p.labId}
                     onClick={() => void act({ action: 'promote', id: p.labId, restart: true })}
                   >
                     合入此升级并验证重启
@@ -460,8 +674,74 @@ export function ResearchPanel({
           </div>
         ))}
       </section>
+      {topic === 'updates' && (
+        <details className="wl-advanced">
+          <summary>验证指定 DSH 版本（高级）</summary>
+          <section className="wl-event-detail">
+            <h3>指定 DSH 版本兼容验证</h3>
+            <p>
+              用于计划更换 DSH
+              版本时，提前验证现有插件是否兼容。每个版本安装到独立目录，不直接升级当前 DSH。
+            </p>
+            <input
+              aria-label="精确宿主版本，以逗号分隔"
+              value={versions}
+              onChange={(e) => setVersions(e.target.value)}
+              placeholder="0.1.2-rc.1, …"
+            />
+            <button
+              className="wl-button"
+              disabled={busy || !accepted || !versions.split(',').some((version) => version.trim())}
+              onClick={() =>
+                void act({
+                  action: 'version-matrix',
+                  sourceId: id,
+                  versions: versions
+                    .split(',')
+                    .map((v) => v.trim())
+                    .filter(Boolean),
+                })
+              }
+            >
+              验证这些 DSH 版本
+            </button>
+          </section>
+          {topic === 'updates' && (
+            <>
+              {matrixError && <p className="wl-error">{matrixError}</p>}
+              {!matrixError && !matrixJobs.length && (
+                <p className="wl-muted">
+                  最近任务中暂无此环境的兼容验证记录。运行验证后，这里会显示版本矩阵。
+                </p>
+              )}
+              {matrixJobs.slice(0, 5).map((job) => (
+                <section className="wl-viz" key={job.id}>
+                  <small>{new Date(job.startedAt).toLocaleString()}</small>
+                  {(job.result as any)?.rows ? (
+                    <CompatibilityMatrix rows={(job.result as any).rows} />
+                  ) : (
+                    <p>{job.phase || '尚无矩阵结果'}</p>
+                  )}
+                  {job.error && <p className="wl-error">{job.error}</p>}
+                  <button className="wl-button" onClick={() => onJob(job.id)}>
+                    查看验证任务
+                  </button>
+                </section>
+              ))}
+            </>
+          )}
+        </details>
+      )}
       <section hidden={topic !== 'deployment'} className="wl-event-detail">
-        <h3>独立 A/B 部署与自动回退</h3>
+        <h3>独立部署与自动回退</h3>
+        <label>
+          <input
+            type="checkbox"
+            checked={accepted}
+            onChange={(e) => setAccepted(e.target.checked)}
+          />
+          已核对目标环境，允许下方明确选择的部署操作
+        </label>
         <p>
           从已通过浏览器验证的实验准备完整部署。外部启动器运行选中的部署；切换只改变部署指针。连续启动失败时回到之前的已验证部署，不依赖故障实例里的
           Web 面板。
@@ -516,6 +796,17 @@ export function ResearchPanel({
         >
           {deployment?.enabled ? '关闭自动回退' : '启用连续 3 次失败自动回退'}
         </button>
+        <details className="wl-advanced">
+          <summary>启动器的中断处理选项</summary>
+          <label>
+            <input
+              type="checkbox"
+              checked={breakStale}
+              onChange={(e) => setBreakStale(e.target.checked)}
+            />
+            允许清理已确认死亡进程的失效锁；活动进程仍受保护
+          </label>
+        </details>
         <button
           className="wl-button"
           disabled={busy || !accepted || !deployment?.active}

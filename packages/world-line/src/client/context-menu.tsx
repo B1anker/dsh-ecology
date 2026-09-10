@@ -1,6 +1,5 @@
 import { CaretLeft } from '@phosphor-icons/react/dist/csr/CaretLeft'
 import { CaretRight } from '@phosphor-icons/react/dist/csr/CaretRight'
-import { X } from '@phosphor-icons/react/dist/csr/X'
 import {
   type CSSProperties,
   type KeyboardEvent,
@@ -11,7 +10,15 @@ import {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { CloseButton } from './close-button.js'
+import {
+  menuFollowLastExit,
+  menuItemMotion,
+  menuMotion,
+  menuSwapExitDuration,
+} from './menu-motion.js'
 import { menuPosition } from './menu-position.js'
+import { useMenuEscape } from './menu-presence.js'
 
 export interface MenuAction {
   id: string
@@ -23,6 +30,116 @@ export interface MenuAction {
   run?(): void
   children?: MenuAction[]
 }
+function SubmenuTitle({ label }: { label: string }) {
+  const lastLabel = useRef(label)
+  const [outgoing, setOutgoing] = useState<string | null>(null)
+  useLayoutEffect(() => {
+    if (lastLabel.current === label) return
+    const previous = lastLabel.current
+    lastLabel.current = label
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setOutgoing(null)
+      return
+    }
+    setOutgoing(previous)
+    const timer = setTimeout(() => setOutgoing(null), menuMotion.chrome)
+    return () => clearTimeout(timer)
+  }, [label])
+  return (
+    <div className="wl-system-subheading wl-submenu-title">
+      {outgoing && (
+        <span key={`out-${outgoing}`} className="wl-submenu-title-out" aria-hidden="true">
+          {outgoing}
+        </span>
+      )}
+      <span key={label} className="wl-submenu-title-in">
+        {label}
+      </span>
+    </div>
+  )
+}
+
+function SubmenuItems({
+  group,
+  render,
+}: {
+  group: MenuAction
+  render(actions: MenuAction[], submenu: boolean, outgoing?: boolean): ReactNode
+}) {
+  const previous = useRef(group)
+  const [outgoing, setOutgoing] = useState<MenuAction | null>(null)
+  const incoming = useRef<HTMLDivElement>(null)
+  const outgoingList = useRef<HTMLDivElement>(null)
+  const [outgoingHeight, setOutgoingHeight] = useState(0)
+  const [entranceStyle, setEntranceStyle] = useState<CSSProperties>()
+  const [height, setHeight] = useState<number>()
+  useLayoutEffect(() => {
+    if (previous.current.id === group.id) {
+      previous.current = group
+      return
+    }
+    const old = previous.current
+    previous.current = group
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    setOutgoing(old)
+    setEntranceStyle(menuFollowLastExit(old.children?.length ?? 0))
+    // Keep the old tail mounted until its exit finishes, overlapping the incoming stack.
+    const timer = setTimeout(
+      () => setOutgoing(null),
+      menuSwapExitDuration(old.children?.length ?? 0),
+    )
+    return () => clearTimeout(timer)
+  }, [group.id])
+  useLayoutEffect(() => {
+    const element = incoming.current
+    if (!element) return
+    const measure = () => setHeight(element.offsetHeight)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [group.id])
+  useLayoutEffect(() => {
+    const list = outgoingList.current
+    if (!list) return
+    setOutgoingHeight(list.offsetHeight)
+    // Every row must travel past the shared list's top, including the last row.
+    for (const item of Array.from(list.querySelectorAll<HTMLElement>('.wl-system-item'))) {
+      item.style.setProperty('--wl-swap-offset', `${-(item.offsetTop + item.offsetHeight + 8)}px`)
+    }
+  }, [outgoing])
+  return (
+    <div
+      className="wl-submenu-items"
+      style={{ height: outgoing ? Math.max(height ?? 0, outgoingHeight) : height }}
+    >
+      {outgoing && (
+        <div
+          key={`out-${outgoing.id}`}
+          className="wl-system-items wl-submenu-items-out"
+          ref={(element) => {
+            outgoingList.current = element
+            element?.setAttribute('inert', '')
+          }}
+          inert
+          aria-hidden="true"
+        >
+          {render(outgoing.children ?? [], true, true)}
+        </div>
+      )}
+      <div
+        ref={incoming}
+        key={group.id}
+        className="wl-system-items wl-submenu-items-in"
+        style={entranceStyle}
+        data-follow-exit={!!entranceStyle}
+      >
+        {render(group.children ?? [], true)}
+      </div>
+    </div>
+  )
+}
+
 export function ContextMenu({
   x,
   y,
@@ -32,6 +149,7 @@ export function ContextMenu({
   items,
   host,
   close,
+  closing = false,
 }: {
   x: number
   y: number
@@ -41,7 +159,9 @@ export function ContextMenu({
   items: MenuAction[]
   host: HTMLElement
   close(): void
+  closing?: boolean
 }) {
+  useMenuEscape(close)
   const root = useRef<HTMLDivElement>(null)
   const main = useRef<HTMLDivElement>(null)
   const child = useRef<HTMLDivElement>(null)
@@ -82,6 +202,13 @@ export function ContextMenu({
   }, [x, y, host, compact, group])
   useLayoutEffect(() => {
     if (!selectedGroup || compact || !parent.current || !child.current) return
+    let itemTop = 0
+    for (
+      let item = child.current.querySelector<HTMLElement>('[role=menuitem]');
+      item && item !== child.current;
+      item = item.offsetParent as HTMLElement | null
+    )
+      itemTop += item.offsetTop
     const result = menuPosition(
       {
         left:
@@ -93,7 +220,7 @@ export function ContextMenu({
           main.current!.getBoundingClientRect().top +
           parent.current.offsetTop -
           main.current!.scrollTop -
-          (child.current.querySelector<HTMLElement>('[role=menuitem]')?.offsetTop ?? 0),
+          itemTop,
       },
       child.current.getBoundingClientRect(),
       limits(),
@@ -108,6 +235,7 @@ export function ContextMenu({
       ?.querySelector<HTMLElement>('[role=menuitem]:not(:disabled)')
       ?.focus({ preventScroll: true })
     const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('[data-wl-menu-toggle]')) return
       if (!root.current?.contains(event.target as Node)) closeRef.current()
     }
     const resize = () => closeRef.current()
@@ -170,22 +298,18 @@ export function ContextMenu({
       ]?.focus()
     }
   }
-  const buttons = (actions: MenuAction[], submenu = false) =>
+  const buttons = (actions: MenuAction[], submenu = false, outgoing = false) =>
     actions.map((item, index) => (
       <button
         type="button"
-        role="menuitem"
+        role={outgoing ? undefined : 'menuitem'}
+        tabIndex={outgoing ? -1 : undefined}
         key={item.id}
         disabled={item.disabled}
         title={item.hint}
         data-action={item.id}
         className="wl-system-item"
-        style={
-          {
-            '--wl-item-index': index,
-            '--wl-stack-offset': `${(actions.length - index) * 42}px`,
-          } as CSSProperties
-        }
+        style={menuItemMotion(index, actions.length)}
         data-danger={!!item.danger}
         aria-haspopup={item.children ? 'menu' : undefined}
         aria-expanded={item.children ? group === item.id : undefined}
@@ -226,18 +350,22 @@ export function ContextMenu({
           {item.icon}
         </span>
         <CaretLeft size={12} weight="fill" className="wl-system-pointer" aria-hidden="true" />
-        <span className="wl-system-label">{item.label}</span>
-        {item.children && (
-          <span className="wl-system-chevron" aria-hidden="true">
-            <CaretRight size={13} />
-          </span>
-        )}
+        <span className={`wl-system-body${submenu ? ' wl-system-body-sub' : ''}`}>
+          <span className="wl-system-label">{item.label}</span>
+          {item.children && (
+            <span className="wl-system-chevron" aria-hidden="true">
+              <CaretRight size={13} />
+            </span>
+          )}
+        </span>
       </button>
     ))
   const drill = compact && selectedGroup
   return createPortal(
     <div
       className="wl-menu-layer"
+      data-closing={closing}
+      inert={closing}
       ref={root}
       onContextMenu={(event) => {
         event.preventDefault()
@@ -261,14 +389,7 @@ export function ContextMenu({
             <time>{subtitle}</time>
             <small>{status}</small>
           </div>
-          <button
-            type="button"
-            className="wl-system-close"
-            aria-label="关闭时间点菜单"
-            onClick={close}
-          >
-            <X size={14} />
-          </button>
+          <CloseButton className="wl-system-close" aria-label="关闭时间点菜单" onClick={close} />
         </div>
         <div className="wl-system-items" key={drill ? selectedGroup.id : 'root'}>
           {drill ? (
@@ -296,7 +417,6 @@ export function ContextMenu({
       </div>
       {selectedGroup && !compact && (
         <div
-          key={selectedGroup.id}
           ref={child}
           className="wl-system-menu wl-system-submenu"
           role="menu"
@@ -305,8 +425,8 @@ export function ContextMenu({
           style={subPlacement}
           onKeyDown={(event) => keyboard(event, true)}
         >
-          <div className="wl-system-subheading">{selectedGroup.label}</div>
-          <div className="wl-system-items">{buttons(selectedGroup.children ?? [], true)}</div>
+          <SubmenuTitle label={selectedGroup.label} />
+          <SubmenuItems group={selectedGroup} render={buttons} />
         </div>
       )}
     </div>,

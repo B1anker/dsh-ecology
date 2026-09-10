@@ -78,6 +78,13 @@ export interface JobHandle {
   setTransactionId(id: string): void
 }
 export type JobRunner = (job: JobHandle) => Promise<unknown>
+/** Runner option callbacks bound to the job handle. */
+export interface JobHooks {
+  onProbe(probe: ProbeResult): void
+  onPhase(phase: string): void
+  onLabCreated(id: string): void
+  onTransaction(id: string): void
+}
 const jobs = new Map<string, Job>()
 const scopes = new Map<string, JobScope>()
 const pending = new Map<string, JobRunner>()
@@ -257,6 +264,27 @@ export function startJob(kind: JobKind, runner: JobRunner, labId?: string, scope
   pending.set(job.id, runner)
   dispatch()
   return job
+}
+/** startJob with the caller's home/profile scope and the standard handle wiring pre-bound. */
+export function startScopedJob(
+  scope: Pick<JobScope, 'home' | 'profileName'>,
+  resource: string,
+  kind: JobKind,
+  run: (handle: JobHandle, hooks: JobHooks) => Promise<unknown>,
+  labId?: string,
+): Job {
+  return startJob(
+    kind,
+    (handle) =>
+      run(handle, {
+        onProbe: (probe) => handle.pushProbe(probe),
+        onPhase: (phase) => handle.setPhase(phase),
+        onLabCreated: (id) => handle.setLabId(id),
+        onTransaction: (id) => handle.setTransactionId(id),
+      }),
+    labId,
+    { home: scope.home, profileName: scope.profileName, resource },
+  )
 }
 export function getJob(
   id: string,

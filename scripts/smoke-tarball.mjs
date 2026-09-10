@@ -112,7 +112,7 @@ const PACKAGES = {
       const expectedInject = {
         'web-runtime': ['webStartup', 'dshWebLoginReady'],
         connection: ['webRuntime', 'dshWebLoginReady'],
-        modules: ['dshWebLoginReady'],
+        modules: ['webServer', 'dshWebLoginReady'],
         'client-hmr': ['dshWebLoginReady'],
       }
       for (const [id, expected] of Object.entries(expectedInject)) {

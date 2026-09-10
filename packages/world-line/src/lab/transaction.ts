@@ -132,14 +132,15 @@ export async function readTransaction(home: string, id: string): Promise<Promoti
   return record
 }
 export async function listTransactions(home: string): Promise<PromotionTransaction[]> {
+  const dir = join(worldLineDir(home), 'transactions')
   let entries: string[]
   try {
-    entries = await readdir(join(worldLineDir(home), 'transactions'))
+    entries = await readdir(dir)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
   }
-  const rootStat = await lstat(join(worldLineDir(home), 'transactions'))
+  const rootStat = await lstat(dir)
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink())
     throw new Error('invalid transaction root')
   const records: PromotionTransaction[] = []

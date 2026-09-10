@@ -1,34 +1,13 @@
 import type { WorldEvent } from '../domain/insight-types.js'
+import type { WorldLineInfo } from '../web/types.js'
+import { lineStateText } from './status-text.js'
 
-export interface Line {
-  id: string
-  initialization?: 'clean'
-  completedAt?: string
-  alias?: string
-  parentId?: string
-  snapshotId?: string
+// forkedAt 由后端在 lines 响应上动态附加（web/index.ts），WorldLineInfo 未声明。
+export interface Line extends WorldLineInfo {
   forkedAt?: string
-  createdAt: string
-  kind: string
-  state: string
-  verdict: string | null
-  port?: number
-  isDefault: boolean
 }
 export const label = (line: Line) => line.alias ?? `wl-${line.id.slice(-8)}`
-export const stateLabel = (state: string) =>
-  ({
-    running: '运行中',
-    stopped: '已停止',
-    failed: '失败',
-    passed: '验证已完成',
-    incomplete: '验证未完成',
-    review: '异常待确认',
-    awaiting_auth: '等待登录',
-    applying: '准备中',
-    created: '已创建',
-    unreachable: '连接失效',
-  })[state] ?? state
+export const stateLabel = lineStateText
 export const TRACK_LEFT = 48
 export const TRACK_END = 820
 export const ROW_HEIGHT = 90
@@ -96,8 +75,7 @@ export function timelineScale(
   const mapped = segments.map((segment) => {
     const left = offset
     const width = (segment.weight / total) * (TRACK_END - TRACK_LEFT)
-    const expanded =
-      focus.length > 0 && segment.to >= Math.min(...focus) && segment.from <= Math.max(...focus)
+    const expanded = focus.some((at) => at === segment.from || at === segment.to)
     offset += expanded ? Math.max(56, width) : width
     return { ...segment, left, right: offset }
   })
@@ -145,6 +123,11 @@ export function adjacentEvent(events: WorldEvent[], at: number, direction: -1 | 
     ? ordered.findLast((event) => Date.parse(event.at) < at)
     : ordered.find((event) => Date.parse(event.at) > at)
 }
+/** Ignore small zoom fluctuations so clusters do not chatter during a pinch. */
+export function clusterZoom(previous: number, next: number) {
+  return Math.abs(Math.log(next / previous)) >= Math.log(1.1) ? next : previous
+}
+
 export function eventMarkers(
   events: WorldEvent[],
   line: Line,
@@ -152,9 +135,12 @@ export function eventMarkers(
   end: number,
   toX = (at: number) => timeX(at, start, end),
   expandedIds: string[] = [],
+  zoom = 1,
 ) {
   const markers: { x: number; events: WorldEvent[] }[] = []
   const born = toX(Date.parse(line.createdAt))
+  // 24 flow-unit node diameter plus breathing room, with a 40px screen floor.
+  const minimumGap = Math.max(32, 40 / Math.max(0.25, zoom))
   for (const event of events
     .filter(
       (item) =>
@@ -171,14 +157,8 @@ export function eventMarkers(
     .toSorted((a, b) => a.at.localeCompare(b.at))) {
     const x = toX(Date.parse(event.at)) - born
     const last = markers.at(-1)
-    const expanded = expandedIds.includes(event.id)
-    const previousExpanded = last?.events.some((item) => expandedIds.includes(item.id))
-    if (last && x - last.x < 20 && !expanded && !previousExpanded) last.events.push(event)
-    else
-      markers.push({
-        x: last && (expanded || previousExpanded) ? Math.max(x, last.x + 36) : x,
-        events: [event],
-      })
+    if (last && x - last.x < minimumGap) last.events.push(event)
+    else markers.push({ x, events: [event] })
   }
   return markers
 }
@@ -216,12 +196,24 @@ export function lineColor(id: string) {
   return linePalette[hash % linePalette.length]!
 }
 
-/** Leave the source marker's right edge and enter the merge node from below.
- * Keep control points inside the horizontal span; never bulge past the target.
- */
+/** Leave the source's right edge horizontally and enter the target vertically. */
 export function mergeConnectionPath(fromX: number, fromY: number, nodeX: number, nodeY: number) {
-  const endY = nodeY + 18
-  const bend = Math.max(20, Math.abs(fromY - endY) / 3)
-  const departure = Math.min(18, Math.max(0, nodeX - fromX) / 2)
-  return `M ${fromX} ${fromY} C ${fromX + departure} ${fromY}, ${nodeX} ${endY + bend}, ${nodeX} ${endY}`
+  const direction = nodeY < fromY ? -1 : 1
+  const startX = fromX + 14
+  const departureX = startX + 8
+  const span = nodeX - startX
+  const endY = nodeY - direction * 16
+  const rise = Math.abs(endY - fromY)
+  if (span > 8 && rise > 0) {
+    // Keep the long lead on the source rail, then use a broad quarter ellipse.
+    // Its horizontal departure and vertical arrival stay smooth at any span.
+    const radiusX = Math.min(span - 8, rise * 1.6)
+    const turnX = nodeX - radiusX
+    return `M ${startX} ${fromY} L ${turnX} ${fromY} A ${radiusX} ${rise} 0 0 ${direction < 0 ? 0 : 1} ${nodeX} ${endY}`
+  }
+  const stem = Math.min(12, Math.abs(endY - fromY) / 4)
+  const arrivalY = endY - direction * stem
+  const middleY = (fromY + endY) / 2
+  const bend = Math.max(16, Math.min(48, Math.abs(nodeX - startX) / 2))
+  return `M ${startX} ${fromY} L ${departureX} ${fromY} C ${departureX + bend} ${fromY}, ${nodeX} ${middleY}, ${nodeX} ${arrivalY} L ${nodeX} ${endY}`
 }

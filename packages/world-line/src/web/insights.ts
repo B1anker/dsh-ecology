@@ -8,7 +8,7 @@ import { analyzeProfile, buildManifest, type SnapshotManifest } from '../domain/
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
 import { resolveLabId } from '../lab/aliases.js'
 import { labHomeDir } from '../lab/layout.js'
-import { readLabManifest } from '../lab/manifest.js'
+import { type LabManifest, readLabManifest } from '../lab/manifest.js'
 import { listSnapshotManifests, readSnapshotManifest } from '../vault/manifests.js'
 
 export async function lineContext(ctx: CliContext, id: string): Promise<CliContext> {
@@ -19,6 +19,13 @@ export async function lineContext(ctx: CliContext, id: string): Promise<CliConte
     throw new UsageError('世界线不属于当前 profile')
   if (manifest.state === 'applying') throw new UsageError('世界线正在准备，请完成后重试')
   return { ...ctx, home: labHomeDir(ctx.home, resolved) }
+}
+export function assertOwnsLine(
+  manifest: LabManifest,
+  ctx: CliContext,
+  message = '世界线不属于当前 profile',
+): void {
+  if (manifest.source.profileName !== ctx.profileName) throw new UsageError(message)
 }
 export function snapshotRestorable(manifest: SnapshotManifest) {
   return (

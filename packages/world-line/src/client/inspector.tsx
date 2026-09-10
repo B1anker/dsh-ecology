@@ -5,8 +5,9 @@ import { CircleNotch } from '@phosphor-icons/react/dist/csr/CircleNotch'
 import { FileText } from '@phosphor-icons/react/dist/csr/FileText'
 import { GitBranch } from '@phosphor-icons/react/dist/csr/GitBranch'
 import { UploadSimple } from '@phosphor-icons/react/dist/csr/UploadSimple'
-import { useEffect, useState } from 'react'
 import type { SnapshotDetail, WorldComparison, WorldEvent } from '../domain/insight-types.js'
+import type { ApiFn } from './api-types.js'
+import { useApiQuery } from './async.js'
 import { Panel } from './panel.js'
 import { ChangeSummary, VersionPair } from './result-visuals.js'
 import { Select } from './select.js'
@@ -46,53 +47,30 @@ export function Inspector({
   onReport(id: string): void
   onRestore(id: string, snapshotId: string): void
   close(): void
-  api(body: unknown, signal?: AbortSignal): Promise<any>
+  api: ApiFn
   busy: boolean
 }) {
-  const [result, setResult] = useState<WorldComparison | null>(null)
-  const [detail, setDetail] = useState<SnapshotDetail | null>(null)
-  const [loading, setLoading] = useState(false),
-    [error, setError] = useState(''),
-    [revision, setRevision] = useState(0)
   const event =
     state.type === 'history' ? events.find((item) => item.id === state.eventId) : undefined
   const snapshotId = event?.snapshotId
   const id = state.type === 'history' ? state.id : ''
   const from = comparisonIds[0] ?? '',
     to = comparisonIds[1] ?? ''
-  useEffect(() => {
-    const controller = new AbortController()
-    setResult(null)
-    setDetail(null)
-    setError('')
-    setLoading(false)
-    const body =
-      state.type === 'compare'
-        ? from && to && from !== to
-          ? { action: 'compare', from, to }
-          : null
-        : snapshotId
-          ? { action: 'snapshot-detail', id, snapshotId }
-          : null
-    if (body) {
-      setLoading(true)
-      void api(body, controller.signal)
-        .then((value) => {
-          if (!controller.signal.aborted) {
-            if (body.action === 'compare') setResult(value)
-            else setDetail(value)
-          }
-          return undefined
-        })
-        .catch((e) => {
-          if (!controller.signal.aborted) setError(e instanceof Error ? e.message : '读取失败')
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setLoading(false)
-        })
-    }
-    return () => controller.abort()
-  }, [state.type, id, snapshotId, from, to, revision, api])
+  const body =
+    state.type === 'compare'
+      ? from && to && from !== to
+        ? { action: 'compare', from, to }
+        : null
+      : snapshotId
+        ? { action: 'snapshot-detail', id, snapshotId }
+        : null
+  const { data, error, loading, reload } = useApiQuery<WorldComparison | SnapshotDetail>(
+    api,
+    body,
+    [state.type, id, snapshotId, from, to],
+  )
+  const result = state.type === 'compare' ? (data as WorldComparison | null) : null
+  const detail = state.type === 'history' ? (data as SnapshotDetail | null) : null
   const line = lines.find((item) => item.id === id)
   const history = events
     .filter(
@@ -154,11 +132,7 @@ export function Inspector({
             </button>
           </div>
           <div className="wl-toolbar">
-            <button
-              className="wl-button"
-              disabled={!from || !to || loading}
-              onClick={() => setRevision((v) => v + 1)}
-            >
+            <button className="wl-button" disabled={!from || !to || loading} onClick={reload}>
               重新比较
             </button>
           </div>
@@ -366,7 +340,7 @@ export function Inspector({
       {error && (
         <div className="wl-error" role="alert">
           <p>{error}</p>
-          <button className="wl-button" onClick={() => setRevision((v) => v + 1)}>
+          <button className="wl-button" onClick={reload}>
             重试
           </button>
         </div>

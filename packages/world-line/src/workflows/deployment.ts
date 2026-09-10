@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readdir, readFile, readlink, rename, rm, symlink } from 'node:fs/promises'
+import { mkdir, readFile, readlink, rename, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dump, load } from 'js-yaml'
 import type { CliContext } from '../context.js'
@@ -9,6 +9,7 @@ import { writeFileAtomic } from '../fs/atomic.js'
 import { cloneTree } from '../fs/clone.js'
 import { sha256Hex } from '../fs/hash.js'
 import { withOperations } from '../fs/operation.js'
+import { readdirIfExists, readJsonIfExists, readTextIfExists } from '../fs/read-json.js'
 import { dshBootArgs, dshDumpArgs } from '../host-adapters/dsh-0.1.x.js'
 import { runClientProbe } from '../lab/browser.js'
 import { withPackageCache } from '../lab/cache-maintenance.js'
@@ -42,27 +43,21 @@ export interface DeploymentState {
   lastRollback?: { from: string; to: string; reason: string; at: string }
 }
 async function state(ctx: CliContext): Promise<DeploymentState> {
-  return readFile(join(deploymentRoot(ctx), 'state.json'), 'utf8')
-    .then((text) => {
-      const s = JSON.parse(text)
-      if (s.version !== 1 || s.profile !== ctx.profileName) throw new UsageError('部署状态损坏')
-      return s
-    })
-    .catch((e) => {
-      if (e.code === 'ENOENT')
-        return {
-          version: 1,
-          profile: ctx.profileName,
-          stable: null,
-          previous: null,
-          failures: 0,
-          threshold: 3,
-          enabled: false,
-          notice: '尚未启用独立 A/B 启动器',
-          updatedAt: ctx.now().toISOString(),
-        }
-      throw e
-    })
+  const s = await readJsonIfExists<DeploymentState>(join(deploymentRoot(ctx), 'state.json'))
+  if (s === undefined)
+    return {
+      version: 1,
+      profile: ctx.profileName,
+      stable: null,
+      previous: null,
+      failures: 0,
+      threshold: 3,
+      enabled: false,
+      notice: '尚未启用独立 A/B 启动器',
+      updatedAt: ctx.now().toISOString(),
+    }
+  if (s.version !== 1 || s.profile !== ctx.profileName) throw new UsageError('部署状态损坏')
+  return s
 }
 async function save(ctx: CliContext, s: DeploymentState) {
   s.updatedAt = ctx.now().toISOString()
@@ -103,10 +98,7 @@ async function point(ctx: CliContext, id: string) {
 export async function deploymentStatus(ctx: CliContext) {
   const root = deploymentRoot(ctx),
     s = await state(ctx),
-    names = await readdir(root).catch((e) => {
-      if (e.code === 'ENOENT') return []
-      throw e
-    })
+    names = await readdirIfExists(root)
   const slots = []
   for (const id of names.filter((n) => slotPattern.test(n))) {
     try {
@@ -222,11 +214,8 @@ async function stageDeploymentInternal(ctx: CliContext, labId: string) {
       )
       for (const relative of ['cordis.patch.yml', `profiles/${ctx.profileName}/cordis.patch.yml`]) {
         const path = join(home, relative),
-          text = await readFile(path, 'utf8').catch((e) => {
-            if (e.code === 'ENOENT') return null
-            throw e
-          })
-        if (text !== null)
+          text = await readTextIfExists(path)
+        if (text !== undefined)
           await writeFileAtomic(path, dump(rebaseHomePaths(load(text), source, home)))
       }
       const dir = join(home, 'profiles', ctx.profileName),

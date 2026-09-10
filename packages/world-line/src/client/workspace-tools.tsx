@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReportResult } from '../commands/report.js'
 import type { WorldEvent } from '../domain/insight-types.js'
+import type { ApiFn } from './api-types.js'
+import { errorMessage, useApiQuery } from './async.js'
+import { ErrorText } from './error-text.js'
 import { HudSelect } from './hud-controls.js'
 import { useJobFeed } from './job-feed.js'
 import { type Job, jobKindLabel } from './job-view.js'
@@ -11,13 +14,15 @@ import { RecoveryPanel } from './recovery-panel.js'
 import { ReportView } from './report-view.js'
 import { ResearchPanel } from './research-panel.js'
 import { ChangeSummary, VersionPair } from './result-visuals.js'
+import { jobStatusText } from './status-text.js'
 import { StoragePanel } from './storage-panel.js'
 import { type Line, label } from './timeline-model.js'
+import { jobResearchTopic, researchGoals } from './workflow-navigation.js'
 
-type Api = (body: unknown, signal?: AbortSignal) => Promise<any>
 export function WorkspaceTools({
   panel,
   lines,
+  events,
   api,
   close,
   navigate,
@@ -27,7 +32,8 @@ export function WorkspaceTools({
 }: {
   panel: ToolPanel
   lines: Line[]
-  api: Api
+  events: WorldEvent[]
+  api: ApiFn
   close(): void
   navigate(panel: ToolPanel): void
   onJob(id: string): void
@@ -40,8 +46,7 @@ export function WorkspaceTools({
     ...jobs,
     ...olderJobs.filter((job) => !jobs.some((current) => current.id === job.id)),
   ]
-  const [data, setData] = useState<any>(null),
-    [error, setError] = useState(''),
+  const [actionError, setError] = useState(''),
     [busy, setBusy] = useState(false)
   const [candidate, setCandidate] = useState<{
     action: string
@@ -52,6 +57,35 @@ export function WorkspaceTools({
     [from, setFrom] = useState(''),
     [to, setTo] = useState('current')
   const [diff, setDiff] = useState<any>(null)
+  const panelScope = JSON.stringify([panel.section, panel.id, panel.lineId, panel.researchTopic])
+  const actionScope = JSON.stringify([panelScope, candidate?.action, candidate?.name])
+  const lifecycle = useRef({
+    mounted: false,
+    scope: actionScope,
+    version: 0,
+  })
+  const operationVersion = useRef(0)
+  if (lifecycle.current.scope !== actionScope) {
+    lifecycle.current.scope = actionScope
+    lifecycle.current.version += 1
+  }
+  useLayoutEffect(() => {
+    lifecycle.current.mounted = true
+    return () => {
+      lifecycle.current.mounted = false
+      lifecycle.current.version += 1
+    }
+  }, [])
+  useEffect(() => setBusy(false), [actionScope])
+  const currentScope = () => {
+    const version = lifecycle.current.version
+    return () => lifecycle.current.mounted && lifecycle.current.version === version
+  }
+  const beginOperation = () => {
+    const inScope = currentScope()
+    const version = ++operationVersion.current
+    return () => inScope() && operationVersion.current === version
+  }
   const source = lines.find((l) => l.id === panel.id)
   const workflowSource =
     source?.kind === 'verification'
@@ -66,64 +100,58 @@ export function WorkspaceTools({
     report: '诊断报告',
     tasks: '任务台',
     storage: '存储',
-    recovery: '中断恢复',
-    research: '环境排障与交付',
+    recovery: '修复未完成的操作',
+    research: researchGoals[panel.researchTopic ?? 'diagnose'].title,
   }[panel.section]
   useEffect(() => {
-    setData(null)
-    setError('')
     setCandidate(null)
     setDiff(null)
-    const c = new AbortController()
-    const action =
-      panel.section === 'composition'
-        ? 'composition'
-        : panel.section === 'compare'
-          ? source?.kind === 'verification'
-            ? 'lab-diff'
-            : 'snapshot-list'
-          : panel.section === 'report'
-            ? 'report'
-            : null
-    if (action)
-      void api(
-        {
-          action,
-          id: panel.id,
-          ...(action === 'report' && panel.lineId ? { lineId: panel.lineId } : {}),
-        },
-        c.signal,
-      )
-        .then((x) => {
-          if (!c.signal.aborted) {
-            if (action === 'lab-diff') setDiff(x)
-            else {
-              setData(x)
-              if (action === 'snapshot-list') {
-                const latest = (x as WorldEvent[])
-                  .filter((event) => event.snapshotId)
-                  .toSorted((a, b) => b.at.localeCompare(a.at))[0]
-                setFrom(latest?.snapshotId ?? '')
-                setTo('current')
-              }
+    setError('')
+  }, [panelScope, api, source?.kind])
+  const { data, error: loadError } = useApiQuery<any>(
+    api,
+    panel.section === 'composition'
+      ? { action: 'composition', id: panel.id }
+      : panel.section === 'compare'
+        ? source?.kind === 'verification'
+          ? { action: 'lab-diff', id: panel.id }
+          : { action: 'snapshot-list', id: panel.id }
+        : panel.section === 'report'
+          ? {
+              action: 'report',
+              id: panel.id,
+              ...(panel.lineId ? { lineId: panel.lineId } : {}),
             }
-          }
-        })
-        .catch((e) => {
-          if (!c.signal.aborted) setError(e.message)
-        })
-    return () => c.abort()
-  }, [panel.id, panel.section, api])
+          : null,
+    [panelScope, source?.kind],
+    {
+      fallback: '读取失败',
+      onSuccess: (x) => {
+        if (panel.section !== 'compare') return
+        if (source?.kind === 'verification') {
+          setDiff(x)
+        } else {
+          const latest = (x as WorldEvent[])
+            .filter((event) => event.snapshotId)
+            .toSorted((a, b) => b.at.localeCompare(a.at))[0]
+          setFrom(latest?.snapshotId ?? '')
+          setTo('current')
+        }
+      },
+    },
+  )
+  const error = actionError || loadError
   const run = async (body: unknown) => {
+    const current = beginOperation()
     setBusy(true)
     setError('')
     try {
       const r = await api(body)
-      onJob(r.jobId)
+      if (current()) onJob(r.jobId)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '操作失败')
+      if (current()) setError(errorMessage(e, '操作失败'))
     } finally {
-      setBusy(false)
+      if (current()) setBusy(false)
     }
   }
   const ref = (id: string) => ({
@@ -185,42 +213,27 @@ export function WorkspaceTools({
         ) : undefined
       }
     >
-      <p>环境：{source ? label(source) : panel.id}</p>
-      {error && (
-        <p className="wl-error" role="alert">
-          {error}
-        </p>
+      {panel.section === 'tasks' ? (
+        <p className="wl-muted">全部环境的任务 · 每条记录标明操作对象</p>
+      ) : panel.section === 'research' && panel.researchTopic === 'deployment' ? (
+        <p className="wl-muted">当前 profile 的外部部署 · 切换影响外部启动器运行的版本</p>
+      ) : (
+        <p>环境：{source ? label(source) : panel.id === 'origin' ? 'main' : panel.id}</p>
       )}
-      <div
-        className="wl-flow-actions-row"
-        hidden={
-          panel.section === 'research' ||
-          panel.section === 'recovery' ||
-          panel.section === 'composition' ||
-          panel.section === 'compare'
-        }
-      >
-        <button
-          className="wl-button"
-          onClick={() =>
-            navigate({
-              section: 'recovery',
-              id: workflowSource,
-            })
-          }
-        >
-          中断恢复
-        </button>
-        <button
-          className="wl-button"
-          onClick={() => navigate({ section: 'research', id: workflowSource })}
-        >
-          排障与交付
-        </button>
-      </div>
-      {panel.section === 'research' && <ResearchPanel id={panel.id} api={api} onJob={onJob} />}
+      {error && <ErrorText message={error} />}
+      {panel.section === 'research' && (
+        <ResearchPanel
+          key={`${panel.id}:${panel.researchTopic ?? 'diagnose'}`}
+          events={events}
+          initialTopic={panel.researchTopic ?? 'diagnose'}
+          id={panel.id}
+          api={api}
+          onJob={onJob}
+        />
+      )}
       {panel.section === 'recovery' && (
         <RecoveryPanel
+          key={panel.id}
           id={panel.id}
           api={api}
           onVerify={(id) => void run({ action: 'lab-verify', id })}
@@ -244,9 +257,11 @@ export function WorkspaceTools({
           <button
             className="wl-button"
             onClick={async () => {
+              const current = currentScope()
               if ('Notification' in window) {
                 const permission = await Notification.requestPermission()
-                setError(permission === 'denied' ? '浏览器未允许通知，仍会显示站内提醒。' : '')
+                if (current())
+                  setError(permission === 'denied' ? '浏览器未允许通知，仍会显示站内提醒。' : '')
                 localStorage.setItem(
                   'wl-task-notifications',
                   permission === 'granted' ? 'on' : 'off',
@@ -259,41 +274,53 @@ export function WorkspaceTools({
           {allJobs.map((job) => (
             <article className="wl-event-detail wl-task-card" data-status={job.status} key={job.id}>
               <strong>{jobKindLabel(job.kind)}</strong>
-              <span className="wl-task-state">
-                {
-                  {
-                    queued: '排队中',
-                    awaiting_auth: '等待登录',
-                    review: '异常待确认',
-                    incomplete: '验证未完成',
-                    running: '运行中',
-                    ok: '已完成',
-                    fail: '验证失败',
-                    error: '异常',
-                    interrupted: '已中断',
-                  }[job.status]
-                }
-              </span>
+              <span className="wl-task-state">{jobStatusText(job.status)}</span>
+              <small className="wl-task-source">
+                环境：{(() => {
+                  const id = job.resource ?? job.labId
+                  const line = lines.find((item) => item.id === id)
+                  return line ? label(line) : id === 'origin' ? 'main' : (id ?? '未记录')
+                })()}
+              </small>
               <time dateTime={job.startedAt}>{new Date(job.startedAt).toLocaleString()}</time>
               {job.error && <p className="wl-error">{job.error}</p>}
               <button className="wl-button" onClick={() => onJob(job.id)}>
                 查看进度与结果
               </button>
-              {job.labId && (
-                <button
-                  className="wl-button"
-                  onClick={() => navigate({ section: 'report', id: job.labId! })}
-                >
-                  诊断报告
-                </button>
-              )}
-              {job.labId && (
-                <button
-                  className="wl-button"
-                  onClick={() => navigate({ section: 'compare', id: job.labId! })}
-                >
-                  查看实验差异
-                </button>
+              {(job.labId || jobResearchTopic(job.kind)) && (
+                <details className="wl-task-details">
+                  <summary>报告与相关记录</summary>
+                  {jobResearchTopic(job.kind) && (
+                    <button
+                      className="wl-button"
+                      onClick={() =>
+                        navigate({
+                          section: 'research',
+                          id: job.resource ?? 'origin',
+                          researchTopic: jobResearchTopic(job.kind),
+                        })
+                      }
+                    >
+                      查看{researchGoals[jobResearchTopic(job.kind)!].title}记录
+                    </button>
+                  )}
+                  {job.labId && (
+                    <>
+                      <button
+                        className="wl-button"
+                        onClick={() => navigate({ section: 'report', id: job.labId! })}
+                      >
+                        验证报告
+                      </button>
+                      <button
+                        className="wl-button"
+                        onClick={() => navigate({ section: 'compare', id: job.labId! })}
+                      >
+                        实验与来源的差异
+                      </button>
+                    </>
+                  )}
+                </details>
               )}
             </article>
           ))}
@@ -302,18 +329,20 @@ export function WorkspaceTools({
               className="wl-button"
               disabled={busy}
               onClick={async () => {
+                const current = beginOperation()
                 setBusy(true)
                 try {
                   const more = await api({
                     action: 'jobs',
                     before: allJobs.at(-1)?.id,
                   })
+                  if (!current()) return
                   setOlderJobs((previous) => [...previous, ...more])
                   if (!more.length) setError('已显示全部保留任务')
                 } catch (e) {
-                  setError(String(e))
+                  if (current()) setError(String(e))
                 } finally {
-                  setBusy(false)
+                  if (current()) setBusy(false)
                 }
               }}
             >
@@ -409,7 +438,7 @@ export function WorkspaceTools({
                 className="wl-button"
                 onClick={() => navigate({ section: 'recovery', id: workflowSource })}
               >
-                中断恢复
+                修复未完成的操作
               </button>
               <button
                 className="wl-button"
@@ -484,8 +513,11 @@ export function WorkspaceTools({
                     aria-label={side.name}
                     value={side.value}
                     onChange={(e) => {
+                      operationVersion.current += 1
                       side.set(e.target.value)
                       setDiff(null)
+                      setError('')
+                      setBusy(false)
                     }}
                   >
                     <option value="">请选择</option>
@@ -502,20 +534,20 @@ export function WorkspaceTools({
                 className="wl-button"
                 disabled={busy || !from || !to || from === to}
                 onClick={async () => {
+                  const current = beginOperation()
                   setBusy(true)
                   setError('')
                   try {
-                    setDiff(
-                      await api({
-                        action: 'snapshot-compare',
-                        from: ref(from),
-                        to: ref(to),
-                      }),
-                    )
+                    const result = await api({
+                      action: 'snapshot-compare',
+                      from: ref(from),
+                      to: ref(to),
+                    })
+                    if (current()) setDiff(result)
                   } catch (e) {
-                    setError(String(e))
+                    if (current()) setError(String(e))
                   } finally {
-                    setBusy(false)
+                    if (current()) setBusy(false)
                   }
                 }}
               >

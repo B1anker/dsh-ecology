@@ -1,6 +1,6 @@
 import { ListChecks } from '@phosphor-icons/react/dist/csr/ListChecks'
-import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useEffect, useRef, useState } from 'react'
+import { CloseButton } from './close-button.js'
 import type { Job } from './job-view.js'
 export function TaskNotifier({ jobs, onOpen }: { jobs: Job[]; onOpen(): void }) {
   const seen = useRef(new Set<string>()),
@@ -67,14 +67,11 @@ export function TaskNotifier({ jobs, onOpen }: { jobs: Job[]; onOpen(): void }) 
           查看任务
         </button>
       </div>
-      <button
-        type="button"
+      <CloseButton
         className="wl-task-notice-dismiss"
         aria-label="关闭任务通知"
         onClick={() => setCount(0)}
-      >
-        <X size={16} aria-hidden="true" />
-      </button>
+      />
     </div>
   ) : null
 }

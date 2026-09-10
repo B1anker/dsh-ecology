@@ -40,8 +40,8 @@ dsh plugin --profile web add @seaveyon/dsh-web-login
 本包声明了 `dsh.bundle.patch`，因此 `dsh plugin` 会同时安装 npm 依赖，并把
 [`cordis.patch.yml`](cordis.patch.yml) 层追加到 profile。该层会插入登录插件，并让
 `web-runtime`、`connection`、`modules` 和 `client-hmr` 等待
-`dshWebLoginReady`。其中 `inject` 数组重述了 `webStartup` 和 `webRuntime`，因为
-DSH patch 会替换整个字段，而不是向现有数组追加元素。
+`dshWebLoginReady`。其中 `inject` 数组重述了 `webStartup`、`webRuntime`，以及
+`modules` 所需的 `webServer`，因为 DSH patch 会替换整个字段，而不是向现有数组追加元素。
 
 本包将 DSH host 与 Cordis 声明为可选 peer，因为正常的 DSH Web 安装一般已经提供它们。
 

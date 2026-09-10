@@ -69,8 +69,9 @@ The package declares `dsh.bundle.patch`, so `dsh plugin` both installs the npm
 dependency and appends its [`cordis.patch.yml`](cordis.patch.yml) layer to the
 profile. That layer inserts the login plugin and makes `web-runtime`,
 `connection`, `modules`, and `client-hmr` wait for `dshWebLoginReady`; its
-`inject` arrays restate `webStartup` and `webRuntime` because DSH patch fields
-replace complete values rather than appending to them.
+`inject` arrays restate `webStartup`, `webRuntime`, and (for `modules`)
+`webServer` because DSH patch fields replace complete values rather than
+appending to them.
 
 The package declares the DSH host and Cordis packages as optional peers because
 a normal DSH Web installation already provides them.

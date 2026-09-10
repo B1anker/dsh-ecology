@@ -1,7 +1,8 @@
-import { lstat, readdir, readFile } from 'node:fs/promises'
+import { lstat, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { UsageError } from '../domain/errors.js'
 import { worldLineDir } from '../fs/paths.js'
+import { readdirIfExists } from '../fs/read-json.js'
 import { LAB_ID_RE } from '../lab/layout.js'
 import { listTransactions } from '../lab/transaction.js'
 /** Conservative local-vault pins; unknown or damaged recovery metadata fails closed. */
@@ -30,10 +31,7 @@ export async function recoveryReferences(home: string): Promise<Set<string>> {
       add(record.afterSnapshot)
       add(record.entry.snapshotId)
     }
-    const pins = await readdir(join(root, 'workflow-pins')).catch((e) => {
-      if (e.code === 'ENOENT') return []
-      throw e
-    })
+    const pins = await readdirIfExists(join(root, 'workflow-pins'))
     for (const name of pins) {
       if (!/^bisect-[a-f0-9-]{36}\.json$/.test(name)) throw new UsageError('Unknown workflow pin')
       const pin = JSON.parse((await read(join(root, 'workflow-pins', name))) ?? 'null')
@@ -61,12 +59,7 @@ export async function recoveryReferences(home: string): Promise<Set<string>> {
         add(row.afterSnapshot)
         add(row.snapshotId)
       }
-    let labs: string[] = []
-    try {
-      labs = await readdir(join(root, 'labs'))
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
-    }
+    const labs = await readdirIfExists(join(root, 'labs'))
     for (const id of labs.filter((id) => LAB_ID_RE.test(id))) {
       const raw = await read(join(root, 'labs', id, 'manifest.json'))
       if (!raw) throw new UsageError('实验记录缺失，停止清理')

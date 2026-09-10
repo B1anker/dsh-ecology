@@ -10,8 +10,11 @@ import { WarningCircle } from '@phosphor-icons/react/dist/csr/WarningCircle'
 import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorldEvent } from '../domain/insight-types.js'
+import { errorMessage } from './async.js'
 import { CleanOptions } from './clean-options.js'
+import { CloseButton } from './close-button.js'
 import { useWorldLineEntry } from './entry.js'
+import { ErrorText } from './error-text.js'
 import { Experiments } from './experiments.js'
 import { Inspector } from './inspector.js'
 import { useJobFeed } from './job-feed.js'
@@ -174,7 +177,7 @@ function WorldLine({
       )
       setLoadError('')
     } catch (e) {
-      if (!controller.signal.aborted) setLoadError(e instanceof Error ? e.message : '加载失败')
+      if (!controller.signal.aborted) setLoadError(errorMessage(e, '加载失败'))
     } finally {
       if (!controller.signal.aborted) setRefreshing(false)
     }
@@ -214,6 +217,16 @@ function WorldLine({
     }
   }, [dialog])
   useEffect(() => {
+    if (!searchOpen) return
+    const dismiss = (event: PointerEvent) => {
+      if (!(event.target instanceof Element)) return
+      if (event.target.closest('.wl-search-popover,[aria-label="搜索世界线"]')) return
+      setSearchOpen(false)
+    }
+    document.addEventListener('pointerdown', dismiss)
+    return () => document.removeEventListener('pointerdown', dismiss)
+  }, [searchOpen])
+  useEffect(() => {
     if (!notice) return
     const timer = window.setTimeout(() => setNotice(''), 6000)
     return () => clearTimeout(timer)
@@ -246,6 +259,7 @@ function WorldLine({
       if (frame.firstElementChild) resize.observe(frame.firstElementChild)
     }
     const key = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
       if (
         !event.isComposing &&
         !(
@@ -470,7 +484,7 @@ function WorldLine({
         })
       }
     } catch (e) {
-      const message = e instanceof Error ? e.message : '操作失败'
+      const message = errorMessage(e, '操作失败')
       dive?.fail(message)
       setError(message)
     } finally {
@@ -508,7 +522,7 @@ function WorldLine({
       setLabFlowOpen(false)
       setMaintenanceOpen(true)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '任务启动失败')
+      setError(errorMessage(e, '任务启动失败'))
     }
   }
   const generateReport = async (id: string) => {
@@ -567,11 +581,12 @@ function WorldLine({
           <button
             className="wl-button wl-icon"
             aria-label="维护"
-            title="维护 · 诊断 / 回滚"
+            title="维护 · 检查、恢复与环境工具"
             aria-pressed={maintenanceOpen}
             onClick={() => {
               if (maintenanceOpen) closeMaintenance()
               else {
+                setPanelJob(null)
                 setMaintenanceOpen(true)
                 setLabFlowOpen(false)
               }
@@ -707,13 +722,7 @@ function WorldLine({
           <div className="wl-alert wl-success" role="status">
             <CheckCircle size={18} />
             <span>{notice}</span>
-            <button
-              className="wl-button wl-icon"
-              aria-label="关闭提示"
-              onClick={() => setNotice('')}
-            >
-              <X size={14} />
-            </button>
+            <CloseButton aria-label="关闭提示" onClick={() => setNotice('')} />
           </div>
         )}
       </div>
@@ -877,6 +886,7 @@ function WorldLine({
             <WorkspaceTools
               key={`${toolPanel.section}:${toolPanel.id}`}
               panel={toolPanel}
+              events={data?.events ?? []}
               lines={[origin, ...(data?.lines ?? [])]}
               api={api}
               close={() => setToolPanel(null)}
@@ -935,6 +945,18 @@ function WorldLine({
           )}
           {maintenanceOpen && (
             <Maintenance
+              onOpenTools={(section, researchTopic, sourceId) => {
+                const source = data?.lines.find((line) => line.id === sourceId)
+                const id =
+                  section === 'research' && source?.kind === 'verification'
+                    ? (source.parentId ?? 'origin')
+                    : sourceId || 'origin'
+                setToolPanel({
+                  section,
+                  id: researchTopic === 'deployment' ? 'origin' : id,
+                  researchTopic,
+                })
+              }}
               api={api}
               jobId={panelJob}
               onJobCreated={setPanelJob}
@@ -1204,11 +1226,7 @@ function WorldLine({
                 </label>
               </div>
             )}
-            {error && (
-              <p className="wl-error" role="alert">
-                {error}
-              </p>
-            )}
+            {error && <ErrorText message={error} />}
             {busy && (
               <div className="wl-progress" role="status">
                 <CircleNotch className="wl-spin" size={22} />
@@ -1302,7 +1320,7 @@ export function apply(ctx: {
     // the dialog backdrop, so rendering nothing removes the misclick target.
     if (hidden) return null
     return (
-      <div className="wl-corner" data-world-line-entry="true">
+      <div className="wl-corner" data-world-line-entry="true" data-open={open}>
         <button
           disabled={locked}
           className="wl-corner-button"
