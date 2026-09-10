@@ -2,8 +2,11 @@ import { CheckCircle } from '@phosphor-icons/react/dist/csr/CheckCircle'
 import { CircleNotch } from '@phosphor-icons/react/dist/csr/CircleNotch'
 import { GitMerge } from '@phosphor-icons/react/dist/csr/GitMerge'
 import { Info } from '@phosphor-icons/react/dist/csr/Info'
-import { useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import type { MergeCandidate, MergePreview } from '../domain/merge-types.js'
+import type { ApiFn } from './api-types.js'
+import { useActionRunner, useApiQuery } from './async.js'
+import { ErrorText } from './error-text.js'
 import { HudSelect } from './hud-controls.js'
 import { requestMergePreview } from './merge-preview-request.js'
 import { Panel } from './panel.js'
@@ -20,7 +23,7 @@ export function MergePanel({
 }: {
   id: string
   lines: Line[]
-  api(body: unknown, signal?: AbortSignal): Promise<any>
+  api: ApiFn
   close(): void
   onBusy(value: string): void
   onCommitted(): void
@@ -34,76 +37,72 @@ export function MergePanel({
       (line.kind === 'origin' || line.kind === 'mirror') &&
       !['applying', 'destroyed', 'unreachable'].includes(line.state),
   )
-  const [preview, setPreview] = useState<MergePreview | null>(null)
+  const [selected, setSelected] = useState<string[]>([]),
+    [config, setConfig] = useState(false)
+  const [candidate, setCandidate] = useState<MergeCandidate | null>(null)
+  const { pending, error: actionError, setError: setActionError, run } = useActionRunner()
+  const requestPreview = useCallback(
+    (signal: AbortSignal) => {
+      setCandidate(null)
+      setConfig(false)
+      return requestMergePreview(api, id, targetId, signal)
+    },
+    [api, id, targetId],
+  )
+  const {
+    data: preview,
+    error: previewError,
+    reload,
+  } = useApiQuery<MergePreview>(api, requestPreview, [id, targetId], {
+    onSuccess: (result) => {
+      if (result.targetId !== targetId)
+        throw new Error('后端未确认所选目标世界线，请更新并重启管理实例后重试。')
+      setSelected(
+        result.plugins
+          .filter((item) => item.changed && !item.blocked && !item.removable)
+          .map((item) => item.name),
+      )
+    },
+  })
+  const error = previewError || actionError
   const sourceName =
     preview?.sourceName ?? lines.find((line) => line.id === id)?.alias ?? '当前世界线'
   const targetName =
     preview?.targetName ??
     targets.find((line) => line.id === targetId)?.alias ??
     (targetId === 'origin' ? 'main' : targetId)
-  const [selected, setSelected] = useState<string[]>([]),
-    [config, setConfig] = useState(false)
   const visiblePlugins = (preview?.plugins ?? []).filter(
     (item) =>
       item.name.toLowerCase().includes(query.trim().toLowerCase()) &&
       (filter === 'all' || (filter === 'changed' ? item.changed : selected.includes(item.name))),
   )
-  const [candidate, setCandidate] = useState<MergeCandidate | null>(null)
-  const [pending, setPending] = useState(''),
-    [error, setError] = useState(''),
-    [revision, setRevision] = useState(0)
-  useEffect(() => {
-    const abort = new AbortController()
-    setPreview(null)
-    setCandidate(null)
-    setError('')
-    setConfig(false)
-    void requestMergePreview(api, id, targetId, abort.signal)
-      .then((result: MergePreview) => {
-        if (abort.signal.aborted) return
-        if (result.targetId !== targetId)
-          throw new Error('后端未确认所选目标世界线，请更新并重启管理实例后重试。')
-        setPreview(result)
-        setSelected(
-          result.plugins
-            .filter((item) => item.changed && !item.blocked && !item.removable)
-            .map((item) => item.name),
-        )
-      })
-      .catch((e) => {
-        if (!abort.signal.aborted) setError(e.message)
-      })
-    return () => abort.abort()
-  }, [id, targetId, api, revision])
-  const perform = async (commit: boolean) => {
+  const perform = (commit: boolean) => {
     if (pending || !preview) return
     const message = commit
       ? `正在备份并合入 ${targetName}…`
       : `正在构建候选并验证，${targetName} 保持运行…`
-    setPending(message)
     onBusy(message)
-    setError('')
-    try {
-      const result: MergeCandidate = await api(
-        commit
-          ? { action: 'merge-commit', id: candidate!.id }
-          : {
-              action: 'merge-prepare',
-              id,
-              targetId: preview.targetId,
-              revision: preview.revision,
-              plugins: selected,
-              includeConfig: config,
-            },
-      )
-      setCandidate(result)
-      if (result.committed) onCommitted()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '合入失败')
-    } finally {
-      setPending('')
-      onBusy('')
-    }
+    void run(
+      message,
+      (): Promise<MergeCandidate> =>
+        api(
+          commit
+            ? { action: 'merge-commit', id: candidate!.id }
+            : {
+                action: 'merge-prepare',
+                id,
+                targetId: preview.targetId,
+                revision: preview.revision,
+                plugins: selected,
+                includeConfig: config,
+              },
+        ),
+      (result) => {
+        setCandidate(result)
+        if (result.committed) onCommitted()
+      },
+      '合入失败',
+    ).finally(() => onBusy(''))
   }
   return (
     <Panel
@@ -112,7 +111,7 @@ export function MergePanel({
         candidate && !pending
           ? () => {
               setCandidate(null)
-              setError('')
+              setActionError('')
             }
           : undefined
       }
@@ -153,8 +152,10 @@ export function MergePanel({
               className="wl-button"
               disabled={!!pending}
               onClick={() => {
-                if (error) setRevision((value) => value + 1)
-                else {
+                if (error) {
+                  setActionError('')
+                  reload()
+                } else {
                   setCandidate(null)
                   setQuery('')
                   setFilter('all')
@@ -180,9 +181,9 @@ export function MergePanel({
             value={targetId}
             disabled={!!pending}
             onChange={(event) => {
-              setPreview(null)
               setCandidate(null)
               setSelected([])
+              setActionError('')
               setTargetId(event.target.value)
             }}
           >
@@ -343,7 +344,7 @@ export function MergePanel({
       {error && (
         <div role="alert" className="wl-merge-error">
           <strong>{candidate ? '合入未完成' : '无法准备合入'}</strong>
-          <p className="wl-error">{error}</p>
+          <ErrorText message={error} role={null} />
         </div>
       )}
     </Panel>

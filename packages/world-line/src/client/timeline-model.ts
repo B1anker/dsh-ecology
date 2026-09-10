@@ -1,34 +1,13 @@
 import type { WorldEvent } from '../domain/insight-types.js'
+import type { WorldLineInfo } from '../web/types.js'
+import { lineStateText } from './status-text.js'
 
-export interface Line {
-  id: string
-  initialization?: 'clean'
-  completedAt?: string
-  alias?: string
-  parentId?: string
-  snapshotId?: string
+// forkedAt 由后端在 lines 响应上动态附加（web/index.ts），WorldLineInfo 未声明。
+export interface Line extends WorldLineInfo {
   forkedAt?: string
-  createdAt: string
-  kind: string
-  state: string
-  verdict: string | null
-  port?: number
-  isDefault: boolean
 }
 export const label = (line: Line) => line.alias ?? `wl-${line.id.slice(-8)}`
-export const stateLabel = (state: string) =>
-  ({
-    running: '运行中',
-    stopped: '已停止',
-    failed: '失败',
-    passed: '验证已完成',
-    incomplete: '验证未完成',
-    review: '异常待确认',
-    awaiting_auth: '等待登录',
-    applying: '准备中',
-    created: '已创建',
-    unreachable: '连接失效',
-  })[state] ?? state
+export const stateLabel = lineStateText
 export const TRACK_LEFT = 48
 export const TRACK_END = 820
 export const ROW_HEIGHT = 90

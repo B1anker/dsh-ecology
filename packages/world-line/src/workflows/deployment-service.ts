@@ -4,14 +4,12 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { CliContext } from '../context.js'
 import { UsageError } from '../domain/errors.js'
+import { readJsonIfExists } from '../fs/read-json.js'
 import { deploymentRoot } from './deployment.js'
 export async function deploymentService(ctx: CliContext, action: 'status' | 'start' | 'stop') {
-  const record = await readFile(join(deploymentRoot(ctx), 'service.json'), 'utf8')
-    .then(JSON.parse)
-    .catch((e) => {
-      if (e.code === 'ENOENT') return null
-      throw e
-    })
+  const record = await readJsonIfExists<{ port: number; token: string }>(
+    join(deploymentRoot(ctx), 'service.json'),
+  )
   if (record) {
     if (
       !Number.isInteger(record.port) ||

@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback } from 'react'
+import type { ApiFn } from './api-types.js'
+import { useApiQuery } from './async.js'
 import { MultiSelect } from './select.js'
 
 export function CleanOptions({
@@ -10,7 +12,7 @@ export function CleanOptions({
   onCopyConfig,
   disabled,
 }: {
-  api(body: unknown, signal?: AbortSignal): Promise<any>
+  api: ApiFn
   source: string
   value: string[]
   onChange(value: string[]): void
@@ -18,23 +20,18 @@ export function CleanOptions({
   onCopyConfig(value: boolean): void
   disabled: boolean
 }) {
-  const [plugins, setPlugins] = useState<{ id: string; disabled: boolean }[] | null>(null)
-  const [error, setError] = useState('')
-  const [revision, setRevision] = useState(0)
-  useEffect(() => {
-    const controller = new AbortController()
-    setPlugins(null)
-    setError('')
-    void api({ action: 'clean-plugins', id: source }, controller.signal)
-      .then((result) => {
-        if (!controller.signal.aborted) setPlugins(result.plugins)
-        return undefined
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) setError(e.message)
-      })
-    return () => controller.abort()
-  }, [api, source, revision])
+  const request = useCallback(
+    (signal: AbortSignal) =>
+      api({ action: 'clean-plugins', id: source }, signal).then(
+        (result: { plugins: { id: string; disabled: boolean }[] }) => result.plugins,
+      ),
+    [api, source],
+  )
+  const {
+    data: plugins,
+    error,
+    reload,
+  } = useApiQuery<{ id: string; disabled: boolean }[]>(api, request, [source])
   return (
     <>
       <p className="wl-muted">
@@ -57,7 +54,7 @@ export function CleanOptions({
       {error && (
         <p className="wl-error" role="alert">
           {error}{' '}
-          <button type="button" className="wl-button" onClick={() => setRevision((n) => n + 1)}>
+          <button type="button" className="wl-button" onClick={reload}>
             重试
           </button>
         </p>

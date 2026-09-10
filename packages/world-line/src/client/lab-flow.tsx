@@ -4,14 +4,17 @@ import { FileText } from '@phosphor-icons/react/dist/csr/FileText'
 import { Flask } from '@phosphor-icons/react/dist/csr/Flask'
 import { Info } from '@phosphor-icons/react/dist/csr/Info'
 import { UploadSimple } from '@phosphor-icons/react/dist/csr/UploadSimple'
-import { useEffect, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import type { LabActionResult, LabPromoteCommandResult } from '../commands/lab.js'
 import type { ReportResult } from '../commands/report.js'
 import type { RestoreCommandResult } from '../commands/restore.js'
+import type { ApiFn } from './api-types.js'
+import { errorMessage, useApiQuery } from './async.js'
+import { ErrorText } from './error-text.js'
 import { failureSummary } from './failure-summary.js'
 import { HudTabs } from './hud-controls.js'
 import { installationToResume } from './installation-flow.js'
-import { JobReceipt, jobKindLabel, ProbeLadder, useJob } from './job-view.js'
+import { type Job, JobReceipt, jobKindLabel, ProbeLadder, useJob } from './job-view.js'
 import { useLabStatus } from './lab-status.js'
 import { Panel } from './panel.js'
 import {
@@ -36,7 +39,7 @@ export function LabFlow({
 }: {
   sourceId: string
   sourceName: string
-  api(body: unknown, signal?: AbortSignal): Promise<any>
+  api: ApiFn
   close(): void
   onBusy(running: boolean): void
   onSettled(): void
@@ -46,9 +49,6 @@ export function LabFlow({
   lastKnownGood: string | null
 }) {
   const [step, setStep] = useState<'install' | 'verify' | 'result'>('install')
-  const [restoring, setRestoring] = useState(true)
-  const [restoreError, setRestoreError] = useState('')
-  const [restoreAttempt, setRestoreAttempt] = useState(0)
   const pluginHelpId = useId()
   const [spec, setSpec] = useState('')
   const [pluginSource, setPluginSource] = useState<PluginSource>('registry')
@@ -58,27 +58,28 @@ export function LabFlow({
   const [keep, setKeep] = useState(true)
   const [allowScripts, setAllowScripts] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
-  useEffect(() => {
-    let disposed = false
-    setRestoring(true)
-    setRestoreError('')
-    api({ action: 'jobs' })
-      .then((jobs) => {
-        if (disposed) return
-        const resumed = installationToResume(jobs, sourceId)
-        setJobId(resumed?.id ?? null)
-        setStep(resumed ? 'verify' : 'install')
-      })
-      .catch(() => {
-        if (!disposed) setRestoreError('无法读取这条世界线的任务，请重试。')
-      })
-      .finally(() => {
-        if (!disposed) setRestoring(false)
-      })
-    return () => {
-      disposed = true
-    }
-  }, [sourceId, restoreAttempt])
+  // 原实现忽略底层错误、统一展示固定文案：抛出非 Error 使 errorMessage 落到 fallback。
+  const requestJobs = useCallback(
+    () =>
+      api({ action: 'jobs' }).catch(() => {
+        throw '无法读取这条世界线的任务，请重试。'
+      }),
+    [api],
+  )
+  const {
+    data: restoredJobs,
+    error: restoreError,
+    loading: restoreLoading,
+    reload: retryRestore,
+  } = useApiQuery<Job[]>(api, requestJobs, [sourceId], {
+    fallback: '无法读取这条世界线的任务，请重试。',
+    onSuccess: (jobs) => {
+      const resumed = installationToResume(jobs, sourceId)
+      setJobId(resumed?.id ?? null)
+      setStep(resumed ? 'verify' : 'install')
+    },
+  })
+  const restoring = restoreLoading || (!restoredJobs && !restoreError)
   const [pending, setPending] = useState('')
   const [error, setError] = useState('')
   const [reportData, setReportData] = useState<ReportResult | null>(null)
@@ -121,7 +122,7 @@ export function LabFlow({
       const outcome: { jobId: string } = await api(body)
       begin(outcome.jobId)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '任务启动失败')
+      setError(errorMessage(e, '任务启动失败'))
     } finally {
       setPending('')
     }
@@ -135,7 +136,7 @@ export function LabFlow({
       const outcome: ReportResult = await api({ action: 'report', id: labId })
       setReportData(outcome)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '生成报告失败')
+      setError(errorMessage(e, '生成报告失败'))
     } finally {
       setPending('')
     }
@@ -171,7 +172,7 @@ export function LabFlow({
       {restoreError && (
         <p role="alert">
           {restoreError}{' '}
-          <button className="wl-button" onClick={() => setRestoreAttempt((value) => value + 1)}>
+          <button className="wl-button" onClick={retryRestore}>
             重试
           </button>
         </p>
@@ -643,11 +644,7 @@ export function LabFlow({
           <span>{message}</span>
         </div>
       )}
-      {connectionError && (
-        <p className="wl-error" role="status">
-          {connectionError}
-        </p>
-      )}
+      {connectionError && <ErrorText message={connectionError} role="status" />}
       {pending && (
         <p className="wl-insight-loading" role="status">
           <CircleNotch size={18} className="wl-spin" />

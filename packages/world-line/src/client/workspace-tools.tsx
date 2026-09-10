@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReportResult } from '../commands/report.js'
 import type { WorldEvent } from '../domain/insight-types.js'
+import type { ApiFn } from './api-types.js'
+import { errorMessage, useApiQuery } from './async.js'
+import { ErrorText } from './error-text.js'
 import { HudSelect } from './hud-controls.js'
 import { useJobFeed } from './job-feed.js'
 import { type Job, jobKindLabel } from './job-view.js'
@@ -11,11 +14,11 @@ import { RecoveryPanel } from './recovery-panel.js'
 import { ReportView } from './report-view.js'
 import { ResearchPanel } from './research-panel.js'
 import { ChangeSummary, VersionPair } from './result-visuals.js'
+import { jobStatusText } from './status-text.js'
 import { StoragePanel } from './storage-panel.js'
 import { type Line, label } from './timeline-model.js'
 import { jobResearchTopic, researchGoals } from './workflow-navigation.js'
 
-type Api = (body: unknown, signal?: AbortSignal) => Promise<any>
 export function WorkspaceTools({
   panel,
   lines,
@@ -30,7 +33,7 @@ export function WorkspaceTools({
   panel: ToolPanel
   lines: Line[]
   events: WorldEvent[]
-  api: Api
+  api: ApiFn
   close(): void
   navigate(panel: ToolPanel): void
   onJob(id: string): void
@@ -43,8 +46,7 @@ export function WorkspaceTools({
     ...jobs,
     ...olderJobs.filter((job) => !jobs.some((current) => current.id === job.id)),
   ]
-  const [data, setData] = useState<any>(null),
-    [error, setError] = useState(''),
+  const [actionError, setError] = useState(''),
     [busy, setBusy] = useState(false)
   const [candidate, setCandidate] = useState<{
     action: string
@@ -61,14 +63,8 @@ export function WorkspaceTools({
     mounted: false,
     scope: actionScope,
     version: 0,
-    panelScope,
-    panelVersion: 0,
   })
   const operationVersion = useRef(0)
-  if (lifecycle.current.panelScope !== panelScope) {
-    lifecycle.current.panelScope = panelScope
-    lifecycle.current.panelVersion += 1
-  }
   if (lifecycle.current.scope !== actionScope) {
     lifecycle.current.scope = actionScope
     lifecycle.current.version += 1
@@ -78,7 +74,6 @@ export function WorkspaceTools({
     return () => {
       lifecycle.current.mounted = false
       lifecycle.current.version += 1
-      lifecycle.current.panelVersion += 1
     }
   }, [])
   useEffect(() => setBusy(false), [actionScope])
@@ -109,52 +104,43 @@ export function WorkspaceTools({
     research: researchGoals[panel.researchTopic ?? 'diagnose'].title,
   }[panel.section]
   useEffect(() => {
-    const version = lifecycle.current.panelVersion
-    const current = () => lifecycle.current.mounted && lifecycle.current.panelVersion === version
-    setData(null)
-    setError('')
     setCandidate(null)
     setDiff(null)
-    const c = new AbortController()
-    const action =
-      panel.section === 'composition'
-        ? 'composition'
-        : panel.section === 'compare'
-          ? source?.kind === 'verification'
-            ? 'lab-diff'
-            : 'snapshot-list'
-          : panel.section === 'report'
-            ? 'report'
-            : null
-    if (action)
-      void api(
-        {
-          action,
-          id: panel.id,
-          ...(action === 'report' && panel.lineId ? { lineId: panel.lineId } : {}),
-        },
-        c.signal,
-      )
-        .then((x) => {
-          if (!c.signal.aborted && current()) {
-            if (action === 'lab-diff') setDiff(x)
-            else {
-              setData(x)
-              if (action === 'snapshot-list') {
-                const latest = (x as WorldEvent[])
-                  .filter((event) => event.snapshotId)
-                  .toSorted((a, b) => b.at.localeCompare(a.at))[0]
-                setFrom(latest?.snapshotId ?? '')
-                setTo('current')
-              }
-            }
-          }
-        })
-        .catch((e) => {
-          if (!c.signal.aborted && current()) setError(e.message)
-        })
-    return () => c.abort()
+    setError('')
   }, [panelScope, api, source?.kind])
+  const { data, error: loadError } = useApiQuery<any>(
+    api,
+    panel.section === 'composition'
+      ? { action: 'composition', id: panel.id }
+      : panel.section === 'compare'
+        ? source?.kind === 'verification'
+          ? { action: 'lab-diff', id: panel.id }
+          : { action: 'snapshot-list', id: panel.id }
+        : panel.section === 'report'
+          ? {
+              action: 'report',
+              id: panel.id,
+              ...(panel.lineId ? { lineId: panel.lineId } : {}),
+            }
+          : null,
+    [panelScope, source?.kind],
+    {
+      fallback: '读取失败',
+      onSuccess: (x) => {
+        if (panel.section !== 'compare') return
+        if (source?.kind === 'verification') {
+          setDiff(x)
+        } else {
+          const latest = (x as WorldEvent[])
+            .filter((event) => event.snapshotId)
+            .toSorted((a, b) => b.at.localeCompare(a.at))[0]
+          setFrom(latest?.snapshotId ?? '')
+          setTo('current')
+        }
+      },
+    },
+  )
+  const error = actionError || loadError
   const run = async (body: unknown) => {
     const current = beginOperation()
     setBusy(true)
@@ -163,7 +149,7 @@ export function WorkspaceTools({
       const r = await api(body)
       if (current()) onJob(r.jobId)
     } catch (e) {
-      if (current()) setError(e instanceof Error ? e.message : '操作失败')
+      if (current()) setError(errorMessage(e, '操作失败'))
     } finally {
       if (current()) setBusy(false)
     }
@@ -234,11 +220,7 @@ export function WorkspaceTools({
       ) : (
         <p>环境：{source ? label(source) : panel.id === 'origin' ? 'main' : panel.id}</p>
       )}
-      {error && (
-        <p className="wl-error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <ErrorText message={error} />}
       {panel.section === 'research' && (
         <ResearchPanel
           key={`${panel.id}:${panel.researchTopic ?? 'diagnose'}`}
@@ -251,6 +233,7 @@ export function WorkspaceTools({
       )}
       {panel.section === 'recovery' && (
         <RecoveryPanel
+          key={panel.id}
           id={panel.id}
           api={api}
           onVerify={(id) => void run({ action: 'lab-verify', id })}
@@ -291,21 +274,7 @@ export function WorkspaceTools({
           {allJobs.map((job) => (
             <article className="wl-event-detail wl-task-card" data-status={job.status} key={job.id}>
               <strong>{jobKindLabel(job.kind)}</strong>
-              <span className="wl-task-state">
-                {
-                  {
-                    queued: '排队中',
-                    awaiting_auth: '等待登录',
-                    review: '异常待确认',
-                    incomplete: '验证未完成',
-                    running: '运行中',
-                    ok: '已完成',
-                    fail: '验证失败',
-                    error: '异常',
-                    interrupted: '已中断',
-                  }[job.status]
-                }
-              </span>
+              <span className="wl-task-state">{jobStatusText(job.status)}</span>
               <small className="wl-task-source">
                 环境：{(() => {
                   const id = job.resource ?? job.labId

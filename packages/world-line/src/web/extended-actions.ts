@@ -49,8 +49,14 @@ import {
 } from '../workflows/investigate-run.js'
 import { exportEnvironment, importEnvironment } from '../workflows/portable.js'
 import { checkUpgrades, upgradePolicy, upgradeResults } from '../workflows/upgrades.js'
-import { checkedSnapshot, currentManifest, lineContext, snapshotEvents } from './insights.js'
-import { startJob } from './jobs.js'
+import {
+  assertOwnsLine,
+  checkedSnapshot,
+  currentManifest,
+  lineContext,
+  snapshotEvents,
+} from './insights.js'
+import { startScopedJob } from './jobs.js'
 import { pluginDetails } from './plugin-details.js'
 
 function comparisonDiff(a: SnapshotManifest, b: SnapshotManifest) {
@@ -71,17 +77,22 @@ function comparisonDiff(a: SnapshotManifest, b: SnapshotManifest) {
 export async function reportContext(ctx: CliContext, id: string, lineId?: string) {
   if (id.startsWith('lab-')) {
     const lab = await readLabManifest(ctx.home, id)
-    if (lab.source.profileName !== ctx.profileName) throw new UsageError('实验不属于当前 profile')
+    assertOwnsLine(lab, ctx, '实验不属于当前 profile')
     return ctx
   }
   const target = await lineContext(ctx, lineId ?? 'origin')
   await checkedSnapshot(target, id)
   return target
 }
+function requireStringId(value: unknown): string {
+  if (typeof value !== 'string') throw new UsageError('请选择世界线')
+  return value
+}
 export async function extendedAction(
   ctx: CliContext,
   body: Record<string, unknown>,
 ): Promise<{ handled: false } | { handled: true; result: unknown }> {
+  const ctxFor = (id: unknown) => lineContext(ctx, requireStringId(id))
   const handlers: Record<string, () => Promise<unknown>> = {
     'cache-prune': async () => prunePackageCache(ctx, body.runtimeStopped === true),
     'cache-migrate': async () => migratePackageCache(ctx, body.id as string),
@@ -92,11 +103,13 @@ export async function extendedAction(
     'deployment-stage': async () => {
       const id = body.id as string
       await reportContext(ctx, id)
-      const job = startJob('deployment-stage', () => stageDeployment(ctx, id), id, {
-        home: ctx.home,
-        profileName: ctx.profileName,
-        resource: 'origin',
-      })
+      const job = startScopedJob(
+        ctx,
+        'origin',
+        'deployment-stage',
+        () => stageDeployment(ctx, id),
+        id,
+      )
       return { jobId: job.id }
     },
     'deployment-activate': async () => activateDeployment(ctx, body.id as string),
@@ -114,11 +127,8 @@ export async function extendedAction(
     'version-matrix': async () => {
       const sourceId = (body.sourceId as string | undefined) ?? 'origin'
       await sourceContext(ctx, sourceId)
-      const job = startJob(
-        'version-matrix',
-        (h) => versionMatrix(ctx, body.versions as string[], sourceId, h),
-        undefined,
-        { home: ctx.home, profileName: ctx.profileName, resource: sourceId },
+      const job = startScopedJob(ctx, sourceId, 'version-matrix', (h) =>
+        versionMatrix(ctx, body.versions as string[], sourceId, h),
       )
       return { jobId: job.id }
     },
@@ -133,30 +143,24 @@ export async function extendedAction(
     'upgrade-check': async () => {
       const sourceId = body.id as string
       await sourceContext(ctx, sourceId)
-      const job = startJob('upgrade-check', (h) => checkUpgrades(ctx, sourceId, h), undefined, {
-        home: ctx.home,
-        profileName: ctx.profileName,
-        resource: sourceId,
-      })
+      const job = startScopedJob(ctx, sourceId, 'upgrade-check', (h) =>
+        checkUpgrades(ctx, sourceId, h),
+      )
       return { jobId: job.id }
     },
     'environment-export': async () =>
-      exportEnvironment(await lineContext(ctx, body.id as string), body.snapshotId as string),
+      exportEnvironment(await ctxFor(body.id), body.snapshotId as string),
     'environment-import': async () => {
       const sourceId = (body.sourceId as string | undefined) ?? 'origin'
       await sourceContext(ctx, sourceId)
-      const job = startJob(
-        'environment-import',
-        (handle) =>
-          importEnvironment(
-            ctx,
-            body.bundleText as string,
-            sourceId,
-            (body.requiredFiles as Record<string, string>) ?? {},
-            handle,
-          ),
-        undefined,
-        { home: ctx.home, profileName: ctx.profileName, resource: sourceId },
+      const job = startScopedJob(ctx, sourceId, 'environment-import', (handle) =>
+        importEnvironment(
+          ctx,
+          body.bundleText as string,
+          sourceId,
+          (body.requiredFiles as Record<string, string>) ?? {},
+          handle,
+        ),
       )
       return { jobId: job.id }
     },
@@ -173,11 +177,8 @@ export async function extendedAction(
     },
     'investigation-run': async () => {
       const s = await readInvestigation(ctx, body.id as string)
-      const job = startJob(
-        'investigate',
-        (handle) => runInvestigation(ctx, s.id, handle, body.automatic === true),
-        undefined,
-        { home: ctx.home, profileName: ctx.profileName, resource: s.sourceId },
+      const job = startScopedJob(ctx, s.sourceId, 'investigate', (handle) =>
+        runInvestigation(ctx, s.id, handle, body.automatic === true),
       )
       return { jobId: job.id }
     },
@@ -208,14 +209,14 @@ export async function extendedAction(
         ? reconcilePromotion(target, body.recordId as string, true)
         : runRecovery(target, body.recordId as string)
     },
-    'gc-records': async () => gcRecords((await lineContext(ctx, body.id as string)).home),
-    storage: async () => storageUsage((await lineContext(ctx, body.id as string)).home),
+    'gc-records': async () => gcRecords((await ctxFor(body.id)).home),
+    storage: async () => storageUsage((await ctxFor(body.id)).home),
     'storage-prune-preview': async () => {
-      const plan = await runTimelinePrune(await lineContext(ctx, body.id as string), {})
+      const plan = await runTimelinePrune(await ctxFor(body.id), {})
       return { ...plan, revision: sha256Hex(JSON.stringify(plan)) }
     },
     'storage-prune-apply': async () => {
-      const target = await lineContext(ctx, body.id as string)
+      const target = await ctxFor(body.id)
       return withOperations([target.home], 'vault', async () => {
         const plan = await runTimelinePrune(target, {})
         if (sha256Hex(JSON.stringify(plan)) !== body.revision)
@@ -223,26 +224,20 @@ export async function extendedAction(
         return runTimelinePrune(target, { yes: true })
       })
     },
-    'gc-purge': async () =>
-      gcPurge((await lineContext(ctx, body.id as string)).home, body.recordId as string),
-    'gc-preview': async () => gcPreview((await lineContext(ctx, body.id as string)).home),
-    'gc-apply': async () =>
-      gcApply((await lineContext(ctx, body.id as string)).home, body.revision as string),
-    'gc-restore': async () =>
-      gcRestore((await lineContext(ctx, body.id as string)).home, body.recordId as string),
+    'gc-purge': async () => gcPurge((await ctxFor(body.id)).home, body.recordId as string),
+    'gc-preview': async () => gcPreview((await ctxFor(body.id)).home),
+    'gc-apply': async () => gcApply((await ctxFor(body.id)).home, body.revision as string),
+    'gc-restore': async () => gcRestore((await ctxFor(body.id)).home, body.recordId as string),
     'lab-diff': async () => {
       const lab = await readLabManifest(ctx.home, body.id as string)
-      if (lab.source.profileName !== ctx.profileName) throw new UsageError('实验不属于当前 profile')
+      assertOwnsLine(lab, ctx, '实验不属于当前 profile')
       if (!lab.source.baselineSnapshotId)
         throw new UsageError(
           '旧实验没有验证前基线，请从来源重新创建验证；不能用已变化的当前环境代替历史基线',
         )
       const source = await sourceContext(ctx, lab.source.parentLabId)
       const before = await checkedSnapshot(source, lab.source.baselineSnapshotId)
-      const after = await currentManifest(
-        await lineContext(ctx, body.id as string),
-        body.id as string,
-      )
+      const after = await currentManifest(await ctxFor(body.id), body.id as string)
       return redactData({
         at: ctx.now().toISOString(),
         from: { id: before.id, at: before.createdAt },
@@ -251,7 +246,7 @@ export async function extendedAction(
       })
     },
     composition: async () => {
-      const target = await lineContext(ctx, body.id as string)
+      const target = await ctxFor(body.id)
       const a = await analyzeProfile({
         home: target.home,
         profileName: target.profileName,
@@ -279,8 +274,7 @@ export async function extendedAction(
         ].filter(Boolean),
       })
     },
-    'snapshot-list': async () =>
-      snapshotEvents(await lineContext(ctx, body.id as string), body.id as string),
+    'snapshot-list': async () => snapshotEvents(await ctxFor(body.id), requireStringId(body.id)),
     'snapshot-compare': async () => {
       const read = async (value: unknown) => {
         const ref = value as Record<string, unknown>
@@ -307,29 +301,24 @@ export async function extendedAction(
     'lab-config-apply': async () => {
       const sourceId = (body.sourceId as string | undefined) ?? 'origin'
       await sourceContext(ctx, sourceId)
-      const job = startJob(
-        'lab-config-apply',
-        async (handle) => {
-          const dir = await mkdtemp(join(tmpdir(), 'dsh-config-'))
-          try {
-            const file = join(dir, 'patch.yml')
-            await writeFile(file, body.text as string, { mode: 0o600 })
-            return await runLabConfigApply(ctx, file, {
-              sourceId,
-              keep: true,
-              clientProbes: true,
-              captureBaseline: true,
-              interactive: body.interactive === true,
-              onProbe: (p) => handle.pushProbe(p),
-              onLabCreated: (id) => handle.setLabId(id),
-            })
-          } finally {
-            await rm(dir, { recursive: true, force: true })
-          }
-        },
-        undefined,
-        { home: ctx.home, profileName: ctx.profileName, resource: sourceId },
-      )
+      const job = startScopedJob(ctx, sourceId, 'lab-config-apply', async (_handle, hooks) => {
+        const dir = await mkdtemp(join(tmpdir(), 'dsh-config-'))
+        try {
+          const file = join(dir, 'patch.yml')
+          await writeFile(file, body.text as string, { mode: 0o600 })
+          return await runLabConfigApply(ctx, file, {
+            sourceId,
+            keep: true,
+            clientProbes: true,
+            captureBaseline: true,
+            interactive: body.interactive === true,
+            onProbe: hooks.onProbe,
+            onLabCreated: hooks.onLabCreated,
+          })
+        } finally {
+          await rm(dir, { recursive: true, force: true })
+        }
+      })
       return { jobId: job.id }
     },
   }
@@ -340,6 +329,6 @@ export async function extendedAction(
 async function recoveryContext(ctx: CliContext, id: string) {
   if (id === 'origin') return ctx
   const lab = await readLabManifest(ctx.home, id)
-  if (lab.source.profileName !== ctx.profileName) throw new UsageError('Profile mismatch')
+  assertOwnsLine(lab, ctx)
   return { ...ctx, home: labHomeDir(ctx.home, id) }
 }

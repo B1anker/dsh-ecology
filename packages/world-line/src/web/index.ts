@@ -28,6 +28,27 @@ function restoreTimelineEvent(entry: PromotionJournalEntry, lineId: string): Wor
   }
 }
 
+/** Profile-scoped promotion journal entries; a missing journal reads as empty. */
+async function readJournalEntries(
+  home: string,
+  profileName: string,
+): Promise<PromotionJournalEntry[]> {
+  const journal = await readFile(journalPath(home), 'utf8').catch((error) => {
+    if (error.code === 'ENOENT') return ''
+    throw error
+  })
+  const entries: PromotionJournalEntry[] = []
+  for (const row of journal.split('\n').filter(Boolean)) {
+    try {
+      const entry = JSON.parse(row) as PromotionJournalEntry
+      if (entry.profileName === profileName) entries.push(entry)
+    } catch {
+      /* A damaged journal row can neither complete an experiment nor hide a line's snapshots. */
+    }
+  }
+  return entries
+}
+
 import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
@@ -73,11 +94,18 @@ import { lastKnownGoodFor } from '../vault/state.js'
 import { actionDefinitions, validateAction } from './action-schema.js'
 import { extendedAction, reportContext } from './extended-actions.js'
 import { idempotent } from './idempotency.js'
-import { compareWorlds, lineContext, snapshotDetail, snapshotEvents } from './insights.js'
-import { getJob, listJobs, startJob, subscribeJobs } from './jobs.js'
+import {
+  assertOwnsLine,
+  compareWorlds,
+  lineContext,
+  snapshotDetail,
+  snapshotEvents,
+} from './insights.js'
+import { getJob, listJobs, startScopedJob, subscribeJobs } from './jobs.js'
 import { commitMerge, mergePreview, prepareMerge } from './merge.js'
 import { projectMerges } from './merge-events.js'
 import { projectOperations } from './operation-events.js'
+import type { WorldLineInfo } from './types.js'
 
 export const name = '@seaveyon/dsh-world-line'
 export const inject = ['webServer', 'connection']
@@ -93,8 +121,7 @@ export async function labStatus(ctx: CliContext, id: string) {
     [join(labRoot(ctx.home), id, 'manifest.json'), join(labRoot(ctx.home), id, 'probe.json')],
     () => runLabInspect(ctx, id),
   )
-  if (manifest.source.profileName !== ctx.profileName)
-    throw new UsageError('实验不属于当前 profile')
+  assertOwnsLine(manifest, ctx, '实验不属于当前 profile')
   const clientGate = classifyClientGate(probes)
   return {
     id,
@@ -122,41 +149,16 @@ export async function labStatus(ctx: CliContext, id: string) {
 }
 
 export async function worldLines(ctx: CliContext, currentId?: string) {
-  const lines: {
-    id: string
-    alias?: string
-    initialization?: 'clean'
-    completedAt?: string
-    parentId?: string
-    snapshotId?: string
-    createdAt: string
-    kind: string
-    state: string
-    verdict: string | null
-    port?: number
-    isDefault: boolean
-  }[] = []
+  const lines: WorldLineInfo[] = []
   const completed = new Map<string, string>()
   const operationLabs: LabManifest[] = []
   const operationJournal: PromotionJournalEntry[] = []
   const restored = [] as WorldEvent[]
-  const journal = await readFile(journalPath(ctx.home), 'utf8').catch((error) => {
-    if (error.code === 'ENOENT') return ''
-    throw error
-  })
-  for (const row of journal.split('\n').filter(Boolean)) {
-    try {
-      const entry = JSON.parse(row) as PromotionJournalEntry
-      if (entry.profileName === ctx.profileName) operationJournal.push(entry)
-      if (entry.profileName === ctx.profileName && entry.labId && entry.outcome === 'committed')
-        completed.set(entry.labId, entry.createdAt)
-      if (entry.profileName === ctx.profileName) {
-        const event = restoreTimelineEvent(entry, 'origin')
-        if (event) restored.push(event)
-      }
-    } catch {
-      /* A damaged journal row cannot classify an experiment as complete. */
-    }
+  for (const entry of await readJournalEntries(ctx.home, ctx.profileName)) {
+    operationJournal.push(entry)
+    if (entry.labId && entry.outcome === 'committed') completed.set(entry.labId, entry.createdAt)
+    const event = restoreTimelineEvent(entry, 'origin')
+    if (event) restored.push(event)
   }
   const events: WorldEvent[] = [
     ...(await reads.read(`${ctx.home}:${ctx.profileName}:snapshots`, [snapshotsDir(ctx.home)], () =>
@@ -217,19 +219,10 @@ export async function worldLines(ctx: CliContext, currentId?: string) {
             () => snapshotEvents({ ...ctx, home: labHomeDir(ctx.home, id) }, id),
           )),
         )
-        const lineJournal = await readFile(journalPath(labHomeDir(ctx.home, id)), 'utf8').catch(
-          (error) => (error.code === 'ENOENT' ? '' : Promise.reject(error)),
-        )
-        for (const row of lineJournal.split('\n').filter(Boolean)) {
-          try {
-            const entry = JSON.parse(row) as PromotionJournalEntry
-            if (entry.profileName !== ctx.profileName) continue
-            operationJournal.push(entry)
-            const event = restoreTimelineEvent(entry, id)
-            if (event) events.push(event)
-          } catch {
-            /* A damaged journal row cannot hide the line's snapshots. */
-          }
+        for (const entry of await readJournalEntries(labHomeDir(ctx.home, id), ctx.profileName)) {
+          operationJournal.push(entry)
+          const event = restoreTimelineEvent(entry, id)
+          if (event) events.push(event)
         }
       } catch {
         eventWarnings.push(`${manifest.alias ?? id} 的快照暂时无法读取`)
@@ -445,8 +438,7 @@ async function dispatchAction(
     if (body.from !== undefined && typeof body.from !== 'string') throw new UsageError('无效的来源')
     if (typeof body.from === 'string') {
       const source = await readLabManifest(ctx.home, await resolveLabId(ctx.home, body.from))
-      if (source.source.profileName !== ctx.profileName)
-        throw new UsageError('世界线不属于当前 profile')
+      assertOwnsLine(source, ctx)
     }
     if (body.snapshotId !== undefined && typeof body.snapshotId !== 'string')
       throw new UsageError('无效快照')
@@ -497,18 +489,11 @@ async function dispatchAction(
         : action === 'lab-remove'
           ? (deps.labRemove ?? runLabRemove)
           : (deps.labAdd ?? runLabAdd)
-    const job = startJob(
+    const job = startScopedJob(
+      ctx,
+      sourceId,
       action as 'lab-add' | 'lab-update' | 'lab-remove',
-      (handle) =>
-        runner(ctx, spec, {
-          ...options,
-          onProbe: (probe) => handle.pushProbe(probe),
-          onPhase: (phase) => handle.setPhase(phase),
-          onLabCreated: (id) => handle.setLabId(id),
-          onTransaction: (id) => handle.setTransactionId(id),
-        }),
-      undefined,
-      { home: ctx.home, profileName: ctx.profileName, resource: sourceId },
+      (_handle, hooks) => runner(ctx, spec, { ...options, ...hooks }),
     )
     return { jobId: job.id }
   }
@@ -556,18 +541,8 @@ async function dispatchAction(
       manager: ctx,
       ...(sourceId === 'origin' ? {} : { sourceId }),
     }
-    const job = startJob(
-      'restore',
-      (handle) =>
-        (deps.restore ?? runRestoreCommand)(source, {
-          ...options,
-          onProbe: (probe) => handle.pushProbe(probe),
-          onPhase: (phase) => handle.setPhase(phase),
-          onLabCreated: (id) => handle.setLabId(id),
-          onTransaction: (id) => handle.setTransactionId(id),
-        }),
-      undefined,
-      { home: ctx.home, profileName: ctx.profileName, resource: sourceId },
+    const job = startScopedJob(ctx, sourceId, 'restore', (_handle, hooks) =>
+      (deps.restore ?? runRestoreCommand)(source, { ...options, ...hooks }),
     )
     return { jobId: job.id }
   }
@@ -614,8 +589,11 @@ async function dispatchAction(
   if (typeof body.id !== 'string') throw new UsageError('请选择世界线')
   const id = await resolveLabId(ctx.home, body.id)
   const manifest = await readLabManifest(ctx.home, id)
-  if (manifest.source.profileName !== ctx.profileName)
-    throw new UsageError('世界线不属于当前 profile')
+  assertOwnsLine(manifest, ctx)
+  const stopOrDestroyAction = async () => {
+    if (id === currentId) throw new UsageError('请从另一实例管理当前正在访问的世界线')
+    return action === 'stop' ? runLabStop(ctx, id) : runLabDestroy(ctx, id)
+  }
   const labHandlers: Record<string, () => Promise<unknown>> = {
     'lab-status': async () => {
       return labStatus(ctx, id)
@@ -623,20 +601,17 @@ async function dispatchAction(
     'lab-verify': async () => {
       const interactive = optionalFlag(body, 'interactive')
       if (manifest.purpose === 'mirror') throw new UsageError('请选择验证实验')
-      const job = startJob(
+      const job = startScopedJob(
+        ctx,
+        manifest.source.parentLabId ?? 'origin',
         'lab-verify',
-        (handle) =>
+        (_handle, hooks) =>
           (deps.labVerify ?? runLabVerify)(ctx, id, {
             interactive,
-            onProbe: (probe) => handle.pushProbe(probe),
-            onPhase: (phase) => handle.setPhase(phase),
+            onProbe: hooks.onProbe,
+            onPhase: hooks.onPhase,
           }),
         id,
-        {
-          home: ctx.home,
-          profileName: ctx.profileName,
-          resource: manifest.source.parentLabId ?? 'origin',
-        },
       )
       return { jobId: job.id }
     },
@@ -646,20 +621,17 @@ async function dispatchAction(
         acceptInconclusive: optionalFlag(body, 'acceptInconclusive'),
         restart: optionalFlag(body, 'restart'),
       }
-      const job = startJob(
+      const job = startScopedJob(
+        ctx,
+        manifest.source.parentLabId ?? 'origin',
         'promote',
-        (handle) =>
+        (_handle, hooks) =>
           (deps.promote ?? runLabPromoteCommand)(ctx, id, {
             ...options,
-            onPhase: (phase) => handle.setPhase(phase),
-            onTransaction: (transactionId) => handle.setTransactionId(transactionId),
+            onPhase: hooks.onPhase,
+            onTransaction: hooks.onTransaction,
           }),
         id,
-        {
-          home: ctx.home,
-          profileName: ctx.profileName,
-          resource: manifest.source.parentLabId ?? 'origin',
-        },
       )
       return { jobId: job.id }
     },
@@ -679,14 +651,8 @@ async function dispatchAction(
     start: async () => {
       return runLabStart(ctx, { id })
     },
-    stop: async () => {
-      if (id === currentId) throw new UsageError('请从另一实例管理当前正在访问的世界线')
-      return action === 'stop' ? runLabStop(ctx, id) : runLabDestroy(ctx, id)
-    },
-    destroy: async () => {
-      if (id === currentId) throw new UsageError('请从另一实例管理当前正在访问的世界线')
-      return action === 'stop' ? runLabStop(ctx, id) : runLabDestroy(ctx, id)
-    },
+    stop: stopOrDestroyAction,
+    destroy: stopOrDestroyAction,
     default: async () => {
       return runLabDefault(ctx, id)
     },

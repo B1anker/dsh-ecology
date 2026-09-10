@@ -2,6 +2,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { lstat, mkdir, open, readdir, readFile, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { readdirIfExists } from '../fs/read-json.js'
 
 export async function writeFileSynced(file: string, data: Buffer | string): Promise<void> {
   const handle = await open(file, 'w', 0o600)
@@ -99,12 +100,7 @@ async function readRecord(staging: string): Promise<SwapRecord> {
 
 /** Read-only inventory, including legacy/incomplete directories; never hides corrupt records. */
 export async function pendingSwaps(profileDir: string): Promise<string[]> {
-  try {
-    return (await readdir(profileDir)).filter((name) => name.startsWith(prefix)).sort()
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw error
-  }
+  return (await readdirIfExists(profileDir)).filter((name) => name.startsWith(prefix)).sort()
 }
 
 /** Explicit recovery, under the caller's writer lock. Backups survive every failed attempt. */

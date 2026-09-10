@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorldEvent } from '../domain/insight-types.js'
+import type { ApiFn } from './api-types.js'
+import { errorMessage, useActionRunner, useApiQuery } from './async.js'
 import { BackupSelect } from './backup-select.js'
+import { ErrorText } from './error-text.js'
 import { HudSelect, HudTabs } from './hud-controls.js'
 import type { Job } from './job-view.js'
 import { CompatibilityMatrix, UpgradeResults } from './result-visuals.js'
 import type { ResearchTopic } from './workflow-navigation.js'
+
+type RefreshResult =
+  | { kind: 'diagnose'; records: any[]; points: any[] }
+  | { kind: 'transfer'; points: any[] }
+  | { kind: 'updates'; policy: any; results: any[]; jobs: Job[] | null }
+  | { kind: 'deployment'; status: any }
 
 export function ResearchPanel({
   id,
@@ -14,7 +23,7 @@ export function ResearchPanel({
   initialTopic = 'diagnose',
 }: {
   id: string
-  api(body: unknown): Promise<any>
+  api: ApiFn
   onJob(id: string): void
   events: WorldEvent[]
   initialTopic?: ResearchTopic
@@ -26,12 +35,13 @@ export function ResearchPanel({
   const [refreshMessage, setRefreshMessage] = useState('')
   const [diagnosisMethod, setDiagnosisMethod] = useState('plugins')
   const [exportSnapshot, setExportSnapshot] = useState('')
-  const [loading, setLoading] = useState(false)
   const scope = useRef('')
   scope.current = `${id}:${topic}`
-  const loadVersion = useRef(0)
   const viewVersion = useRef(0)
   const bundleVersion = useRef(0)
+  const alive = useRef(true)
+  const manualRefresh = useRef(false)
+  const pendingRecordsTab = useRef(false)
   const [historyLimit, setHistoryLimit] = useState(5)
   const [breakStale, setBreakStale] = useState(false)
   const [interruptedConfirmations, setInterruptedConfirmations] = useState<
@@ -42,9 +52,7 @@ export function ResearchPanel({
   const [sessions, setSessions] = useState<any[]>([]),
     [snapshots, setSnapshots] = useState<any[]>([]),
     [good, setGood] = useState(''),
-    [bad, setBad] = useState(''),
-    [error, setError] = useState(''),
-    [busy, setBusy] = useState(false)
+    [bad, setBad] = useState('')
   const [versions, setVersions] = useState(''),
     [policy, setPolicy] = useState<any>(null),
     [upgrades, setUpgrades] = useState<any[]>([]),
@@ -53,76 +61,100 @@ export function ResearchPanel({
     [accepted, setAccepted] = useState(false)
   const [bundle, setBundle] = useState(''),
     [requirements, setRequirements] = useState<Record<string, string>>({})
-  const refresh = useCallback(
-    async (manual = false) => {
-      const expectedScope = `${id}:${topic}`
-      const version = ++loadVersion.current
-      const current = () => scope.current === expectedScope && loadVersion.current === version
-      setLoading(true)
-      setError('')
+  const { pending, error: actionError, setError: setActionError, run } = useActionRunner()
+  const busy = !!pending
+  const request = useCallback(
+    async (signal: AbortSignal): Promise<RefreshResult> => {
       setRefreshMessage('')
       setPromoteLab(null)
       setInterruptedConfirmations({})
-      try {
-        if (topic === 'diagnose') {
-          const [records, points] = await Promise.all([
-            api({ action: 'investigations' }),
-            api({ action: 'snapshot-list', id }),
-          ])
-          if (!current()) return
-          setSessions(records.filter((record: any) => record.sourceId === id))
-          setSnapshots(points.filter((point: any) => point.snapshotId))
-          if (manual)
-            setRefreshMessage(
-              `已重新读取 ${records.filter((record: any) => record.sourceId === id).length} 条排查记录、${points.filter((point: any) => point.snapshotId).length} 份备份 · ${new Date().toLocaleTimeString()}`,
-            )
-        } else if (topic === 'transfer') {
-          const points = await api({ action: 'snapshot-list', id })
-          if (!current()) return
-          setSnapshots(points.filter((point: any) => point.snapshotId))
-        } else if (topic === 'updates') {
-          const [nextPolicy, results, jobs] = await Promise.all([
-            api({ action: 'upgrade-policy', id }),
-            api({ action: 'upgrade-results' }),
-            api({ action: 'jobs' }).catch(() => null),
-          ])
-          if (!current()) return
-          setPolicy(nextPolicy)
-          setUpgrades(results.filter((result: any) => result.sourceId === id))
-          setMatrixError(jobs === null ? '兼容验证历史读取失败，请刷新重试。' : '')
-          if (jobs)
-            setMatrixJobs(
-              jobs.filter((job: Job) => job.kind === 'version-matrix' && job.resource === id),
-            )
-        } else {
-          const status = await api({ action: 'deployment-status' })
-          if (!current()) return
-          setDeployment(status)
-        }
-        if (manual && current() && topic !== 'diagnose')
-          setRefreshMessage(`数据已更新 · ${new Date().toLocaleTimeString()}`)
-      } catch (e) {
-        if (current()) setError(e instanceof Error ? e.message : '读取失败，请重试。')
-      } finally {
-        if (current()) setLoading(false)
+      setActionError('')
+      if (topic === 'diagnose') {
+        const [records, points] = await Promise.all([
+          api({ action: 'investigations' }, signal),
+          api({ action: 'snapshot-list', id }, signal),
+        ])
+        return { kind: 'diagnose', records, points }
       }
+      if (topic === 'transfer') {
+        const points = await api({ action: 'snapshot-list', id }, signal)
+        return { kind: 'transfer', points }
+      }
+      if (topic === 'updates') {
+        const [nextPolicy, results, jobs] = await Promise.all([
+          api({ action: 'upgrade-policy', id }, signal),
+          api({ action: 'upgrade-results' }, signal),
+          api({ action: 'jobs' }, signal).catch(() => null),
+        ])
+        return { kind: 'updates', policy: nextPolicy, results, jobs }
+      }
+      const status = await api({ action: 'deployment-status' }, signal)
+      return { kind: 'deployment', status }
     },
     [api, id, topic],
   )
+  const {
+    error: loadError,
+    loading,
+    reload,
+  } = useApiQuery<RefreshResult>(api, request, [request], {
+    fallback: '读取失败，请重试。',
+    onSuccess: (result) => {
+      const manual = manualRefresh.current
+      manualRefresh.current = false
+      if (result.kind === 'diagnose') {
+        const records = result.records.filter((record: any) => record.sourceId === id)
+        const points = result.points.filter((point: any) => point.snapshotId)
+        setSessions(records)
+        setSnapshots(points)
+        if (manual)
+          setRefreshMessage(
+            `已重新读取 ${records.length} 条排查记录、${points.length} 份备份 · ${new Date().toLocaleTimeString()}`,
+          )
+      } else if (result.kind === 'transfer') {
+        setSnapshots(result.points.filter((point: any) => point.snapshotId))
+      } else if (result.kind === 'updates') {
+        setPolicy(result.policy)
+        setUpgrades(result.results.filter((record: any) => record.sourceId === id))
+        setMatrixError(result.jobs === null ? '兼容验证历史读取失败，请刷新重试。' : '')
+        if (result.jobs)
+          setMatrixJobs(
+            result.jobs.filter((job: Job) => job.kind === 'version-matrix' && job.resource === id),
+          )
+      } else {
+        setDeployment(result.status)
+      }
+      if (manual && result.kind !== 'diagnose')
+        setRefreshMessage(`数据已更新 · ${new Date().toLocaleTimeString()}`)
+      if (pendingRecordsTab.current) {
+        pendingRecordsTab.current = false
+        setDiagnosisTab('records')
+      }
+    },
+  })
+  const error = loadError || actionError
   useEffect(() => {
     setAccepted(false)
     setBreakStale(false)
     setPromoteLab(null)
     setInterruptedConfirmations({})
     setEntry(null)
-    setError('')
-    void refresh()
-    return () => {
-      loadVersion.current += 1
+    setActionError('')
+  }, [id, topic])
+  useEffect(
+    () => () => {
+      alive.current = false
       viewVersion.current += 1
       bundleVersion.current += 1
+    },
+    [],
+  )
+  useEffect(() => {
+    if (loadError && pendingRecordsTab.current) {
+      pendingRecordsTab.current = false
+      setDiagnosisTab('records')
     }
-  }, [refresh])
+  }, [loadError])
   useEffect(() => {
     setGood('')
     setBad('')
@@ -139,26 +171,24 @@ export function ResearchPanel({
     setDiagnosisTab('new')
   }, [id])
   const act = async (body: object) => {
-    const expectedScope = scope.current
-    const expectedVersion = viewVersion.current
-    const current = () => scope.current === expectedScope && viewVersion.current === expectedVersion
-    setBusy(true)
-    setError('')
-    try {
-      const r = await api(body)
-      if (!current()) return
-      if (r.jobId) onJob(r.jobId)
-      else {
-        await refresh()
-        if (current() && (body as { action?: string }).action === 'investigation-create')
-          setDiagnosisTab('records')
-      }
-      return current() ? r : undefined
-    } catch (e) {
-      if (current()) setError(e instanceof Error ? e.message : '操作失败')
-    } finally {
-      setBusy(false)
-    }
+    let value: any
+    await run(
+      '处理中…',
+      () => api(body),
+      (r) => {
+        if (!alive.current) return
+        value = r
+        if (r.jobId) {
+          onJob(r.jobId)
+        } else {
+          pendingRecordsTab.current =
+            (body as { action?: string }).action === 'investigation-create'
+          reload()
+        }
+      },
+      '操作失败',
+    )
+    return value
   }
   const download = (value: unknown, name: string) => {
     const url = URL.createObjectURL(
@@ -186,11 +216,7 @@ export function ResearchPanel({
           }[topic]
         }
       </p>
-      {error && (
-        <p className="wl-error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <ErrorText message={error} />}
       {topic === 'diagnose' && (
         <HudTabs
           label="排查功能"
@@ -213,7 +239,10 @@ export function ResearchPanel({
           <button
             className="wl-button"
             disabled={busy || loading}
-            onClick={() => void refresh(true)}
+            onClick={() => {
+              manualRefresh.current = true
+              reload()
+            }}
           >
             {loading
               ? '正在读取…'
@@ -531,10 +560,10 @@ export function ResearchPanel({
               setAccepted(false)
               setRequirements({})
               setBundle('')
-              setError('')
+              setActionError('')
               if (!f) return
               if (f.size > 32 * 1024 * 1024) {
-                setError('环境包超过 32 MiB')
+                setActionError('环境包超过 32 MiB')
                 return
               }
               try {
@@ -544,7 +573,7 @@ export function ResearchPanel({
                   setAccepted(false)
                 }
               } catch (e) {
-                if (current()) setError(e instanceof Error ? e.message : '环境包读取失败')
+                if (current()) setActionError(errorMessage(e, '环境包读取失败'))
               }
             }}
           />

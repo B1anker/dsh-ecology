@@ -1,4 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback } from 'react'
+import type { ApiFn } from './api-types.js'
+import { useApiQuery } from './async.js'
+
 export interface LabStatus {
   sourceId: string
   sourceName: string
@@ -9,27 +12,18 @@ export interface LabStatus {
   canPromote: boolean
   createdAt: string
 }
-export function useLabStatus(
-  api: (body: unknown, signal?: AbortSignal) => Promise<any>,
-  id: string | null,
-  revision: string,
-) {
-  const [status, setStatus] = useState<LabStatus | null>(null)
-  const [error, setError] = useState('')
-  useEffect(() => {
-    setStatus(null)
-    setError('')
-    if (!id) return
-    const controller = new AbortController()
-    void api({ action: 'lab-status', id }, controller.signal)
-      .then((value) => {
-        if (!controller.signal.aborted) setStatus(value)
-      })
-      .catch(() => {
-        if (!controller.signal.aborted)
-          setError('暂时无法确认实验状态，请刷新；若服务仍运行旧版本，请重启 DSH 后再试。')
-      })
-    return () => controller.abort()
-  }, [api, id, revision])
+const ERROR_TEXT = '暂时无法确认实验状态，请刷新；若服务仍运行旧版本，请重启 DSH 后再试。'
+export function useLabStatus(api: ApiFn, id: string | null, revision: string) {
+  // 原实现忽略底层错误、统一展示固定文案：抛出非 Error 使 errorMessage 落到 fallback。
+  const request = useCallback(
+    (signal: AbortSignal) =>
+      api({ action: 'lab-status', id }, signal).catch(() => {
+        throw ERROR_TEXT
+      }),
+    [api, id],
+  )
+  const { data: status, error } = useApiQuery<LabStatus>(api, id ? request : null, [id, revision], {
+    fallback: ERROR_TEXT,
+  })
   return { status, error }
 }

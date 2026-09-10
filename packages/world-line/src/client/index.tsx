@@ -10,9 +10,11 @@ import { WarningCircle } from '@phosphor-icons/react/dist/csr/WarningCircle'
 import { X } from '@phosphor-icons/react/dist/csr/X'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorldEvent } from '../domain/insight-types.js'
+import { errorMessage } from './async.js'
 import { CleanOptions } from './clean-options.js'
 import { CloseButton } from './close-button.js'
 import { useWorldLineEntry } from './entry.js'
+import { ErrorText } from './error-text.js'
 import { Experiments } from './experiments.js'
 import { Inspector } from './inspector.js'
 import { useJobFeed } from './job-feed.js'
@@ -175,7 +177,7 @@ function WorldLine({
       )
       setLoadError('')
     } catch (e) {
-      if (!controller.signal.aborted) setLoadError(e instanceof Error ? e.message : '加载失败')
+      if (!controller.signal.aborted) setLoadError(errorMessage(e, '加载失败'))
     } finally {
       if (!controller.signal.aborted) setRefreshing(false)
     }
@@ -482,7 +484,7 @@ function WorldLine({
         })
       }
     } catch (e) {
-      const message = e instanceof Error ? e.message : '操作失败'
+      const message = errorMessage(e, '操作失败')
       dive?.fail(message)
       setError(message)
     } finally {
@@ -520,7 +522,7 @@ function WorldLine({
       setLabFlowOpen(false)
       setMaintenanceOpen(true)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '任务启动失败')
+      setError(errorMessage(e, '任务启动失败'))
     }
   }
   const generateReport = async (id: string) => {
@@ -1224,11 +1226,7 @@ function WorldLine({
                 </label>
               </div>
             )}
-            {error && (
-              <p className="wl-error" role="alert">
-                {error}
-              </p>
-            )}
+            {error && <ErrorText message={error} />}
             {busy && (
               <div className="wl-progress" role="status">
                 <CircleNotch className="wl-spin" size={22} />

@@ -6,9 +6,10 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { mkdir, open, readFile } from 'node:fs/promises'
+import { mkdir, open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { acquireLock } from '../fs/lock.js'
+import { readTextIfExists } from '../fs/read-json.js'
 import { syncDir } from './swap.js'
 
 export interface PromotionJournalEntry {
@@ -64,10 +65,7 @@ export async function appendJournal(
     breakStale,
   })
   try {
-    const raw = await readFile(journalPath(home), 'utf8').catch((error) => {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
-      throw error
-    })
+    const raw = (await readTextIfExists(journalPath(home))) ?? ''
     if (raw && !raw.endsWith('\n'))
       throw new Error('incomplete promotion journal tail; inspection required')
     for (const line of raw.split('\n').filter(Boolean)) {

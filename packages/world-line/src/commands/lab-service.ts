@@ -11,6 +11,7 @@ import { analyzeProfile, type SnapshotManifest } from '../domain/snapshot.js'
 import { writeFileAtomic } from '../fs/atomic.js'
 import { acquireLock } from '../fs/lock.js'
 import { withOperations } from '../fs/operation.js'
+import { readTextIfExists } from '../fs/read-json.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
 import { assertAliasAvailable, resolveLabId } from '../lab/aliases.js'
 import { withPackageCache } from '../lab/cache-maintenance.js'
@@ -46,12 +47,9 @@ export async function isolateLocalDependencies(
   const path = join(target, 'package.json')
   const manifest = JSON.parse(await readFile(path, 'utf8'))
   const lockPath = join(target, 'pnpm-lock.yaml')
-  const lockText = await readFile(lockPath, 'utf8').catch((error) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  })
+  const lockText = await readTextIfExists(lockPath)
   const lock =
-    lockText === null
+    lockText === undefined
       ? null
       : (load(lockText) as { importers?: Record<string, Record<string, Record<string, unknown>>> })
   let index = 0
@@ -197,11 +195,8 @@ async function startMirrorUnlocked(
     }
     if (!previous) {
       const patchPath = join(labProfileDir(ctx.home, id, ctx.profileName), 'cordis.patch.yml')
-      const patch = await readFile(patchPath, 'utf8').catch((error) => {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-        throw error
-      })
-      if (patch !== null) {
+      const patch = await readTextIfExists(patchPath)
+      if (patch !== undefined) {
         let rebased: string
         try {
           rebased = dump(rebaseHomePaths(load(patch), sourceHome, labHomeDir(ctx.home, id)))

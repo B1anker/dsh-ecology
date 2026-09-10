@@ -13,7 +13,7 @@ import { requirePnpm } from '../lab/gate.js'
 import { localSourceHash } from '../lab/local-source.js'
 import { runCaptured } from '../lab/runner.js'
 import { sourceContext } from '../lab/source.js'
-import { type JobHandle, startJob } from '../web/jobs.js'
+import { type JobHandle, startScopedJob } from '../web/jobs.js'
 
 /** Exact SemVer ordering; an unknown installed version never authorizes a downgrade. */
 export function isNewerVersion(candidate: string, current: string | undefined): boolean {
@@ -233,11 +233,8 @@ export async function upgradeTick(ctx: CliContext) {
       await sourceContext(ctx, p.sourceId)
       p.nextAt = new Date(Date.now() + p.hours * 3600000).toISOString()
       await writeFileAtomic(path, JSON.stringify(p))
-      const job = startJob(
-        'upgrade-check',
-        (handle) => checkUpgrades(ctx, p.sourceId, handle),
-        undefined,
-        { home: ctx.home, profileName: ctx.profileName, resource: p.sourceId },
+      const job = startScopedJob(ctx, p.sourceId, 'upgrade-check', (handle) =>
+        checkUpgrades(ctx, p.sourceId, handle),
       )
       p.lastJobId = job.id
       await writeFileAtomic(path, JSON.stringify(p))

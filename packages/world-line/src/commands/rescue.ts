@@ -23,6 +23,7 @@ import { UsageError } from '../domain/errors.js'
 import { writeFileAtomic } from '../fs/atomic.js'
 import { acquireLock } from '../fs/lock.js'
 import { profileDir, profileLockPath } from '../fs/paths.js'
+import { readTextIfExists } from '../fs/read-json.js'
 import { dshBootArgs } from '../host-adapters/dsh-0.1.x.js'
 import { requireKnownHost, requirePnpm } from '../lab/gate.js'
 import { launchDsh } from '../lab/launcher.js'
@@ -165,12 +166,10 @@ export function filterPatchBlocks(
 }
 
 async function readOfficialPatch(ctx: CliContext): Promise<string> {
-  try {
-    return await readFile(join(profileDir(ctx.home, ctx.profileName), 'cordis.patch.yml'), 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '[]\n'
-    throw error
-  }
+  return (
+    (await readTextIfExists(join(profileDir(ctx.home, ctx.profileName), 'cordis.patch.yml'))) ??
+    '[]\n'
+  )
 }
 
 /** Return only selectable patch identities; never expose plugin configuration. */

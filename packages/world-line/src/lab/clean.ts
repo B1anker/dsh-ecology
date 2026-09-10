@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { filterPatchBlocks } from '../commands/rescue.js'
@@ -7,6 +7,7 @@ import type { CliContext } from '../context.js'
 import { classifySpec } from '../domain/composition.js'
 import { UsageError } from '../domain/errors.js'
 import { profileDir } from '../fs/paths.js'
+import { readTextIfExists } from '../fs/read-json.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
 import { createLab } from './create.js'
 import type { KnownHost } from './gate.js'
@@ -37,10 +38,7 @@ export async function createCleanLab(
   })
   let patch = '[]\n'
   if (options.copyPluginConfig && selected.length) {
-    const text = await readFile(join(source, 'cordis.patch.yml'), 'utf8').catch((e) => {
-      if (e.code === 'ENOENT') return '[]\n'
-      throw e
-    })
+    const text = (await readTextIfExists(join(source, 'cordis.patch.yml'))) ?? '[]\n'
     patch = filterPatchBlocks(
       text,
       selected.flatMap((item) => item.ids),

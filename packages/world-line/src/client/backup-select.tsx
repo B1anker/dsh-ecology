@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback } from 'react'
 import type { SnapshotDetail, WorldEvent } from '../domain/insight-types.js'
+import type { ApiFn } from './api-types.js'
+import { useApiQuery } from './async.js'
 import { backupDescription } from './backup-description.js'
 import { HudSelect } from './hud-controls.js'
 
@@ -19,28 +21,24 @@ export function BackupSelect({
   points: WorldEvent[]
   events: WorldEvent[]
   id: string
-  api(body: unknown): Promise<any>
+  api: ApiFn
   disabled: boolean
 }) {
-  const [detail, setDetail] = useState<SnapshotDetail | null>(null)
-  const [error, setError] = useState('')
-  const [revision, setRevision] = useState(0)
-  useEffect(() => {
-    let current = true
-    setDetail(null)
-    setError('')
-    if (value)
-      void api({ action: 'snapshot-detail', id, snapshotId: value })
-        .then((result) => {
-          if (current) setDetail(result)
-        })
-        .catch(() => {
-          if (current) setError('备份内容读取失败')
-        })
-    return () => {
-      current = false
-    }
-  }, [api, id, value, revision])
+  // 原实现忽略底层错误、统一展示固定文案：抛出非 Error 使 errorMessage 落到 fallback。
+  const request = useCallback(
+    () =>
+      api({ action: 'snapshot-detail', id, snapshotId: value }).catch(() => {
+        throw '备份内容读取失败'
+      }),
+    [api, id, value],
+  )
+  const {
+    data: detail,
+    error,
+    reload,
+  } = useApiQuery<SnapshotDetail>(api, value ? request : null, [id, value], {
+    fallback: '备份内容读取失败',
+  })
   const point = points.find((point) => point.snapshotId === value)
   const description = point && backupDescription(point, events)
   return (
@@ -77,7 +75,7 @@ export function BackupSelect({
           {error ? (
             <p role="alert">
               {error}{' '}
-              <button className="wl-button" onClick={() => setRevision((n) => n + 1)}>
+              <button className="wl-button" onClick={reload}>
                 重试
               </button>
             </p>

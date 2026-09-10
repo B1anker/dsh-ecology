@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { runLabStart } from '../commands/lab-service.js'
 import type { CliContext } from '../context.js'
@@ -8,6 +8,7 @@ import { UsageError } from '../domain/errors.js'
 import { writeFileAtomic } from '../fs/atomic.js'
 import { isProcessAlive } from '../fs/lock.js'
 import { withOperations } from '../fs/operation.js'
+import { readdirIfExists } from '../fs/read-json.js'
 import { requirePnpm } from './gate.js'
 import { listLabs } from './layout.js'
 import { readLabManifest } from './manifest.js'
@@ -35,10 +36,7 @@ export async function withPackageCache<T>(home: string, run: () => Promise<T>): 
 }
 export async function prunePackageCache(ctx: CliContext, runtimeStopped = false) {
   return withOperations([ctx.home], 'package-cache', async () => {
-    const leases = await readdir(join(root(ctx.home), 'leases')).catch((e) => {
-      if (e.code === 'ENOENT') return []
-      throw e
-    })
+    const leases = await readdirIfExists(join(root(ctx.home), 'leases'))
     for (const file of leases) {
       if (!/^[a-f0-9-]{36}\.json$/.test(file)) throw new UsageError('未知缓存租约，停止清理')
       const path = join(root(ctx.home), 'leases', file),

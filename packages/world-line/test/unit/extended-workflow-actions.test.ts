@@ -72,19 +72,33 @@ const { jobs, pending } = rs.hoisted(() => ({
   jobs: [] as any[],
   pending: [] as Promise<unknown>[],
 }))
-rs.mock('../../src/web/jobs.js', () => ({
-  startJob: (kind: any, run: any, id: any, options: any) => {
+rs.mock('../../src/web/jobs.js', () => {
+  const startJob = (kind: any, run: any, id: any, options: any) => {
     jobs.push({ kind, id, options })
     pending.push(
       Promise.resolve().then(() =>
-        run({ setPhase: () => {}, pushProbe: () => {}, setLabId: () => {} }),
+        run(
+          {
+            setPhase: () => {},
+            pushProbe: () => {},
+            setLabId: () => {},
+            setTransactionId: () => {},
+          },
+          { onProbe: () => {}, onPhase: () => {}, onLabCreated: () => {}, onTransaction: () => {} },
+        ),
       ),
     )
     return { id: 'job-fixture' }
-  },
-}))
+  }
+  return {
+    startJob,
+    startScopedJob: (scope: any, resource: any, kind: any, run: any, id: any) =>
+      startJob(kind, run, id, { home: scope.home, profileName: scope.profileName, resource }),
+  }
+})
 rs.mock('../../src/web/insights.js', () => ({
   lineContext: (ctx: any) => ctx,
+  assertOwnsLine: () => {},
   checkedSnapshot: invoke('snapshot'),
   currentManifest: invoke('current'),
   snapshotEvents: invoke('events'),

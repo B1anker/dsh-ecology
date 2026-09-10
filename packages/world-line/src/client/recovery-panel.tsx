@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
+import type { ApiFn } from './api-types.js'
+import { useActionRunner, useApiQuery } from './async.js'
+import { ErrorText } from './error-text.js'
 
 type RecoverySelection = { recordId: string; transaction: boolean; labId?: string }
 export function RecoveryPanel({
@@ -7,57 +10,37 @@ export function RecoveryPanel({
   onVerify,
 }: {
   id: string
-  api(body: unknown): Promise<any>
+  api: ApiFn
   onVerify(id: string): void
 }) {
-  const [data, setData] = useState<any>(null),
-    [error, setError] = useState(''),
-    [busy, setBusy] = useState(false)
+  // id 切换时由调用方以 key 重挂载，从而重置列表与下方选择状态。
+  const {
+    data,
+    error: loadError,
+    loading,
+    reload,
+  } = useApiQuery<any>(api, { action: 'recovery-list', id }, [id], {
+    fallback: '恢复记录读取失败',
+    keepData: true,
+  })
+  const { pending, error: actionError, setError: setActionError, run } = useActionRunner()
+  const busy = !!pending
+  const error = loadError || actionError
   const [selected, setSelected] = useState<RecoverySelection | null>(null)
   const [stopped, setStopped] = useState(false),
     [breakStale, setBreakStale] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const loadVersion = useRef(0)
-  const refresh = useCallback(async () => {
-    const version = ++loadVersion.current
-    setLoading(true)
-    setError('')
-    try {
-      const result = await api({ action: 'recovery-list', id })
-      if (loadVersion.current === version) setData(result)
-    } catch (e) {
-      if (loadVersion.current === version)
-        setError(e instanceof Error ? e.message : '恢复记录读取失败')
-    } finally {
-      if (loadVersion.current === version) setLoading(false)
-    }
-  }, [api, id])
   const selectRecord = (record: RecoverySelection | null) => {
     setSelected(record)
     setStopped(false)
     setBreakStale(false)
-    setError('')
+    setActionError('')
   }
-  useEffect(() => {
-    setData(null)
-    setSelected(null)
-    setStopped(false)
-    setBreakStale(false)
-    void refresh()
-    return () => {
-      loadVersion.current += 1
-    }
-  }, [refresh])
   const completed = data?.transactions.filter((record: any) => !record.pending) ?? []
   return (
     <div className="wl-flow-actions">
       <p>安装或合入意外中断时，在这里修复未完成的操作，再重新验证环境。外部修改冲突不会被覆盖。</p>
-      {error && (
-        <p className="wl-error" role="alert">
-          {error}
-        </p>
-      )}
-      <button className="wl-button" disabled={busy || loading} onClick={() => void refresh()}>
+      {error && <ErrorText message={error} />}
+      <button className="wl-button" disabled={busy || loading} onClick={() => reload()}>
         {loading ? '正在读取…' : '刷新恢复记录'}
       </button>
       {data && !data.swaps.length && !data.transactions.some((r: any) => r.pending) && (
@@ -114,27 +97,25 @@ export function RecoveryPanel({
           <button
             className="wl-button wl-primary"
             disabled={busy || !stopped}
-            onClick={async () => {
-              setBusy(true)
-              setError('')
-              try {
-                await api({
-                  action: 'recovery-apply',
-                  id,
-                  ...selected,
-                  runtimeStopped: stopped,
-                  breakStale,
-                })
-                setData(null)
-                await refresh()
-                setSelected(null)
-                setStopped(false)
-                setBreakStale(false)
-              } catch (e) {
-                setError(e instanceof Error ? e.message : '恢复失败')
-              } finally {
-                setBusy(false)
-              }
+            onClick={() => {
+              void run(
+                '处理中…',
+                () =>
+                  api({
+                    action: 'recovery-apply',
+                    id,
+                    ...selected,
+                    runtimeStopped: stopped,
+                    breakStale,
+                  }),
+                () => {
+                  reload()
+                  setSelected(null)
+                  setStopped(false)
+                  setBreakStale(false)
+                },
+                '恢复失败',
+              )
             }}
           >
             确认修复

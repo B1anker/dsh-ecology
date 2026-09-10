@@ -6,6 +6,9 @@ import { Stethoscope } from '@phosphor-icons/react/dist/csr/Stethoscope'
 import { useEffect, useState } from 'react'
 import type { DoctorResult } from '../commands/doctor.js'
 import type { ReportResult } from '../commands/report.js'
+import type { ApiFn } from './api-types.js'
+import { useActionRunner, useApiQuery } from './async.js'
+import { ErrorText } from './error-text.js'
 import {
   JobReceipt,
   jobKindLabel,
@@ -30,7 +33,7 @@ export function Maintenance({
   lastKnownGood,
   onOpenTools,
 }: {
-  api(body: unknown, signal?: AbortSignal): Promise<any>
+  api: ApiFn
   jobId: string | null
   onOpenTools(section: 'recovery' | 'research', topic?: ResearchTopic, sourceId?: string): void
   close(): void
@@ -48,70 +51,52 @@ export function Maintenance({
     onSettled()
   })
   const running = !!job && ['running', 'queued'].includes(job.status)
-  const [doctor, setDoctor] = useState<DoctorResult | null>(null)
-  const [checking, setChecking] = useState(false)
-  const [doctorError, setDoctorError] = useState('')
-  const [revision, setRevision] = useState(0)
-  const [pending, setPending] = useState('')
-  const [error, setError] = useState('')
+  const {
+    data: doctor,
+    error: doctorError,
+    loading: checking,
+    reload: recheck,
+  } = useApiQuery<DoctorResult>(
+    api,
+    topic === 'diagnose' && !activeJob ? { action: 'doctor' } : null,
+    [topic, activeJob],
+    { fallback: '诊断失败', keepData: true },
+  )
+  const { pending, error, setError, run } = useActionRunner()
   const [reportData, setReportData] = useState<ReportResult | null>(null)
   useEffect(() => setReportData(null), [activeJob])
   const [message, setMessage] = useState('')
 
   const [confirmRestore, setConfirmRestore] = useState(false)
   const [restoreRestart, setRestoreRestart] = useState(true)
-  useEffect(() => {
-    if (topic !== 'diagnose' || activeJob) return
-    const controller = new AbortController()
-    setChecking(true)
-    setDoctorError('')
-    void api({ action: 'doctor' }, controller.signal)
-      .then((result: DoctorResult) => {
-        if (!controller.signal.aborted) setDoctor(result)
-        return undefined
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) setDoctorError(e instanceof Error ? e.message : '诊断失败')
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setChecking(false)
-      })
-    return () => controller.abort()
-  }, [api, revision, topic, activeJob])
   const rollback = async () => {
-    if (pending) return
-    setPending('正在启动回滚…')
-    setError('')
-    try {
-      const outcome: { jobId: string } = await api({
-        action: 'restore',
-        lastKnownGood: true,
-        promote: true,
-        restart: restoreRestart,
-      })
-      setConfirmRestore(false)
-      setInternalJob(outcome.jobId)
-      onJobCreated(outcome.jobId)
-      onBusy(true)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '回滚启动失败')
-    } finally {
-      setPending('')
-    }
+    await run(
+      '正在启动回滚…',
+      () =>
+        api({
+          action: 'restore',
+          lastKnownGood: true,
+          promote: true,
+          restart: restoreRestart,
+        }),
+      (outcome: { jobId: string }) => {
+        setConfirmRestore(false)
+        setInternalJob(outcome.jobId)
+        onJobCreated(outcome.jobId)
+        onBusy(true)
+      },
+      '回滚启动失败',
+    )
   }
   const reportJob = async (id: string) => {
     if (pending) return
-    setPending('正在生成诊断报告…')
-    setError('')
     setMessage('')
-    try {
-      const outcome: ReportResult = await api({ action: 'report', id })
-      setReportData(outcome)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '生成报告失败')
-    } finally {
-      setPending('')
-    }
+    await run(
+      '正在生成诊断报告…',
+      () => api({ action: 'report', id }),
+      (outcome: ReportResult) => setReportData(outcome),
+      '生成报告失败',
+    )
   }
   const runForLab = async (
     id: string,
@@ -119,23 +104,22 @@ export function Maintenance({
     interactive = false,
     acceptReview = false,
   ) => {
-    if (pending || running) return
-    setPending('正在提交任务…')
-    setError('')
-    try {
-      const result = await api(
-        action === 'lab-verify'
-          ? { action, id, interactive }
-          : { action, id, restart: true, ...(acceptReview ? { acceptReview: true } : {}) },
-      )
-      setInternalJob(result.jobId)
-      onJobCreated(result.jobId)
-      onBusy(true)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '任务启动失败')
-    } finally {
-      setPending('')
-    }
+    if (running) return
+    await run(
+      '正在提交任务…',
+      () =>
+        api(
+          action === 'lab-verify'
+            ? { action, id, interactive }
+            : { action, id, restart: true, ...(acceptReview ? { acceptReview: true } : {}) },
+        ),
+      (result) => {
+        setInternalJob(result.jobId)
+        onJobCreated(result.jobId)
+        onBusy(true)
+      },
+      '任务启动失败',
+    )
   }
   const targetLabId = (job?.result as { labId?: string } | undefined)?.labId ?? job?.labId ?? null
   const { status: labStatus, error: labStatusError } = useLabStatus(
@@ -384,11 +368,7 @@ export function Maintenance({
               <h3>
                 <Stethoscope size={16} aria-hidden="true" /> 环境诊断
               </h3>
-              <button
-                className="wl-button"
-                disabled={checking}
-                onClick={() => setRevision((value) => value + 1)}
-              >
+              <button className="wl-button" disabled={checking} onClick={() => recheck()}>
                 <ArrowsClockwise size={15} className={checking ? 'wl-spin' : ''} />
                 重新检查
               </button>
@@ -444,7 +424,7 @@ export function Maintenance({
             {doctorError && (
               <div className="wl-error" role="alert">
                 <p>{doctorError}</p>
-                <button className="wl-button" onClick={() => setRevision((value) => value + 1)}>
+                <button className="wl-button" onClick={() => recheck()}>
                   重试
                 </button>
               </div>
@@ -457,11 +437,7 @@ export function Maintenance({
           <span>{message}</span>
         </div>
       )}
-      {connectionError && (
-        <p className="wl-error" role="status">
-          {connectionError}
-        </p>
-      )}
+      {connectionError && <ErrorText message={connectionError} role="status" />}
       {pending && (
         <p className="wl-insight-loading" role="status">
           <CircleNotch size={18} className="wl-spin" />

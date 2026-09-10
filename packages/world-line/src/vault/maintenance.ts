@@ -6,6 +6,7 @@ import { writeFileAtomic } from '../fs/atomic.js'
 import { sha256Hex } from '../fs/hash.js'
 import { withOperations } from '../fs/operation.js'
 import { objectsDir, snapshotsDir, worldLineDir } from '../fs/paths.js'
+import { readdirIfExists } from '../fs/read-json.js'
 import { listSnapshotManifests } from './manifests.js'
 import { recoveryReferences } from './references.js'
 
@@ -103,12 +104,7 @@ async function validateVault(home: string) {
   await safeDirectory(join(worldLineDir(home), 'vault'), true)
   await safeDirectory(objectsDir(home), true)
   await safeDirectory(snapshotsDir(home), true)
-  let names: string[] = []
-  try {
-    names = await readdir(snapshotsDir(home))
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
-  }
+  const names = await readdirIfExists(snapshotsDir(home))
   for (const name of names) {
     if (!/^snap-[A-Za-z0-9-]+\.json$/.test(name))
       throw new UsageError('快照目录含未知文件，停止回收')
@@ -151,12 +147,7 @@ async function planUnlocked(home: string): Promise<GcPlan> {
     }
   }
   const candidates: GcPlan['objects'] = []
-  let names: string[] = []
-  try {
-    names = await readdir(objectsDir(home))
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
-  }
+  const names = await readdirIfExists(objectsDir(home))
   for (const id of names.sort()) {
     if (!/^[a-f0-9]{64}$/.test(id)) throw new UsageError('对象目录包含未知文件，停止回收')
     const stat = await lstat(join(objectsDir(home), id))
@@ -275,12 +266,7 @@ export async function gcPurge(home: string, id: string) {
 export async function gcRecords(home: string) {
   const root = join(worldLineDir(home), 'quarantine')
   await safeDirectory(root, true)
-  let names: string[] = []
-  try {
-    names = await readdir(root)
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
-  }
+  const names = await readdirIfExists(root)
   const records = []
   for (const id of names
     .filter((n) => /^gc-\d+-[a-f0-9]{8}$/.test(n))

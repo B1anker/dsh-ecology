@@ -42,6 +42,7 @@ import { redactText } from '../domain/redaction.js'
 import { analyzeProfile } from '../domain/snapshot.js'
 import { acquireLock } from '../fs/lock.js'
 import { profileDir, profileLockPath } from '../fs/paths.js'
+import { readTextIfExists } from '../fs/read-json.js'
 import { adapterDsh01x, dshBootArgs } from '../host-adapters/dsh-0.1.x.js'
 import { runClientProbe } from './browser.js'
 import { WHITELIST_FILE_NAMES } from './create.js'
@@ -248,11 +249,8 @@ async function runLabPromoteUnlocked(
   const officialDir = profileDir(ctx.home, ctx.profileName)
   const labProfileDirPath = labProfileDir(storageHome, labId, labProfileName)
   const homeConfig = async (home: string) => {
-    const text = await readFile(join(home, 'cordis.patch.yml'), 'utf8').catch((e) => {
-      if (e.code === 'ENOENT') return null
-      throw e
-    })
-    return text === null
+    const text = await readTextIfExists(join(home, 'cordis.patch.yml'))
+    return text === undefined
       ? null
       : rebaseHomePaths(load(text, { schema: JSON_SCHEMA }), home, ctx.home)
   }
