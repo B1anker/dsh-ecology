@@ -23,8 +23,12 @@
 - id: connection
   inject: [webRuntime, dshWebLoginReady]
 
+# dsh-client-modules@0.1.5+ dropped its static webServer inject and only
+# falls back to ctx.inject when the service is missing. Waiting on
+# dshWebLoginReady guarantees webServer is already up, so the row must
+# restate webServer or property access throws "without inject".
 - id: modules
-  inject: [dshWebLoginReady]
+  inject: [webServer, dshWebLoginReady]
 
 - id: client-hmr
   inject: [dshWebLoginReady]

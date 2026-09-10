@@ -104,7 +104,9 @@ for (const patch of patches) {
 const expectedInject = {
   'web-runtime': ['webStartup', 'dshWebLoginReady'],
   connection: ['webRuntime', 'dshWebLoginReady'],
-  modules: ['dshWebLoginReady'],
+  // dsh-client-modules@0.1.5+ dropped its static webServer inject, so the
+  // login patch restates it while waiting on dshWebLoginReady.
+  modules: ['webServer', 'dshWebLoginReady'],
   'client-hmr': ['dshWebLoginReady'],
 }
 for (const [id, expected] of Object.entries(expectedInject)) {
