@@ -156,7 +156,10 @@ export function Maintenance({
           <span className="wl-eyebrow">{job ? job.kind.toUpperCase() : 'JOB'}</span>
           <h3>{job ? jobKindLabel(job.kind) : '任务进度'}</h3>
           {job ? (
-            <ProbeLadder job={job} onLogs={() => failedLabId && void reportJob(failedLabId)} />
+            <ProbeLadder
+              job={job}
+              onReport={targetLabId ? () => void reportJob(targetLabId) : undefined}
+            />
           ) : (
             <p className="wl-insight-loading" role="status">
               <CircleNotch size={18} className="wl-spin" />

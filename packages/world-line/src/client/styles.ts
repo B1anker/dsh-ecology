@@ -550,5 +550,9 @@ ${panelMaterialStyles}
 .wl-probe-detail:hover>span{text-decoration:underline;text-underline-offset:3px}
 .wl-probe-detail-full{white-space:pre-wrap;overflow-wrap:anywhere}
 @media(max-width:480px){.wl-page .wl-ladder li.wl-probe-row{column-gap:10px}.wl-page .wl-probe-actions .wl-button{max-width:112px;white-space:normal;line-height:1.4}}
+.wl-page .wl-probe-log{grid-column:1/-1;min-width:0;margin:6px 0 0 23px;padding:12px;border:1px solid var(--wl-hud-border);border-radius:6px;background:var(--dsw-alias-bg-layer-1)}
+.wl-page .wl-probe-log>p{margin:6px 0;font-size:11px}
+.wl-probe-log pre{max-height:240px;margin:10px 0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 ui-monospace,monospace;user-select:text}
+.wl-page .wl-probe-log>.wl-button{width:auto;font-size:11px}
 ${taskDiagnosisStyles}
 `

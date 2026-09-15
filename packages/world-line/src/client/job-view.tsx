@@ -5,7 +5,7 @@ import { MinusCircle } from '@phosphor-icons/react/dist/csr/MinusCircle'
 import { Question } from '@phosphor-icons/react/dist/csr/Question'
 import { Warning } from '@phosphor-icons/react/dist/csr/Warning'
 import { XCircle } from '@phosphor-icons/react/dist/csr/XCircle'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { LabActionResult, LabPromoteCommandResult } from '../commands/lab.js'
 import type { RestoreCommandResult } from '../commands/restore.js'
 import type { ProbeResult } from '../domain/probe.js'
@@ -83,7 +83,10 @@ export function currentJobAction(job: Job) {
 }
 
 /** Live probe ladder: current phase on top, then one row per finished probe. */
-export function ProbeLadder({ job, onLogs }: { job: Job; onLogs?(): void }) {
+export function ProbeLadder({ job, onReport }: { job: Job; onReport?(): void }) {
+  const [expandedProbe, setExpandedProbe] = useState<number | null>(null)
+  const logId = useId()
+  useEffect(() => setExpandedProbe(null), [job.id])
   const active = ['running', 'queued'].includes(job.status)
   return (
     <div className="wl-ladder" role="status" aria-label="验证进度">
@@ -142,9 +145,15 @@ export function ProbeLadder({ job, onLogs }: { job: Job; onLogs?(): void }) {
               </div>
               <div className="wl-probe-actions">
                 <time>{duration(probe)}</time>
-                {probe.status === 'fail' && onLogs && (
-                  <button className="wl-button" onClick={onLogs}>
-                    查看本次验证日志
+                {probe.status === 'fail' && (
+                  <button
+                    type="button"
+                    className="wl-button"
+                    aria-expanded={expandedProbe === index}
+                    aria-controls={`${logId}-${index}`}
+                    onClick={() => setExpandedProbe(expandedProbe === index ? null : index)}
+                  >
+                    {expandedProbe === index ? '收起验证日志' : '查看本次验证日志'}
                   </button>
                 )}
               </div>
@@ -164,6 +173,24 @@ export function ProbeLadder({ job, onLogs }: { job: Job; onLogs?(): void }) {
                   <Info size={14} aria-hidden="true" />
                   <span>{probe.detail}</span>
                 </TooltipButton>
+              )}
+              {expandedProbe === index && (
+                <section
+                  className="wl-probe-log"
+                  id={`${logId}-${index}`}
+                  aria-label="本次验证日志"
+                >
+                  <strong>
+                    {probe.label || probe.check} · {statusText(probe.status)}
+                  </strong>
+                  <p className="wl-muted">本条验证记录保存的输出</p>
+                  <pre>{probe.detail || '这条验证记录没有保存详细输出。'}</pre>
+                  {onReport && (
+                    <button type="button" className="wl-button" onClick={onReport}>
+                      生成实验诊断报告
+                    </button>
+                  )}
+                </section>
               )}
             </li>
           ))}

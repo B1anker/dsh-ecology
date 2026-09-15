@@ -296,3 +296,11 @@ Live host visual verification: blocked. The existing authenticated Chrome tab co
 User screenshot follow-up: log buttons now occupy an independent right-side action column; status icon and title share a flex row with an 8px gap. Non-pass/non-skip details are displayed as a single ellipsized line and the existing accessible TooltipButton exposes the complete text. Status semantics and log callback remain unchanged.
 
 Actual-component fixture checked at default desktop panel width and 390 × 844: title alignment, intrinsic log-button width, one-line detail, full tooltip, Escape dismissal and log callback passed. Evidence: `probe-compact.png` and `probe-tooltip.png` under the same visualization directory above. Typecheck, build and touched-file formatting pass. Rebuilt client installed locally with backup; no new formal-host visual verification claim.
+
+### Probe log no-op regression — 2026-09-15
+
+Root cause: Maintenance always supplied a callback guarded by failedLabId. An investigate job with overall status ok and failed probes therefore exposed an enabled button whose callback did nothing. The previous fixture only asserted a callback and did not represent this production guard.
+
+ProbeLadder now directly expands the selected probe's saved, redacted detail regardless of parent job status or lab ID. Missing detail produces an explicit empty message. Optional experiment report generation is a separate action and Maintenance only supplies it when targetLabId exists. Callback renamed onReport to express that boundary.
+
+Regression verification: actual component with status ok, two failed probes, no lab ID and no report callback. Each log button reveals its own output; selecting another row moves the expanded region; Enter collapses it. No network call is required to read a retained probe. Evidence: `probe-log-expanded.png` in the visualization directory above. Typecheck/build and touched-file lint pass. Client installed locally with backup.
