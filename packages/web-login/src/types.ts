@@ -3,15 +3,15 @@
  *
  * These are written by hand rather than imported from `@deepseek-ai/cordis` and
  * `@deepseek-ai/dsh-host-webserver`. Both are optional peer dependencies — the
- * package must typecheck and build without them installed — and the webserver
- * version this plugin targets (`0.1.0-rc.7`) is not the one published to the
- * public registry, so an import would resolve to a different shape or to
- * nothing at all.
+ * package must typecheck and build without them installed — so an import would
+ * resolve to nothing at all in a plain checkout.
  *
  * Only the members actually touched are declared. That is the point: the
  * surface below *is* the compatibility contract, so a host change that breaks
  * this plugin shows up as a type error in one file instead of as a runtime
- * failure spread across nine.
+ * failure spread across nine. `scripts/check-host-contract.mjs` re-verifies
+ * every member named here against each installed host copy it can find, and
+ * CI's `real-host-login` job runs it against the tested host tuple.
  *
  * @module @seaveyon/dsh-web-login/types
  */

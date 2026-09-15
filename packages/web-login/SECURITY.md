@@ -6,10 +6,15 @@ Security fixes are made on the latest release of `@seaveyon/dsh-web-login`.
 Before a first npm release exists, report issues against the default branch of
 this repository.
 
-The package is designed for the DSH Web host package
-`@deepseek-ai/dsh-host-webserver` `0.1.0-rc.7` and Cordis 4 (`^4.0.1`), running
-on Node.js 20.11 or later. Compatibility with other DSH Web releases is not
-promised until it has been tested and documented.
+The package declares the DSH Web host package
+`@deepseek-ai/dsh-host-webserver` `^0.1.0-rc.7` and Cordis 4 (`^4.0.1`) as
+optional peers and runs on Node.js 20.11 or later. The release it is exercised
+against — the login gate over the real registry, and the hand-written host
+types against the real declarations — is the tuple CI's `real-host-login` job
+installs (`.github/workflows/ci.yml`, currently DSH `0.1.5-rc.1`); the bundle
+patch also carries the `modules` row injection that `dsh-client-modules@0.1.5`
+requires. Compatibility with other DSH Web releases is not promised until it
+has been tested and documented.
 
 ## Reporting a vulnerability
 
