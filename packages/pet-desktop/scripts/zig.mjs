@@ -1,6 +1,6 @@
 /**
- * Run `zig <args>` when a zig toolchain is on PATH; otherwise skip — or, in
- * CI, fail.
+ * Run `zig <args>` when a zig toolchain is on PATH; otherwise skip — or, when
+ * the caller says zig is required, fail.
  *
  * This replaces the `command -v zig && zig build … || echo skip` one-liners
  * the package scripts used to be. Those had two problems. A `||` after the
@@ -8,8 +8,15 @@
  * zig, so a red test printed "skip" and exited 0. And on a CI runner without
  * zig the skip was silent, so the desktop tests could vanish from CI without
  * anyone noticing. Here the missing-toolchain case is the only one that
- * skips, zig's own exit code is passed through untouched, and `CI=true` turns
- * the skip into a failure.
+ * skips, zig's own exit code is passed through untouched, and
+ * `DSH_REQUIRE_ZIG=1` turns the skip into a failure.
+ *
+ * The switch is an explicit variable rather than the ambient `CI=true` on
+ * purpose: the workspace-wide `bun run build` runs on ubuntu runners (the
+ * check and engines-floor jobs, publish.yml's gate) where zig is absent and
+ * could not build this package anyway — src/windowing.zig only accepts macOS
+ * and Windows targets — so there the skip is the correct outcome. Only the
+ * macOS job that exists to run these tests sets the variable.
  *
  * Usage: node scripts/zig.mjs build
  *        node scripts/zig.mjs build test
@@ -40,9 +47,10 @@ const zig = (process.env.PATH ?? '')
   })
 
 if (zig === undefined) {
-  const inCi = process.env.CI !== undefined && process.env.CI !== '' && process.env.CI !== 'false'
-  if (inCi) {
-    console.error(`zig is not on PATH, and CI must not skip \`zig ${args.join(' ')}\` (see README)`)
+  if (process.env.DSH_REQUIRE_ZIG === '1') {
+    console.error(
+      `zig is not on PATH, and DSH_REQUIRE_ZIG=1 forbids skipping \`zig ${args.join(' ')}\` (see README)`,
+    )
     process.exit(1)
   }
   console.log(`skip: zig not installed (see README); \`zig ${args.join(' ')}\` did not run`)

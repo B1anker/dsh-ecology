@@ -145,12 +145,15 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      # CI=true makes the wrapper fail instead of skip when zig is missing, so
-      # a broken setup-zig step cannot turn this job into another false green.
+      # DSH_REQUIRE_ZIG makes the wrapper fail instead of skip when zig is
+      # missing, so a broken setup-zig step cannot turn this job into another
+      # false green. It is an opt-in rather than the ambient CI=true because
+      # the ubuntu jobs (and publish.yml's gate) run the workspace-wide build
+      # too, where zig legitimately is absent and the desktop package skips.
       - name: Zig unit tests
         run: bun run --filter @seaveyon/dsh-pet-desktop test:zig
         env:
-          CI: 'true'
+          DSH_REQUIRE_ZIG: '1'
 
   # The packages declare `engines.node: >=20.11.0`, and the job above only ever
   # exercises whichever Node the bun runtime happens to embed. This runs the
