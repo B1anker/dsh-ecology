@@ -51,13 +51,34 @@ await web.close()
 | Export | What it stands in for |
 | --- | --- |
 | `createMockWebServer()` | The DSH `webServer` registry, backed by a real `node:http` server. Exact routes beat the longest segment-boundary prefix, there is one fallback seat, and upgrades match an exact pathname. A handler rejection becomes an empty `400`, matching the host rather than leaking its message. |
-| `createMockContext(services)` | The Cordis context. Collects teardowns in `ctx.teardowns`, records log lines in `ctx.logs`, exposes `listeners`, implements `provide` / `set` / `on` / `emit` / `waterfall`, and runs teardowns in reverse on `ctx.dispose()`. |
+| `createMockContext(services)` | The Cordis context. Collects teardowns in `ctx.teardowns`, records log lines in `ctx.logs`, exposes `listeners`, implements `provide` / `set` / `on` / `emit` / `waterfall`, and runs teardowns in reverse on `ctx.dispose()`. `provide`'s third argument (the availability predicate) is kept and readable through `ctx.available(name)`; as in Cordis it gates dependents, not `get`. |
+| `createMockConnection(policy?)` | The host side of `connection`: `requestRejection(req)` answers with the status to reject with or `undefined`. `rejectWhen(policy)` swaps the fence at runtime; `consulted` records every question and answer. |
 | `createMockToolsPipeline(ctx)` | A minimal tools pipeline on that context: `register` under `ctx.get('tools')`, and `run()` driving pre → body → post. Pre-deny skips the body; post still runs; ask defaults to deny via `answerAsk`. |
 | `fakeRequest(options)` | An `IncomingMessage` over a fixed body, for the cases a socket makes awkward: a lying `Content-Length`, no `sec-fetch-*` headers, a request whose peer has gone. |
 | `fakeStreamingRequest(options)` | A request whose body arrives under the test's control, for what is only observable mid-flight: whether a reader destroyed the request, whether it removed its listeners. |
 | `fakeResponse()` | A `ServerResponse` that records `status`, lower-cased `headers`, and `body`. |
 | `assertMutualAssignability(ab, ba)` | Type-level proof that two structural host types remain mutually substitutable. Compiles only while they agree; runtime is a no-op. |
 | `runWaterfall(list, args, terminal?)` | The same waterfall scheduler the context uses, for tests that need a terminal other than `undefined`. |
+
+### Client-side doubles
+
+A dual-face plugin's browser bundle binds to services that only exist inside
+the shell page. `createMockClientRuntime(options)` composes all of them and a
+context whose `get` answers by the names the shell publishes:
+
+| Member | What it stands in for |
+| --- | --- |
+| `loader` | `window.__ModuleLoader__`: captures the bundle's `load` call, `invokeFactory()` runs it against a static module table, and an undeclared external throws like the shell does. |
+| `slots` | The `slots` service: records registrations per slot name instead of mounting. |
+| `sessions` | `currentProvideInfo` (the two-level live-agent-state channel, driven with `publish` / `select`) and `list` (the store whose `getSnapshot().current` is the selected session, driven with `setCurrent`). |
+| `settingsScope` | The persistence binder: namespaces over in-memory maps. |
+| `workspaces` | `list` store plus `create` / `delete`, recording `created` and `deleted`. |
+| `uiWorkspace` | `startSession(id)`, recording `started`. |
+| `locale` | `register` / `bind` with `{param}` interpolation and active-locale fallback (`zh-CN` → `zh` → `en` → key), `setActive` to switch. |
+| `context` | `get` over the table; `effect` runs the setup at once — as the host does — and `dispose()` runs the returned teardowns in reverse. |
+
+Each double is also exported on its own (`createMockSessions`,
+`createMockWorkspaces`, `createMockLocale`, …) for tests that need one seam.
 
 The mocks implement the interfaces in `types.ts` rather than being cast to them,
 so a plugin that starts using a member the real host provides and the mock does
@@ -98,7 +119,7 @@ runToolsPipelineContract('mock tools', () => {
 | Runner | Load-bearing claims |
 | --- | --- |
 | `runWebServerContract` | Registry members are writable; replacements are visible to later callers; exact beats prefix; longest segment prefix; fallback last; handler rejection → empty 400; upgrades exact/unique/disposable. |
-| `runContextContract` | `provide` visibility and `available()`; `on` disposer; emit order; waterfall requires `next()`; short-circuit; reverse teardown. |
+| `runContextContract` | `provide` visibility; the availability predicate gates `available()` but not `get`, and a throwing predicate reads as unavailable; `on` disposer; emit order; waterfall requires `next()`; short-circuit; reverse teardown. |
 | `runToolsPipelineContract` | Pre-deny skips body; post runs after deny; execute wrapper around body; thrown body → `isError`; allow via `next()`; unanswered ask denies; register disposer / duplicates. |
 
 ## Portable contract cases

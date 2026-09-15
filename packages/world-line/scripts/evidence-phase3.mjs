@@ -14,7 +14,11 @@
  *     re-probe the client shell; after-snapshot becomes lastKnownGood,
  *  4. client-browser made unavailable (PLAYWRIGHT_CHROMIUM_EXECUTABLE
  *     pointing at nothing): promotion-bound run yields no reliable signal →
- *     refused (exit 1); the same spec with --accept-inconclusive commits.
+ *     refused (exit 1); since the validation-workflow hardening,
+ *     --accept-inconclusive no longer bypasses *missing* browser evidence
+ *     either (it only accepts an inconclusive probe that did run), so the
+ *     same spec with the flag is refused too and the official profile stays
+ *     untouched.
  *
  * Requires: real dsh + pnpm on PATH, a `bun run build`, and Chrome for steps
  * 2-3. Steps degrade: missing Chrome runs the inconclusive-gate assertions
@@ -255,19 +259,23 @@ async function main() {
       ['lab', 'add', `file:${pluginDir3}`, '--promote', '--accept-inconclusive'],
       noChromeEnv,
     )
-    const acceptedLine = accepted.stdout.split('\n').find((l) => l.startsWith('client'))
+    const verdictLine = accepted.stdout.split('\n').find((l) => l.startsWith('verdict'))
     record(
-      '--accept-inconclusive lets the user accept the risk and commits',
-      accepted.exit === 0 &&
-        /inconclusive \(accepted/.test(acceptedLine ?? '') &&
-        Object.keys(officialPackage(home).dependencies ?? {}).includes(
+      '--accept-inconclusive does not bypass missing browser evidence: refused, official untouched',
+      accepted.exit === 1 &&
+        /FAIL/.test(verdictLine ?? '') &&
+        !Object.keys(officialPackage(home).dependencies ?? {}).includes(
           '@fixture/world-line-phase3-gate',
         ),
-      `exit=${accepted.exit} ${acceptedLine ?? ''}`,
+      `exit=${accepted.exit} ${verdictLine ?? ''} stderr=${accepted.stderr
+        .split('\n')
+        .slice(0, 2)
+        .join(' | ')
+        .slice(0, 200)}`,
     )
     record(
-      'journal records the gate promotion so far',
-      journalEntries(home).length === 2,
+      'journal still carries only the browser-verified promotion',
+      journalEntries(home).length === 1,
       String(journalEntries(home).length),
     )
 

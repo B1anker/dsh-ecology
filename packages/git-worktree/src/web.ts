@@ -1,11 +1,54 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+export type RouteHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void> | void
+
 export interface WebServerService {
-  register(route: {
-    kind: 'exact'
-    path: string
-    handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> | void
-  }): () => void
+  register(route: { kind: 'exact'; path: string; handler: RouteHandler }): () => void
+}
+
+/**
+ * The host side of `@deepseek-ai/dsh-client-connection`, as this plugin reads
+ * it: `requestRejection` applies the configured Host/Origin fence and browser
+ * authentication and answers with the status to reject with, or `undefined`
+ * when the request may proceed. Declared by hand for the same reason as
+ * `WebServerService` — the host packages are peers this package never
+ * imports; `scripts/check-host-contract.mjs` re-verifies the member.
+ */
+export interface ConnectionService {
+  requestRejection(request: IncomingMessage): number | undefined
+}
+
+/**
+ * A view of the registry that puts every route behind the host's fence.
+ *
+ * Every management route here runs Git against a caller-supplied path
+ * (`create` makes branches and directories, `remove` deletes both), so none
+ * may answer a request the host would not let reach its own `/api`:
+ * same-origin only, and authenticated when the host requires a browser
+ * session. Registering through this view instead of the raw service means a
+ * route cannot be added unfenced by forgetting a wrapper.
+ */
+export function fenceRoutes(
+  server: WebServerService,
+  connection: ConnectionService,
+): WebServerService {
+  return {
+    register(route) {
+      return server.register({ ...route, handler: fenced(connection, route.handler) })
+    },
+  }
+}
+
+/** One handler behind the fence; see {@link fenceRoutes}. */
+export function fenced(connection: ConnectionService, handler: RouteHandler): RouteHandler {
+  return async (req, res) => {
+    const rejection = connection.requestRejection(req)
+    if (rejection !== undefined) {
+      sendJson(res, rejection, { error: rejection === 401 ? 'unauthorized' : 'forbidden' })
+      return
+    }
+    await handler(req, res)
+  }
 }
 
 const BODY_TIMEOUT_MS = 3_000

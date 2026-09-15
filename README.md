@@ -178,9 +178,11 @@ publishing until this setting is changed to match.
 live in `packages/pet-desktop-darwin-arm64`, `-darwin-x64`, and `-win32-x64`,
 published by pet's release hook at exactly pet's version. Each of those
 packages needs the same one-time bootstrap before the workflow can publish
-it — stage its binary into `bin/` (see the `build:desktop` script in
+it — stage its binary into `bin/` and the sprite assets beside it at
+`bin/assets/` (see the `build:desktop` script in
 [`packages/pet/package.json`](packages/pet/package.json) for where the builds
-come from), `npm publish --access public` from the package directory by hand
+come from, and the staging step in `publish.yml` for the exact layout),
+`npm publish --access public` from the package directory by hand
 at the version pet's `optionalDependencies` currently names, then register
 the trusted publisher naming `publish.yml`. They get no tags of their own:
 they are version-locked to pet, and `pet-v*` tags are the shared history.

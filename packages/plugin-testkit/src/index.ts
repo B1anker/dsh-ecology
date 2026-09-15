@@ -34,23 +34,40 @@ export type {
   ClientObservable,
   MockClientContext,
   MockClientRuntime,
+  MockLocale,
   MockModuleLoader,
   MockObservable,
   MockSessions,
+  MockSessionsShape,
   MockSettingsScope,
   MockSettingsScopeBinder,
   MockSlots,
+  MockUiWorkspace,
+  MockWorkspaces,
+  SessionBindingRecord,
+  SessionListSnapshot,
   SlotRegistrationRecord,
+  Translate,
+  WorkspaceRecord,
 } from './client.js'
 export {
   createMockClientContext,
   createMockClientRuntime,
+  createMockLocale,
   createMockModuleLoader,
   createMockObservable,
   createMockSessions,
   createMockSettingsScopeBinder,
   createMockSlots,
+  createMockUiWorkspace,
+  createMockWorkspaces,
 } from './client.js'
+export type {
+  ConnectionRejection,
+  ConnectionTrustRequest,
+  MockConnection,
+} from './connection.js'
+export { createMockConnection } from './connection.js'
 export type { CapturedLogs, CapturedTeardown, MockContext } from './context.js'
 export { createMockContext } from './context.js'
 export type { ListenerMap } from './events.js'

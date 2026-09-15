@@ -94,11 +94,10 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN }}
           persist-credentials: true
 
-      # The companion binaries land where the staging step below picks them
-      # up, and the sprite assets where npm pack picks them up (the main
-      # package still ships desktop/assets/). upload/download-artifact does
-      # not preserve the executable bit, so restore it — npm pack does keep
-      # it from here into the tarballs.
+      # The companion binaries and the sprite assets land where the staging
+      # step below picks them up. upload/download-artifact does not preserve
+      # the executable bit, so restore it — npm pack does keep it from here
+      # into the tarballs.
       - uses: actions/download-artifact@v4
         with:
           name: pet-desktop-binary
@@ -106,17 +105,25 @@ jobs:
       - run: chmod +x packages/pet/desktop/dsh-pet-desktop-*
 
       # Sort one binary into each per-platform optional package (the esbuild
-      # pattern: npm's os/cpu selectors install only the matching one). The
-      # binary loses its arch suffix here — the package name carries it, and
-      # the launcher resolves through the package's exports map. The staging
-      # directory keeps its copies too: they make the same layout available
-      # to a development checkout, and the main package's files allowlist
-      # (desktop/assets/ only) keeps them out of its tarball.
-      - name: Stage the binaries into the platform packages
+      # pattern: npm's os/cpu selectors install only the matching one), with
+      # the sprite assets beside it at bin/assets/ — the layout the exe probes
+      # on its own (pet-desktop/src/assets.zig, "<exe>/assets") and the one
+      # the launcher names through DSH_PET_DESKTOP_ASSETS. The sprites are
+      # 7 MB the plugin itself never reads, so they ship only with the binary
+      # that renders them; pet's own files allowlist carries no desktop/ at
+      # all. The binary loses its arch suffix here — the package name carries
+      # it, and the launcher resolves through the package's exports map. The
+      # staging directory keeps its copies too: they make the same layout
+      # available to a development checkout.
+      - name: Stage the binaries and assets into the platform packages
         run: |
           install -D -m 755 packages/pet/desktop/dsh-pet-desktop-arm64 packages/pet-desktop-darwin-arm64/bin/dsh-pet-desktop
           install -D -m 755 packages/pet/desktop/dsh-pet-desktop-x64 packages/pet-desktop-darwin-x64/bin/dsh-pet-desktop
           install -D -m 755 packages/pet/desktop/dsh-pet-desktop-windows-x64.exe packages/pet-desktop-win32-x64/bin/dsh-pet-desktop.exe
+          for directory in packages/pet-desktop-darwin-arm64 packages/pet-desktop-darwin-x64 packages/pet-desktop-win32-x64; do
+            rm -rf "$directory/bin/assets"
+            cp -R packages/pet/desktop/assets "$directory/bin/assets"
+          done
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -247,8 +254,9 @@ jobs:
           # pet before them would leave a window where an install resolves a
           # version the registry does not have. There is no smoke-tarball
           # step here: the packages have no JavaScript surface to cold-import,
-          # only a binary whose presence and executable bit are asserted
-          # straight from the packed tarball. The integrity guard is the same
+          # only a binary whose presence and executable bit, and the sprite
+          # manifest beside it, are asserted straight from the packed
+          # tarball. The integrity guard is the same
           # resume pattern as release_package: an identical tarball already on
           # the registry means a retry after a later step failed, a different
           # one means this checkout no longer produces what was published.
@@ -282,6 +290,15 @@ jobs:
                 -rwxr-xr*x*) : ;;
                 *) echo "::error::$name tarball lacks an executable $exe"; exit 1 ;;
               esac
+              # The sprites travel with the binary that renders them; a
+              # tarball without the manifest would install a pet that draws
+              # nothing (the exe answers /pets with 503). Same capture-then-
+              # match shape as above, for the same SIGPIPE reason.
+              entry=$(tar -tzf "$tarball_path" | grep -F "/bin/assets/sprites/manifest.json" || true)
+              if [ -z "$entry" ]; then
+                echo "::error::$name tarball lacks bin/assets/sprites/manifest.json"
+                exit 1
+              fi
               local_integrity=$(node -e 'const fs = require("node:fs"); const crypto = require("node:crypto"); process.stdout.write(`sha512-${crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64")}`)' "$tarball_path")
               published_integrity=$(npm view "$name@$version" dist.integrity 2>/dev/null || true)
               if [ -n "$published_integrity" ]; then

@@ -237,5 +237,8 @@ else {
       await destroyTempHome(home)
       await destroyTempHome(userHome)
     }
-  }, 30000)
+    // One sequential journey of forty-odd CLI spawns, each a node cold start:
+    // about 10 s on a quiet laptop, and several times that when the other
+    // packages' suites share the CPU. The budget is for that, not for speed.
+  }, 90_000)
 })

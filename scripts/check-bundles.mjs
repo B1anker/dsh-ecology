@@ -208,3 +208,46 @@ assert(
 )
 
 console.log('ok    world-line bundle manifest, client declaration, and discovery row')
+
+// ── @seaveyon/dsh-git-worktree ──────────────────────────────────────────────
+//
+// The same two promises, plus one more the others do not make: the browser
+// bundle's `dsh.client.inject` names the shell services it binds, so the shell
+// withholds the module until they exist. The host row waits on tools,
+// webServer, and connection — the last because the management API runs Git on
+// caller-supplied paths and must sit behind the host's fence.
+
+const worktreeRoot = new URL('../packages/git-worktree/', import.meta.url)
+const worktreeManifest = JSON.parse(await readFile(new URL('package.json', worktreeRoot), 'utf8'))
+
+const worktreeClient = worktreeManifest.dsh?.client
+assert(worktreeClient?.platform === 'web', 'git-worktree bundle: dsh.client.platform must be "web"')
+assert(
+  JSON.stringify(worktreeClient?.inject) ===
+    JSON.stringify(['uiWorkspace', 'workspaces', 'sessions', 'locale']),
+  'git-worktree bundle: dsh.client.inject must name uiWorkspace, workspaces, sessions, locale',
+)
+assert(
+  worktreeClient?.immediately === true,
+  'git-worktree bundle: dsh.client.immediately must be true',
+)
+assert(
+  worktreeManifest.exports?.['./client']?.default === './dist/client.js',
+  'git-worktree bundle: ./client export must point at ./dist/client.js',
+)
+assert(worktreeManifest.files?.includes('dist/'), 'git-worktree bundle: dist/ is absent from files')
+
+const worktreePatches = await readPatch(worktreeRoot, worktreeManifest, 'git-worktree bundle')
+const worktreeRow = worktreePatches
+  .flatMap((patch) => (Array.isArray(patch?.insert) ? patch.insert : []))
+  .find((row) => row?.id === 'dsh-git-worktree')
+assert(
+  worktreeRow?.name === '@seaveyon/dsh-git-worktree',
+  'git-worktree bundle: discovery row is missing or misnamed',
+)
+assert(
+  JSON.stringify(worktreeRow.inject) === JSON.stringify(['tools', 'webServer', 'connection']),
+  'git-worktree bundle: plugin row must wait for tools, webServer, and connection',
+)
+
+console.log('ok    git-worktree bundle manifest, client declaration, and discovery row')

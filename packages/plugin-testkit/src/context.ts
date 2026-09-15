@@ -26,9 +26,11 @@ export interface CapturedTeardown {
   label: string | undefined
 }
 
-/** Availability probe installed through {@link MockContext.provide}. */
+/** A service published through {@link MockContext.provide}. */
 interface ProvidedEntry {
   value: unknown
+  /** The availability predicate handed to `provide`, when one was. */
+  available: (() => boolean) | undefined
 }
 
 /** The mock context, plus the state a test inspects afterwards. */
@@ -42,6 +44,18 @@ export interface MockContext extends PluginContext {
   waterfall: (event: string, ...args: unknown[]) => unknown
   provide: (name: string, value: unknown, available?: () => boolean) => Disposer
   set: (name: string, value: unknown) => void
+  /**
+   * Whether a dependent injecting `name` would be allowed to load right now.
+   *
+   * Mirrors how Cordis consults the third `provide` argument: the predicate
+   * gates *dependents*, not `get` — `ctx.get` still returns the value of a
+   * provided-but-unavailable service, exactly as `reflect.get` does. A
+   * predicate that throws counts as unavailable, as it does in the host, and
+   * the error is recorded in `logs.warn`. Services from the constructor table
+   * are always available. Inspection-only: the real context has no such
+   * member.
+   */
+  available: (name: string) => boolean
   /** Run every teardown in reverse order, as Cordis does on disposal. */
   dispose: () => Promise<void>
 }
@@ -81,11 +95,11 @@ export function createMockContext(services: Record<string, unknown>): MockContex
       }
       entry.value = value
     },
-    provide(name, value, _available) {
+    provide(name, value, available) {
       if (provided.has(name) || Object.hasOwn(services, name)) {
         throw new Error(`mock context: service ${JSON.stringify(name)} is already provided`)
       }
-      const entry: ProvidedEntry = { value }
+      const entry: ProvidedEntry = { value, available }
       provided.set(name, entry)
       let active = true
       const dispose: Disposer = () => {
@@ -106,6 +120,21 @@ export function createMockContext(services: Record<string, unknown>): MockContex
     },
     waterfall(event, ...args) {
       return bus.waterfall(event, ...args)
+    },
+    available(name) {
+      const entry = provided.get(name)
+      if (entry === undefined) return Object.hasOwn(services, name)
+      if (entry.available === undefined) return true
+      try {
+        return entry.available.call(entry.value) === true
+      } catch (error) {
+        logs.warn.push(
+          `availability predicate for ${JSON.stringify(name)} threw: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+        return false
+      }
     },
     logger,
     teardowns,

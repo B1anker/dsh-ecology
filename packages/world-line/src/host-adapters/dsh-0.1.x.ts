@@ -1,11 +1,18 @@
 /**
- * The first host adapter: the DSH 0.1.2-rc.1 contract generation.
+ * The first host adapter: the DSH 0.1.x contract generation.
  *
  * Every constant below was taken from a real DSH 0.1.2-rc.1 installation and
  * exercised against a real temporary profile (see docs/compatibility.md and
- * the evidence/ artifacts):
+ * the evidence/ artifacts). DSH 0.1.5-rc.1 was re-read the same way
+ * (2026-09-15): `PROFILE_TEMPLATES`, `DEFAULT_PROFILE_BUNDLES`, the patch and
+ * workspace filenames, and the root-config bytes the launcher rewrites are all
+ * unchanged, so it joins this adapter's evidence set instead of getting one of
+ * its own. What 0.1.5 did add — a comment header in the initial
+ * `cordis.patch.yml`, `nodeLinker: hoisted` / `autoInstallPeers: false` in the
+ * initial `pnpm-workspace.yaml` — is content world-line snapshots but never
+ * asserts, so it needs no adapter fact.
  *
- * - `dsh --version` → `0.1.2-rc.1`
+ * - `dsh --version` → `0.1.2-rc.1` / `0.1.5-rc.1`
  * - `@deepseek-ai/dsh-home-paths` 0.1.2-rc.1: home = explicit > `$DSH_HOME` >
  *   `~/.dsh`; profiles live under `<home>/profiles`.
  * - `@deepseek-ai/dsh-app-boot` 0.1.2-rc.1 (`profile.js` / `index.js`):
@@ -44,11 +51,12 @@ const TEMPLATES = {
 } as const
 
 /**
- * The DSH 0.1.2-rc.1 adapter.
+ * The DSH 0.1.x adapter. Add a version here only after `bun run test:real`
+ * (and the phase 2–4 evidence scripts) have passed against that exact binary.
  */
 export const adapterDsh01x: HostAdapter = {
   id: 'dsh-0.1.x',
-  testedVersions: ['0.1.2-rc.1'],
+  testedVersions: ['0.1.2-rc.1', '0.1.5-rc.1'],
   profile: {
     profilesDirName: 'profiles',
     rootConfigFilename: 'cordis.yml',

@@ -52,10 +52,11 @@ dsh plugin --profile web add @seaveyon/dsh-pet
    npm 的 os/cpu 选择器只会下载与你机器匹配的那一个。它与插件版本锁定
    （optionalDependencies 写的是完全相同的精确版本号），桥接协议绝不会错配；
    macOS 上 npm 安装的文件不带 quarantine 属性，所以未签名也能直接启动，
-   不会触发 Gatekeeper。精灵素材仍随主包发布（`desktop/assets/`，由发布流水线
-   在打包时放入），启动器通过 `DSH_PET_DESKTOP_ASSETS` 把素材目录指给二进制。
-   在开发检出中，这一角色由 `bun run build:desktop` 暂存的
-   `desktop/dsh-pet-desktop-*` 副本承担。
+   不会触发 Gatekeeper。精灵素材与二进制同包同目录发布（`bin/assets/`，由发布
+   流水线在打包时放入），插件主包自身不再携带任何桌面端字节；启动器通过
+   `DSH_PET_DESKTOP_ASSETS` 把素材目录指给二进制。在开发检出中，这一角色由
+   `bun run build:desktop` 暂存的 `desktop/dsh-pet-desktop-*` 副本及其旁边的
+   `desktop/assets/` 承担。
 2. 已安装的副本，各平台不同。macOS 上是 `DSH Pet.app`——先按 bundle id 解析，
    再查标准 Applications 目录（开发和拆分前的旧包走这条路）。Windows 没有
    `open -b` 也没有安装器，回退为指向 exe 路径的 `DSH_PET_DESKTOP_APP` 环境变量。

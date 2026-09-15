@@ -12,6 +12,16 @@ import { defineConfig } from '@rstest/core'
 export default defineConfig({
   include: ['test/**/*.test.ts'],
   isolate: true,
+  // Many tests spawn real child processes — the shipped CLI, a node-based dsh
+  // shim booted through the lab launcher, git — and wait for them to settle.
+  // The runner's 5 s default is measured against a quiet machine; the
+  // repository runs every package's suite at once (`bun run --filter '*'
+  // test:unit`), where node cold starts alone can eat a second or two, and
+  // the slowest tests here (promote with restart verification, investigation
+  // trials) then tripped the default intermittently. A hung test still fails;
+  // it just does so on a budget that tolerates the shared CPU.
+  testTimeout: 30_000,
+  hookTimeout: 30_000,
   coverage: {
     // Off by default and on in CI, because collecting it costs about a third of
     // the run and the answer only has to be right before a merge.
