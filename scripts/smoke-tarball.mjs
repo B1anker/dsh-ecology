@@ -36,8 +36,144 @@ const run = promisify(execFile)
  * `node_modules`, because they import an optional peer. Excluding one is a
  * deliberate statement that it is not part of the package's cold-start surface,
  * not a way to quiet a failure.
+ *
+ * `peers(manifest)` names host packages to install beside the extracted
+ * tarball before importing. A plugin whose public entry imports a host
+ * package at load time cannot be cold-imported without it — and a consumer
+ * never is, because the host that loads the plugin carries the package. The
+ * spec comes from the manifest so the smoke exercises the copy the package is
+ * developed against rather than a version repeated here.
  */
 const PACKAGES = {
+  '@seaveyon/dsh-git-worktree': {
+    // `dist/index.js` imports `defineTool` from the host's tools package at
+    // load time (the tools are defined at module evaluation). The rest of the
+    // ESM output is the browser bundle's source emitted alongside; those
+    // modules import react / the shell primitives and are exercised through
+    // `dist/client.js` in a browser, not here.
+    peers: (manifest) => [
+      `@deepseek-ai/dsh-tools@${manifest.devDependencies['@deepseek-ai/dsh-tools']}`,
+    ],
+    skip: [
+      'client.js',
+      'strings.js',
+      'sidebar-worktree-grouper.js',
+      'worktree-control.js',
+      'worktree-removal-modal.js',
+    ],
+    /**
+     * @param _dist - file URL of the extracted `dist/` directory.
+     * @param root - filesystem path of the extracted package.
+     * @param entry - package namespace resolved through the public exports map.
+     * @param manifest - extracted package.json.
+     * @returns a description of what was exercised.
+     */
+    async check(_dist, root, entry, manifest) {
+      const { apply, inject, name, assertBranchName, GitWorktreeError } = entry
+      if (typeof apply !== 'function') throw new Error('apply is not a function')
+      if (name !== 'dsh-git-worktree') throw new Error(`name is ${name}`)
+      if (JSON.stringify(inject) !== JSON.stringify(['tools', 'webServer', 'connection'])) {
+        throw new Error(`inject is ${JSON.stringify(inject)}`)
+      }
+      if (typeof assertBranchName !== 'function') throw new Error('assertBranchName missing')
+      let refused = false
+      try {
+        assertBranchName('-not/a..branch')
+      } catch (error) {
+        refused = error instanceof GitWorktreeError
+      }
+      if (!refused) throw new Error('assertBranchName accepted an invalid branch name')
+
+      // The management API must not come up without the host's fence: apply
+      // refuses when `connection` is absent and registers nothing.
+      const registered = []
+      let threw = null
+      try {
+        apply({
+          tools: { register() {} },
+          get: (service) =>
+            service === 'webServer'
+              ? {
+                  register(route) {
+                    registered.push(route.path)
+                    return () => {}
+                  },
+                }
+              : undefined,
+          effect(fn) {
+            fn()
+          },
+        })
+      } catch (error) {
+        threw = error
+      }
+      if (!(threw instanceof Error) || !/connection service missing/.test(threw.message)) {
+        throw new Error('apply ran without a connection service')
+      }
+      if (registered.length !== 0) throw new Error('routes were registered unfenced')
+
+      // With both services present every route registers through the fence.
+      const paths = []
+      apply({
+        tools: { register() {} },
+        get: (service) =>
+          service === 'webServer'
+            ? {
+                register(route) {
+                  paths.push(route.path)
+                  return () => {}
+                },
+              }
+            : service === 'connection'
+              ? { requestRejection: () => 401 }
+              : undefined,
+        effect(fn) {
+          fn()
+        },
+      })
+      if (
+        paths.length !== 6 ||
+        !paths.every((p) => p.startsWith('/api/plugins/dsh-git-worktree/'))
+      ) {
+        throw new Error(`unexpected route table ${JSON.stringify(paths)}`)
+      }
+
+      const declaredPatch = manifest.dsh?.bundle?.patch
+      if (declaredPatch !== './cordis.patch.yml') {
+        throw new Error(`unexpected dsh.bundle.patch ${declaredPatch}`)
+      }
+      const patch = load(await readFile(join(root, declaredPatch), 'utf8'))
+      if (!Array.isArray(patch)) throw new Error('bundle patch is not a top-level array')
+      const inserted = patch.flatMap((item) => (Array.isArray(item?.insert) ? item.insert : []))
+      const row = inserted.find((entry) => entry?.id === 'dsh-git-worktree')
+      if (row?.name !== '@seaveyon/dsh-git-worktree') throw new Error('bundle plugin row')
+      if (JSON.stringify(row.inject) !== JSON.stringify(['tools', 'webServer', 'connection'])) {
+        throw new Error('bundle plugin row does not wait for tools, webServer, and connection')
+      }
+
+      if (manifest.exports?.['./client']?.default !== './dist/client.js') {
+        throw new Error(
+          `unexpected client export ${JSON.stringify(manifest.exports?.['./client'])}`,
+        )
+      }
+      if (manifest.dsh?.client?.platform !== 'web' || manifest.dsh?.client?.immediately !== true) {
+        throw new Error(`unexpected dsh.client ${JSON.stringify(manifest.dsh?.client)}`)
+      }
+      const clientBundle = await readFile(join(root, 'dist/client.js'), 'utf8')
+      if (!clientBundle.startsWith('window.__ModuleLoader__.load')) {
+        throw new Error('client bundle missing ModuleLoader envelope')
+      }
+      if (!clientBundle.includes('id: "@seaveyon/dsh-git-worktree"')) {
+        throw new Error('client bundle registers the wrong module id')
+      }
+      if (!clientBundle.includes('require("react")')) {
+        throw new Error('client bundle no longer externalizes react')
+      }
+
+      return 'public export over the real tools package, fence refusal and route table, bundle patch, client envelope'
+    },
+  },
+
   '@seaveyon/dsh-web-login': {
     // Browser client is a `__ModuleLoader__` envelope that expects `window`.
     // CLI bins are covered via `execFile`, not cold import.
@@ -194,43 +330,42 @@ const PACKAGES = {
       const pet = inserted.find((row) => row?.id === 'dsh-pet')
       if (pet?.name !== '@seaveyon/dsh-pet') throw new Error('bundle plugin row')
 
-      // The companion binaries no longer ship in this tarball: each rides in
+      // Nothing of the desktop app ships in this tarball: each binary rides in
       // its own per-platform optional package (@seaveyon/dsh-pet-desktop-*),
-      // published alongside by the workflow. What stays here is the shared
-      // sprite directory the spawned binary is pointed at through
-      // DSH_PET_DESKTOP_ASSETS (src/launch.ts). Source-checkout packs
-      // (engines-floor on ubuntu) legitimately lack desktop/ — the publish
-      // workflow stages it — but when the directory is present it must hold
-      // the assets and none of the old bundled-binary names, so a
-      // re-bundling regression fails here instead of doubling every install.
-      let desktopNote = 'no desktop/ staged'
-      const desktopDir = join(root, 'desktop')
-      const hasDesktop = await stat(desktopDir).then(
-        (s) => s.isDirectory(),
-        () => false,
-      )
-      if (hasDesktop) {
-        const assets = await stat(join(desktopDir, 'assets')).then(
-          (s) => s.isDirectory(),
-          () => false,
+      // published alongside by the workflow, with the sprite assets beside it
+      // at bin/assets/ (src/launch.ts points the spawn there). The files
+      // allowlist names no desktop/ entry, so its presence here means a
+      // staged build leaked back into the plugin — the regression that once
+      // doubled every install, or re-added 7 MB of sprites the plugin itself
+      // never reads.
+      const leaked = await stat(join(root, 'desktop')).catch(() => null)
+      if (leaked !== null) {
+        throw new Error(
+          'desktop/ is back in the main tarball; binaries and sprites belong to the platform packages',
         )
-        if (!assets) throw new Error('desktop/assets missing from a desktop-carrying tarball')
-        for (const name of [
-          'dsh-pet-desktop-arm64',
-          'dsh-pet-desktop-x64',
-          'dsh-pet-desktop-windows-x64.exe',
-        ]) {
-          const leaked = await stat(join(desktopDir, name)).catch(() => null)
-          if (leaked !== null) {
-            throw new Error(
-              `desktop/${name} is back in the main tarball; binaries belong to the platform packages`,
-            )
-          }
+      }
+      const platformPackages = Object.keys(manifest.optionalDependencies ?? {}).toSorted()
+      const expectedPlatforms = [
+        '@seaveyon/dsh-pet-desktop-darwin-arm64',
+        '@seaveyon/dsh-pet-desktop-darwin-x64',
+        '@seaveyon/dsh-pet-desktop-win32-x64',
+      ]
+      if (platformPackages.join(',') !== expectedPlatforms.join(',')) {
+        throw new Error(
+          `unexpected platform packages ${JSON.stringify(manifest.optionalDependencies)}`,
+        )
+      }
+      for (const [platformPackage, range] of Object.entries(manifest.optionalDependencies)) {
+        // Exact and equal to pet's own version: the /state contract between
+        // the plugin and the binary is only checked by this lock-step.
+        if (range !== manifest.version) {
+          throw new Error(
+            `${platformPackage} is pinned to ${range}, not pet's own ${manifest.version}`,
+          )
         }
-        desktopNote = 'desktop/assets present, no bundled binaries'
       }
 
-      return `public export, client bundle envelope, dsh.client manifest, discovery patch row, ${desktopNote}`
+      return 'public export, client bundle envelope, dsh.client manifest, discovery patch row, no desktop/ bytes, platform packages version-locked'
     },
   },
 
@@ -409,6 +544,20 @@ try {
     await run('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
       cwd: root,
     })
+  }
+  // Host packages the entry imports at load time (see `peers` above). They go
+  // one level up, where the host's copy would sit relative to an installed
+  // plugin, and before the package link below exists — npm prunes anything in
+  // its `node_modules` that nothing declares, and the link declares nothing.
+  // Installing them into the package root instead would make npm parse the
+  // extracted manifest, whose `workspace:` devDependency specs it rejects.
+  const peers = entry.peers?.(manifest) ?? []
+  if (peers.length > 0) {
+    await run(
+      'npm',
+      ['install', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', ...peers],
+      { cwd: work },
+    )
   }
 
   const dist = pathToFileURL(join(root, 'dist') + '/')

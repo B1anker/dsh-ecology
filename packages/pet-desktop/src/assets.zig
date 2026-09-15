@@ -7,11 +7,13 @@
 //! 1. Development: `zig-out/bin/dsh-pet-desktop` launched from the package
 //!    root — assets at ./assets.
 //! 2. Development, other cwd: same binary, assets at <exe>/../../assets.
-//! 3. npm-bundled: the binary sits in the plugin's desktop/ directory with
-//!    the assets copied next to it — assets at <exe>/assets. This is how
-//!    the settings panel's launch button spawns it (the DSH server's cwd
-//!    is whatever directory the user started it in, so cwd-relative reads
-//!    find nothing and /pets answers 503).
+//! 3. npm-installed: the binary sits in its per-platform package's bin/
+//!    (or a development checkout's staged desktop/) with the assets copied
+//!    next to it — assets at <exe>/assets. This is how the settings panel's
+//!    launch button spawns it (the DSH server's cwd is whatever directory
+//!    the user started it in, so cwd-relative reads find nothing and /pets
+//!    answers 503). The launcher also names this directory through the
+//!    override below, so the probe order past it never matters there.
 //!
 //! The root is resolved once — first call wins, cached in a static buffer —
 //! by probing each candidate for sprites/manifest.json. boot() resolves it

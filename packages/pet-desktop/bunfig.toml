@@ -1,0 +1,7 @@
+# `bun test <filter>` treats its argument as a path *filter*, not a directory:
+# `bun test test/` also matches `zig-pkg/**/test/**` — the zero-native SDK
+# zig fetches into the (gitignored) package cache carries its own TypeScript
+# test files, which fail to resolve their dependencies here. Rooting the
+# runner at test/ keeps it to this package's own suites.
+[test]
+root = "test"

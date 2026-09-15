@@ -44,9 +44,10 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      # A no-op unless the dsh host packages are installed, and it says so when
-      # it is. It exists for the checkout where they are: the plugin's host types
-      # are hand-written, so nothing else notices when the host moves.
+      # Skips (and says so) here, where no dsh host is installed; the
+      # real-host-login job below installs the tested tuple and runs it for
+      # real. It exists because every plugin's host types are hand-written, so
+      # nothing else notices when the host moves.
       - name: Host contract
         run: bun run contract
 
@@ -71,11 +72,18 @@ jobs:
         run: bun run pack:check
 
   # The normal suite deliberately has no DSH runtime dependencies. This small
-  # job installs one exact host tuple and verifies that web-login decorates the
-  # real WebServer registry, not merely the testkit mock.
+  # job installs one exact host tuple — the DSH release every package in this
+  # workspace is currently exercised against — and verifies two things the
+  # mocks cannot: that web-login decorates the real WebServer registry, and
+  # that every hand-written host type still names members the real host
+  # declares. Bump the version here together with the tested-version notes in
+  # each package (web-login/README.md, world-line/docs/compatibility.md,
+  # pet/src/client/host-types.ts) when moving to a new host.
   real-host-login:
     needs: check
     runs-on: ubuntu-latest
+    env:
+      DSH_HOST_VERSION: 0.1.5-rc.1
     steps:
       - uses: actions/checkout@v7
 
@@ -85,14 +93,64 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # `--no-save` keeps bun.lock untouched: this tuple is a test fixture, not
+      # a dependency of anything that ships. The client-side packages are here
+      # only for the contract check; the login test needs the first two.
       - name: Install the tested DSH host tuple
         run: >-
           bun add --no-save --exact
           @deepseek-ai/cordis@4.0.2
-          @deepseek-ai/dsh-host-webserver@0.1.2-alpha.5
+          @deepseek-ai/dsh-host-webserver@$DSH_HOST_VERSION
+          @deepseek-ai/dsh-tools@$DSH_HOST_VERSION
+          @deepseek-ai/dsh-client-connection@$DSH_HOST_VERSION
+          @deepseek-ai/dsh-api-session-controller@$DSH_HOST_VERSION
+          @deepseek-ai/dsh-api-workspace-controller@$DSH_HOST_VERSION
+          @deepseek-ai/dsh-client-ui-settings@$DSH_HOST_VERSION
+          @deepseek-ai/dsh-client-ui-workspace@$DSH_HOST_VERSION
+          @deepseek-ai/dsh-client-locale@$DSH_HOST_VERSION
+
+      # The same script the check job runs, now with something to check. A
+      # `skip` line for a package listed above means the install went wrong.
+      - name: Host contract against the real host
+        run: |
+          bun run contract | tee contract.log
+          if grep -q '^skip  @deepseek-ai/dsh-host-webserver' contract.log; then
+            echo "::error::the host tuple was not installed where the contract check looks"
+            exit 1
+          fi
 
       - name: Test login gate against the real host
         run: bun run --filter @seaveyon/dsh-web-login test:real-host
+
+  # The pet's desktop companion is Zig. Its unit tests need a macOS or Windows
+  # toolchain target (src/windowing.zig refuses anything else at compile time),
+  # so they cannot run in the ubuntu check job; without this job they never run
+  # in CI at all — pet-desktop's `test:zig` script skips when zig is absent,
+  # which on a runner is a green check that tested nothing.
+  desktop-zig:
+    needs: check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          # Same pin as publish.yml's desktop-binary job and pet-desktop's
+          # README; the zero-native SDK is fetched by zig from build.zig.zon.
+          version: 0.16.0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      # CI=true makes the wrapper fail instead of skip when zig is missing, so
+      # a broken setup-zig step cannot turn this job into another false green.
+      - name: Zig unit tests
+        run: bun run --filter @seaveyon/dsh-pet-desktop test:zig
+        env:
+          CI: 'true'
 
   # The packages declare `engines.node: >=20.11.0`, and the job above only ever
   # exercises whichever Node the bun runtime happens to embed. This runs the
@@ -166,7 +224,7 @@ jobs:
       matrix:
         # Each published package makes its own `engines.node` promise, and a
         # promise is worth what the job that tests it is worth.
-        package: [web-login, plugin-testkit, pet, world-line]
+        package: [web-login, plugin-testkit, pet, world-line, git-worktree]
     steps:
       - uses: actions/checkout@v7
 
