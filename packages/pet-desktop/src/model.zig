@@ -5,8 +5,8 @@
 //! intents.
 //!
 //! Sprite playback: one registry slot per (pet, mood) strip — 8 moods
-//! plus the pre-mirrored run strip (slot 8 of the stride, see
-//! manifest.mirrored_run_slot), one active pet, so 9 of the 16
+//! plus an optional dedicated drag strip and its mirror (slots 8-9 of the
+//! stride), one active pet, so at most 10 of the 16
 //! image-registry slots are in use.
 //! Strips register under stable ids (`manifest.imageId`); switching
 //! petId unregisters the old pet's LOADED strips synchronously
@@ -174,14 +174,13 @@ pub const Model = struct {
     strip_status: [manifest.max_pets][manifest.mood_count]StripStatus = @splat(@splat(.unloaded)),
     strip_width: [manifest.max_pets][manifest.mood_count]u32 = @splat(@splat(0)),
     strip_height: [manifest.max_pets][manifest.mood_count]u32 = @splat(@splat(0)),
-    /// Per-pet load state of the pre-mirrored working strip (image id
-    /// slot 8, manifest.mirroredRunImageId). Its geometry IS the working
-    /// strip's — same frames, same decoded size — so sprite() keeps
-    /// reading strip_width/height of the working slot and no parallel
-    /// geometry arrays exist; the mirrored strip only draws once the
-    /// working strip itself is loaded. Same loading-survives-switch
-    /// discipline as strip_status.
-    mirrored_status: [manifest.max_pets]StripStatus = @splat(.unloaded),
+    /// Optional locomotion strip and its mirrored counterpart. These have
+    /// independent geometry because a real running cycle can have a
+    /// different frame count from the agent's working animation.
+    drag_status: [manifest.max_pets]StripStatus = @splat(.unloaded),
+    drag_width: [manifest.max_pets]u32 = @splat(0),
+    drag_height: [manifest.max_pets]u32 = @splat(0),
+    mirrored_drag_status: [manifest.max_pets]StripStatus = @splat(.unloaded),
     /// False when assets/sprites/manifest.json failed to read/parse at
     /// boot: the bridge still runs, the canvas just draws nothing.
     manifest_ok: bool = false,
@@ -321,7 +320,7 @@ pub const Model = struct {
     };
 
     /// The mood the sprite actually draws: while the window is being
-    /// dragged the pet runs (working strip), whatever the bridge last
+    /// dragged the pet runs (dedicated drag strip when available), whatever the bridge last
     /// said; while the pointer hovers it hops with excitement (pet
     /// strip). Display-layer overrides only — `model.mood` keeps tracking
     /// bridge state, so a /state update landing mid-drag or mid-hover is
@@ -340,26 +339,28 @@ pub const Model = struct {
         return model.dragging and model.facing_right;
     }
 
-    /// True when the active pet's pre-mirrored run strip is registered
+    /// True when the active pet's pre-mirrored drag strip is registered
     /// and can be drawn instead of mirroring at draw time. The view
     /// reads this to decide between the two mirror paths (the SDK's
     /// software reference renderer — the only path a Windows transparent
     /// window gets — drops negative scale, so the Affine fallback does
     /// not flip there).
-    pub fn mirroredRunLoaded(model: *const Model) bool {
-        return model.mirrored_status[model.active_pet] == .loaded;
+    pub fn mirroredDragRunLoaded(model: *const Model) bool {
+        return model.mirrored_drag_status[model.active_pet] == .loaded;
     }
 
-    /// Which registered image backs the current frame. ASSUMPTION:
-    /// flipSprite() is only true while dragging, and dragging forces
-    /// effectiveMood() == .working — so when this returns the mirrored
-    /// id, `mood` is the working mood whose geometry the mirrored strip
-    /// shares. Without a loaded mirrored strip (pets whose assets
-    /// predate scripts/mirror-working-strips.mjs) the plain id comes
-    /// back and the view falls back to the legacy negative-scale Affine.
+    /// Which registered image backs the current frame. Dragging selects the
+    /// dedicated strip (or legacy working fallback); rightward movement uses
+    /// its pre-mirrored pixels when they are available.
     fn spriteImageId(model: *const Model, mood: Mood) canvas.ImageId {
-        if (model.flipSprite() and model.mirroredRunLoaded()) {
-            return manifest.mirroredRunImageId(model.active_pet);
+        if (model.dragging) {
+            if (model.flipSprite() and model.mirroredDragRunLoaded()) {
+                return manifest.mirroredDragRunImageId(model.active_pet);
+            }
+            const m = manifest.current() orelse return 0;
+            if (m.hasDedicatedDragStrip(model.active_pet)) {
+                return manifest.dragRunImageId(model.active_pet);
+            }
         }
         return manifest.imageId(model.active_pet, mood);
     }
@@ -376,6 +377,18 @@ pub const Model = struct {
         const m = manifest.current() orelse return .{};
         const mood = model.effectiveMood();
         const mood_index = @intFromEnum(mood);
+        if (model.dragging and m.hasDedicatedDragStrip(model.active_pet)) {
+            if (model.drag_status[model.active_pet] != .loaded) return .{};
+            const height = model.drag_height[model.active_pet];
+            const frames = m.dragStrip(model.active_pet).frames;
+            if (height == 0 or frames == 0) return .{};
+            const frame = @min(model.frame_index, frames - 1);
+            const frame_px = manifest.framePixels(height);
+            return .{
+                .image = model.spriteImageId(mood),
+                .src = geometry.RectF.init(manifest.frameOriginX(frame, height), 0, frame_px, frame_px),
+            };
+        }
         if (model.strip_status[model.active_pet][mood_index] != .loaded) return .{};
         const height = model.strip_height[model.active_pet][mood_index];
         if (height == 0) return .{};
@@ -408,7 +421,13 @@ pub const Msg = union(enum) {
 /// manifest never loaded.
 fn currentIntervalMs(model: *const Model) u32 {
     const m = manifest.current() orelse return fallback_interval_ms;
+    if (model.dragging) return manifest.timerIntervalMs(m.dragStrip(model.active_pet));
     return manifest.timerIntervalMs(m.strip(model.active_pet, model.effectiveMood()));
+}
+
+fn activeFrameCount(model: *const Model, m: *const manifest.Manifest) u32 {
+    if (model.dragging) return m.dragStrip(model.active_pet).frames;
+    return m.strip(model.active_pet, model.effectiveMood()).frames;
 }
 
 /// Re-arm the frame timer at the current strip's cadence. startTimer on
@@ -441,18 +460,28 @@ fn loadPetSet(model: *Model, fx: *Effects) void {
         });
         model.strip_status[model.active_pet][mood_index] = .loading;
     }
-    // The pre-mirrored run strip rides along under stride slot 8; same
-    // one-load-per-id skip discipline as the mood strips above.
-    if (m.mirroredRunFile(model.active_pet)) |file| {
-        if (model.mirrored_status[model.active_pet] == .unloaded) {
+    if (m.hasDedicatedDragStrip(model.active_pet) and model.drag_status[model.active_pet] == .unloaded) {
+        const entry = m.dragStrip(model.active_pet);
+        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        if (assets.spritePath(&path_buffer, entry.file)) |path| {
+            fx.loadImage(.{
+                .id = manifest.dragRunImageId(model.active_pet),
+                .path = path,
+                .on_result = Effects.imageMsg(.image_done),
+            });
+            model.drag_status[model.active_pet] = .loading;
+        }
+    }
+    if (m.mirroredDragRunFile(model.active_pet)) |file| {
+        if (model.mirrored_drag_status[model.active_pet] == .unloaded) {
             var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
             if (assets.spritePath(&path_buffer, file)) |path| {
                 fx.loadImage(.{
-                    .id = manifest.mirroredRunImageId(model.active_pet),
+                    .id = manifest.mirroredDragRunImageId(model.active_pet),
                     .path = path,
                     .on_result = Effects.imageMsg(.image_done),
                 });
-                model.mirrored_status[model.active_pet] = .loading;
+                model.mirrored_drag_status[model.active_pet] = .loading;
             }
         }
     }
@@ -473,11 +502,13 @@ fn switchPet(model: *Model, fx: *Effects, new_pet: usize) void {
             model.strip_status[model.active_pet][mood_index] = .unloaded;
         }
     }
-    // The old pet's mirrored run strip frees with its mood strips;
-    // an in-flight one takes the stale branch in .image_done instead.
-    if (model.mirrored_status[model.active_pet] == .loaded) {
-        _ = fx.unregisterImage(manifest.mirroredRunImageId(model.active_pet));
-        model.mirrored_status[model.active_pet] = .unloaded;
+    if (model.drag_status[model.active_pet] == .loaded) {
+        _ = fx.unregisterImage(manifest.dragRunImageId(model.active_pet));
+        model.drag_status[model.active_pet] = .unloaded;
+    }
+    if (model.mirrored_drag_status[model.active_pet] == .loaded) {
+        _ = fx.unregisterImage(manifest.mirroredDragRunImageId(model.active_pet));
+        model.mirrored_drag_status[model.active_pet] = .unloaded;
     }
     model.active_pet = new_pet;
     model.frame_index = 0;
@@ -547,27 +578,45 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // throttles this to one syscall every few seconds).
             runlog.enforceCap();
             const m = manifest.current() orelse return;
-            model.frame_index = manifest.nextFrame(model.frame_index, m.strip(model.active_pet, model.effectiveMood()).frames);
+            model.frame_index = manifest.nextFrame(model.frame_index, activeFrameCount(model, m));
         },
         .image_done => |result| {
-            // Mirrored-run ids (stride slot 8) are checked FIRST:
+            // Dedicated drag ids are checked FIRST:
             // decodeImageId rejects them by design.
-            if (manifest.mirroredRunPet(result.id)) |pet| {
+            if (manifest.mirroredDragRunPet(result.id)) |pet| {
                 if (result.outcome != .loaded) {
-                    model.mirrored_status[pet] = .unloaded;
-                    std.debug.print("dsh-pet-desktop: mirrored run strip load failed pet={d} outcome={s}\n", .{ pet, @tagName(result.outcome) });
+                    model.mirrored_drag_status[pet] = .unloaded;
+                    std.debug.print("dsh-pet-desktop: mirrored drag strip load failed pet={d} outcome={s}\n", .{ pet, @tagName(result.outcome) });
                     return;
                 }
                 if (pet != model.active_pet) {
                     // Stale, same discipline as the strips below: release
                     // on arrival or the slot is occupied forever.
                     _ = fx.unregisterImage(result.id);
-                    model.mirrored_status[pet] = .unloaded;
-                    std.debug.print("dsh-pet-desktop: stale mirrored run strip released pet={d}\n", .{pet});
+                    model.mirrored_drag_status[pet] = .unloaded;
+                    std.debug.print("dsh-pet-desktop: stale mirrored drag strip released pet={d}\n", .{pet});
                     return;
                 }
-                model.mirrored_status[pet] = .loaded;
-                std.debug.print("dsh-pet-desktop: mirrored run strip loaded pet={d} {d}x{d}\n", .{ pet, result.width, result.height });
+                model.mirrored_drag_status[pet] = .loaded;
+                std.debug.print("dsh-pet-desktop: mirrored drag strip loaded pet={d} {d}x{d}\n", .{ pet, result.width, result.height });
+                return;
+            }
+            if (manifest.dragRunPet(result.id)) |pet| {
+                if (result.outcome != .loaded) {
+                    model.drag_status[pet] = .unloaded;
+                    std.debug.print("dsh-pet-desktop: drag strip load failed pet={d} outcome={s}\n", .{ pet, @tagName(result.outcome) });
+                    return;
+                }
+                if (pet != model.active_pet) {
+                    _ = fx.unregisterImage(result.id);
+                    model.drag_status[pet] = .unloaded;
+                    std.debug.print("dsh-pet-desktop: stale drag strip released pet={d}\n", .{pet});
+                    return;
+                }
+                model.drag_status[pet] = .loaded;
+                model.drag_width[pet] = @intCast(result.width);
+                model.drag_height[pet] = @intCast(result.height);
+                std.debug.print("dsh-pet-desktop: drag strip loaded pet={d} {d}x{d}\n", .{ pet, result.width, result.height });
                 return;
             }
             const decoded = manifest.decodeImageId(result.id) orelse {
@@ -972,20 +1021,18 @@ test "a rightward drag draws the pre-mirrored run strip when it is loaded" {
     model.facing_right = true;
     try std.testing.expect(model.flipSprite());
     try std.testing.expectEqual(Mood.working, model.effectiveMood());
-    // Mirrored strip not loaded (or never declared): the plain working
-    // id — the view falls back to the legacy negative-scale Affine.
-    try std.testing.expect(!model.mirroredRunLoaded());
-    try std.testing.expectEqual(manifest.imageId(0, .working), model.spriteImageId(.working));
-    // Loaded: swap to the mirrored id (stride slot 8), same mood geometry.
-    model.mirrored_status[0] = .loaded;
-    try std.testing.expect(model.mirroredRunLoaded());
-    try std.testing.expectEqual(manifest.mirroredRunImageId(0), model.spriteImageId(.working));
-    // Leftward drag or no drag at all: always the plain strip.
+    // Mirrored strip not loaded (or never declared): the view falls back
+    // to the legacy negative-scale Affine.
+    try std.testing.expect(!model.mirroredDragRunLoaded());
+    // Loaded: rightward drawing will use the mirrored drag pixels.
+    model.mirrored_drag_status[0] = .loaded;
+    try std.testing.expect(model.mirroredDragRunLoaded());
+    // Leftward drag or no drag at all: never asks for mirrored pixels.
     model.facing_right = false;
-    try std.testing.expectEqual(manifest.imageId(0, .working), model.spriteImageId(.working));
+    try std.testing.expect(!model.flipSprite());
     model.dragging = false;
     model.facing_right = true;
-    try std.testing.expectEqual(manifest.imageId(0, .working), model.spriteImageId(.working));
+    try std.testing.expect(!model.flipSprite());
 }
 
 test "drag origin mapping is absolute, unflipped, and jump-free" {

@@ -54,8 +54,8 @@ pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
     // Rightward drags mirror the (natively left-facing) run strip, by one
     // of two paths:
     //  1. Preferred: model.sprite() already swapped in the pet's
-    //     pre-mirrored working strip (manifest mirroredFile, stride slot
-    //     8) — NO transform needed, so this works on every renderer.
+    //     pre-mirrored drag strip (manifest drag.mirroredFile, stride slot
+    //     9) — NO transform needed, so this works on every renderer.
     //  2. Fallback (imported pets without a mirrored strip): the legacy
     //     negative-scale Affine below. Metal honors it; the SDK's
     //     software reference renderer — which Windows transparent windows
@@ -69,7 +69,7 @@ pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
     // window's own width: x' = window_size - x. ty carries the hover
     // hop's lift (0 when standing).
     const lift = model.jumpOffset();
-    const flip: canvas.Affine = if (model.flipSprite() and !model.mirroredRunLoaded())
+    const flip: canvas.Affine = if (model.flipSprite() and !model.mirroredDragRunLoaded())
         .{ .a = -1, .tx = model_mod.window_size, .ty = lift }
     else
         .{ .ty = lift };

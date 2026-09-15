@@ -17,8 +17,7 @@
         "working": {
           "file": "deepseek-chan/working.png",
           "frames": 6,
-          "frameDurationMs": 120,
-          "mirroredFile": "deepseek-chan/working-mirrored.png"
+          "frameDurationMs": 120
         },
         "waiting": {
           "file": "deepseek-chan/waiting.png",
@@ -45,6 +44,12 @@
           "frames": 4,
           "frameDurationMs": 140
         }
+      },
+      "drag": {
+        "file": "deepseek-chan/drag.png",
+        "frames": 8,
+        "frameDurationMs": 120,
+        "mirroredFile": "deepseek-chan/drag-mirrored.png"
       }
     },
     "ai-sleepy-silver-wolf": {
@@ -62,8 +67,7 @@
         "working": {
           "file": "ai-sleepy-silver-wolf/working.png",
           "frames": 6,
-          "frameDurationMs": 120,
-          "mirroredFile": "ai-sleepy-silver-wolf/working-mirrored.png"
+          "frameDurationMs": 120
         },
         "waiting": {
           "file": "ai-sleepy-silver-wolf/waiting.png",
@@ -90,6 +94,12 @@
           "frames": 4,
           "frameDurationMs": 140
         }
+      },
+      "drag": {
+        "file": "ai-sleepy-silver-wolf/drag.png",
+        "frames": 8,
+        "frameDurationMs": 120,
+        "mirroredFile": "ai-sleepy-silver-wolf/drag-mirrored.png"
       }
     }
   }

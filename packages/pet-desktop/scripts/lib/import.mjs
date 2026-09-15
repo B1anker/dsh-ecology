@@ -18,6 +18,7 @@ import { dirname, join, resolve } from 'node:path'
 
 import {
   assertGridCoversSheet,
+  buildDragStripPlan,
   buildStripPlan,
   fitFrame,
   isValidPetId,
@@ -172,22 +173,42 @@ export function importCodexPet({ petDir, petId, spritesDir, decodeSheet }) {
       frames: strip.sprites.length,
       frameDurationMs: strip.frameDurationMs,
     }
-    if (strip.mood === 'working') {
-      // The pre-mirrored run strip the app swaps in for rightward drags
-      // (the SDK's software reference renderer drops negative-scale
-      // transforms — see scripts/lib/mirror.mjs).
-      writeFileSync(join(outDir, 'working-mirrored.png'), mirrorPngBytes(png, strip.sprites.length))
-      moods.working.mirroredFile = `${id}/working-mirrored.png`
-    }
     rows.push(
       `${id}/${strip.mood}.png  frames=${strip.sprites.length}  ` +
         `step=${strip.frameDurationMs}ms  from=${strip.source}  ${(png.length / 1024).toFixed(1)}KiB`,
     )
   }
 
+  // Keep the ordinary working mood (Codex's focused-work `running` row)
+  // independent from the window-drag locomotion cycle.  A directional row
+  // may have a different frame count, so it cannot share working's geometry.
+  const drag = buildDragStripPlan(
+    animations,
+    plan.find((strip) => strip.mood === 'working'),
+  )
+  const dragPng = buildStripPng(sheet, drag.sprites, pet.frame, dstSize)
+  writeFileSync(join(outDir, 'drag.png'), dragPng)
+  writeFileSync(join(outDir, 'drag-mirrored.png'), mirrorPngBytes(dragPng, drag.sprites.length))
+  if (drag.thinned) {
+    warnings.push(
+      `drag: thinned ${drag.thinned.from} frames to ${drag.thinned.to} ` +
+        `(strip ceiling ${MAX_STRIP_FRAMES})`,
+    )
+  }
+  rows.push(
+    `${id}/drag.png  frames=${drag.sprites.length}  ` +
+      `step=${drag.frameDurationMs}ms  from=${drag.source}  ${(dragPng.length / 1024).toFixed(1)}KiB`,
+  )
+
   // Canonical mood order, matching src/state.zig's Mood enum.
   manifest.pets[id] = {
     moods: Object.fromEntries(MOODS.map((mood) => [mood, moods[mood]])),
+    drag: {
+      file: `${id}/drag.png`,
+      frames: drag.sprites.length,
+      frameDurationMs: drag.frameDurationMs,
+      mirroredFile: `${id}/drag-mirrored.png`,
+    },
   }
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 

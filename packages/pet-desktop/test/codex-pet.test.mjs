@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   assertGridCoversSheet,
+  buildDragStripPlan,
   buildStripPlan,
   capStripFrames,
   DEFAULT_FRAME,
@@ -174,6 +175,16 @@ describe('buildStripPlan', () => {
     const { plan } = buildStripPlan(animations)
     expect(plan.find((p) => p.mood === 'working').source).toBe('running-right')
     expect(MOOD_SOURCES.working).toEqual(['running', 'running-right', 'move_right'])
+  })
+
+  test('keeps locomotion separate from the working animation', () => {
+    const { animations } = resolveAnimations(parseCodexPet('{}'))
+    const working = buildStripPlan(animations).plan.find((strip) => strip.mood === 'working')
+    const drag = buildDragStripPlan(animations, working)
+    expect(working.source).toBe('running')
+    expect(drag.source).toBe('running-left')
+    expect(drag.sprites).toEqual(animations['running-left'].sprites)
+    expect(drag.sprites).not.toEqual(working.sprites)
   })
 })
 
