@@ -80,6 +80,8 @@ export type {
 } from './http.js'
 export { fakeRequest, fakeResponse, fakeStreamingRequest } from './http.js'
 export { createMockContextDriver, createMockWebServerDriver } from './mock-drivers.js'
+export type { MockServices, MockServicesOptions } from './services.js'
+export { createMockServices } from './services.js'
 export type {
   MockToolHooks,
   MockToolHooksOptions,

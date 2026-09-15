@@ -6,7 +6,7 @@
  */
 
 import { ServiceCollection, type ServiceEntry } from './collection.js'
-import { SyncDescriptor } from './descriptors.js'
+import { FactoryDescriptor, SyncDescriptor } from './descriptors.js'
 import {
   type Constructor,
   createDecorator,
@@ -46,10 +46,11 @@ export interface IInstantiationService extends IDisposable {
   ): R
   /**
    * Builds a class the container does not own, injecting its declared services
-   * and filling the remaining parameters from `args`. The result is the
-   * caller's: it is not cached and not disposed with the container.
+   * and filling the remaining parameters from `args` — or runs a factory with
+   * an accessor. The result is the caller's: it is not cached and not disposed
+   * with the container.
    */
-  createInstance<T>(descriptor: SyncDescriptor<T>): T
+  createInstance<T>(descriptor: SyncDescriptor<T> | FactoryDescriptor<T>): T
   createInstance<C extends Constructor>(ctor: C, ...args: unknown[]): InstanceType<C>
   /**
    * A container that resolves `services` first and falls back to this one.
@@ -109,19 +110,19 @@ export class InstantiationService implements IInstantiationService {
     ...args: A
   ): R {
     this.assertLive()
-    const accessor: ServicesAccessor = {
-      get: (id) => this.get(id),
-      has: (id) => this.has(id),
-    }
-    return fn(accessor, ...args)
+    return fn(this.accessor([]), ...args)
   }
 
-  createInstance<T>(ctorOrDescriptor: SyncDescriptor<T> | Constructor<T>, ...args: unknown[]): T {
+  createInstance<T>(
+    recipe: SyncDescriptor<T> | FactoryDescriptor<T> | Constructor<T>,
+    ...args: unknown[]
+  ): T {
     this.assertLive()
-    if (ctorOrDescriptor instanceof SyncDescriptor) {
-      return this.construct(ctorOrDescriptor.ctor, ctorOrDescriptor.staticArguments, [])
+    if (recipe instanceof SyncDescriptor) {
+      return this.construct(recipe.ctor, recipe.staticArguments, [])
     }
-    return this.construct(ctorOrDescriptor, args, [])
+    if (recipe instanceof FactoryDescriptor) return recipe.factory(this.accessor([]))
+    return this.construct(recipe, args, [])
   }
 
   createChild(services: ServiceCollection): IInstantiationService {
@@ -159,7 +160,7 @@ export class InstantiationService implements IInstantiationService {
       if (this.parent !== undefined) return this.parent.resolve(id, trail)
       throw new Error(`Service '${String(id)}' is not registered${suffix(trail)}`)
     }
-    if (!(entry instanceof SyncDescriptor)) return entry
+    if (!(entry instanceof SyncDescriptor) && !(entry instanceof FactoryDescriptor)) return entry
 
     const name = String(id)
     if (trail.includes(name)) {
@@ -169,7 +170,9 @@ export class InstantiationService implements IInstantiationService {
     const build = (): T => {
       trail.push(name)
       try {
-        return this.construct(entry.ctor, entry.staticArguments, trail)
+        return entry instanceof SyncDescriptor
+          ? this.construct(entry.ctor, entry.staticArguments, trail)
+          : entry.factory(this.accessor(trail))
       } finally {
         trail.pop()
       }
@@ -238,6 +241,17 @@ export class InstantiationService implements IInstantiationService {
       }
     }
     return new concrete(...args)
+  }
+
+  /**
+   * The read side over a given chain, so whatever a factory or an invoked
+   * function pulls is recorded — and cycle-checked — as part of that chain.
+   */
+  private accessor(trail: string[]): ServicesAccessor {
+    return {
+      get: (id) => this.resolve(id, trail),
+      has: (id) => this.has(id),
+    }
   }
 
   private assertLive(trail: string[] = []): void {

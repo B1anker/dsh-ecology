@@ -5,9 +5,7 @@
  *
  * @module @seaveyon/dsh-di/descriptors
  */
-
 import type { Constructor, ServiceIdentifier } from './identifier.js'
-
 /**
  * A constructor plus the arguments the container cannot resolve on its own.
  *
@@ -28,20 +26,21 @@ import type { Constructor, ServiceIdentifier } from './identifier.js'
  * requests. The container hands out a proxy in the meantime; see
  * `InstantiationService` for what the proxy does and does not preserve.
  */
-export class SyncDescriptor<T> {
+export declare class SyncDescriptor<T> {
+  readonly ctor: Constructor<T>
+  readonly staticArguments: readonly unknown[]
+  readonly supportsDelayedInstantiation: boolean
   constructor(
-    readonly ctor: Constructor<T>,
-    readonly staticArguments: readonly unknown[] = [],
-    readonly supportsDelayedInstantiation = false,
-  ) {}
+    ctor: Constructor<T>,
+    staticArguments?: readonly unknown[],
+    supportsDelayedInstantiation?: boolean,
+  )
 }
-
 /** What a {@link FactoryDescriptor}'s function receives: the container's read side. */
 export interface FactoryAccessor {
   get<T>(id: ServiceIdentifier<T>): T
   has(id: ServiceIdentifier<unknown>): boolean
 }
-
 /**
  * A function the container calls once to produce the service, with an accessor
  * for whatever it needs from the graph.
@@ -62,9 +61,8 @@ export interface FactoryAccessor {
  * )
  * ```
  */
-export class FactoryDescriptor<T> {
-  constructor(
-    readonly factory: (accessor: FactoryAccessor) => T,
-    readonly supportsDelayedInstantiation = false,
-  ) {}
+export declare class FactoryDescriptor<T> {
+  readonly factory: (accessor: FactoryAccessor) => T
+  readonly supportsDelayedInstantiation: boolean
+  constructor(factory: (accessor: FactoryAccessor) => T, supportsDelayedInstantiation?: boolean)
 }

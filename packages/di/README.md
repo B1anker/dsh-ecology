@@ -107,6 +107,7 @@ has one, in reverse construction order.
 | `inject(...ids)` | Class-level declaration of constructor-injected services, in parameter order. Standard class decorator or plain call. Replaces any earlier declaration on the class; a subclass declares for itself. |
 | `optional(id)` | Wraps an identifier inside `inject(...)` so the position is `undefined` when nothing is registered, instead of an error. For host services that exist on some profiles and not others. |
 | `SyncDescriptor(ctor, staticArguments?, supportsDelayedInstantiation?)` | A recipe: the class, the arguments for its non-injected parameters, and whether to defer construction to first use. |
+| `FactoryDescriptor((accessor) => T, supportsDelayedInstantiation?)` | A recipe for code that builds its services through closure factories rather than classes. Called once with a `{ get, has }` accessor; what it pulls is recorded in the same chain as a constructor's dependencies, so cycles and missing services are reported with the factory in the path, and the result is disposed with the container. |
 | `ServiceCollection` | Identifier → instance-or-recipe. `set` returns what it replaced; `has`, `get`, `delete`, `size`, `keys`, `forEach`; `clone()` for a test to override a few entries without touching the original. Plain data — it never resolves anything. |
 | `InstantiationService(collection?, parent?)` | The container. Registers itself under `IInstantiationService`. |
 | `services.get(id)` | The singleton, constructed on first use. Throws when unregistered (naming the chain that needed it), on a cycle (naming the path), and after `dispose()`. |
@@ -117,6 +118,29 @@ has one, in reverse construction order.
 | `services.dispose()` | Disposes what this container built (reverse order), then its children. Ready instances set into the collection belong to whoever made them and are left alone. Idempotent; every entry point but `has` throws afterwards. |
 | `IDisposable`, `isDisposable(value)`, `toDisposable(fn)` | The one lifecycle convention: a `dispose(): void` method. |
 | `getServiceDependencies(ctor)`, `DI_TARGET`, `DI_DEPENDENCIES` | The declaration as stored on the constructor, for tooling. |
+
+### DSH host services: `@seaveyon/dsh-di/host`
+
+The host's services arrive on the plugin context by name. The `host` entry
+gives the names identifiers — `IWebServer`, `IConnection`, `ITools`, plus
+`IPluginContext` for the context itself — and one call that copies them into a
+collection as ready instances:
+
+```ts
+import { IConnection, ITools, IWebServer, registerHostServices } from '@seaveyon/dsh-di/host'
+
+const collection = registerHostServices(new ServiceCollection(), ctx, {
+  required: [IWebServer, ITools],   // missing → apply() throws, naming the service
+  optional: [IConnection],          // missing → skipped, so optional(IConnection) is undefined
+})
+```
+
+The identifier names *are* the Cordis service names, and `createDecorator`
+returns one object per name. A plugin whose hand-written host type is richer
+than the minimal shapes exported here — most are — declares
+`createDecorator<ItsOwnWebServerType>('webServer')` and gets the same key. The
+shapes in `host` are the least a plugin can rely on; the plugin's own contract
+file stays where its compatibility promise lives.
 
 ### Delayed instantiation
 
@@ -165,8 +189,10 @@ resolved against a fake `webServer` and `connection` without a DSH process.
 - Declarations are stored under `Symbol.for(...)` keys and identifiers in a
   `Symbol.for`-keyed global registry, so a plugin and a host that bundle
   separate copies of this package still see one graph.
-- No dependencies, no Node built-ins: the output runs anywhere ES2022 does,
-  including the browser side of a plugin if it wants a container there.
+- No dependencies, no Node built-ins in the main entry: it runs anywhere
+  ES2022 does, including the browser side of a plugin if it wants a container
+  there. Only `@seaveyon/dsh-di/host` names `node:http` types, because DSH
+  route handlers are Node's.
 
 ## License
 

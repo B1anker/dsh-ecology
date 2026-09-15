@@ -5,9 +5,16 @@
   // configs get `.d.ts` files of their own. Narrowing to `src` puts each
   // declaration beside the `.js` it describes, which is where the `exports` map
   // says it is.
+  //
+  // `paths` is reset: typecheck maps `@seaveyon/dsh-di` to the sibling's
+  // source, which would sit outside this `rootDir`; the build resolves it
+  // through node_modules — the sibling's built declarations — the way a
+  // consumer's compiler will. The workspace build runs in dependency order,
+  // so they exist by the time this runs.
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "paths": {}
   },
   "include": ["src"]
 }

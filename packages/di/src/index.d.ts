@@ -22,7 +22,6 @@
  *
  * @module @seaveyon/dsh-di
  */
-
 export { ServiceCollection, type ServiceEntry } from './collection.js'
 export { type FactoryAccessor, FactoryDescriptor, SyncDescriptor } from './descriptors.js'
 export {

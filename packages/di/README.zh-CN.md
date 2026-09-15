@@ -98,6 +98,7 @@ export function apply(ctx: PluginContext) {
 | `inject(...ids)` | 类级别的构造函数注入声明，按参数顺序。既是标准类装饰器也是普通调用。覆盖该类上更早的声明；子类需自行声明。 |
 | `optional(id)` | 在 `inject(...)` 中包裹标识符，使该位置在未登记时得到 `undefined` 而非报错。用于只在部分 profile 上存在的宿主服务。 |
 | `SyncDescriptor(ctor, staticArguments?, supportsDelayedInstantiation?)` | 配方：类、非注入参数的取值，以及是否推迟到首次使用再构造。 |
+| `FactoryDescriptor((accessor) => T, supportsDelayedInstantiation?)` | 面向用闭包工厂而非类来构建服务的代码的配方。以 `{ get, has }` 访问器调用一次；它取用的服务与构造函数依赖记在同一条链上，成环或缺失时报错路径中带有该工厂，结果随容器 dispose。 |
 | `ServiceCollection` | 标识符 → 实例或配方。`set` 返回被替换的条目；`has`、`get`、`delete`、`size`、`keys`、`forEach`；`clone()` 供测试覆盖少数条目而不动原件。纯数据，从不解析。 |
 | `InstantiationService(collection?, parent?)` | 容器。把自己登记在 `IInstantiationService` 下。 |
 | `services.get(id)` | 单例，首次使用时构造。未登记（报出需要它的链）、成环（报出路径）、`dispose()` 之后均抛错。 |
@@ -108,6 +109,26 @@ export function apply(ctx: PluginContext) {
 | `services.dispose()` | 按逆序 dispose 本容器构造的服务，再 dispose 子容器。作为实例放入集合的现成对象归其创建者，不动。幂等；此后除 `has` 外所有入口抛错。 |
 | `IDisposable`、`isDisposable(value)`、`toDisposable(fn)` | 唯一的生命周期约定：一个 `dispose(): void` 方法。 |
 | `getServiceDependencies(ctor)`、`DI_TARGET`、`DI_DEPENDENCIES` | 存在构造函数上的声明本身，供工具读取。 |
+
+### DSH 宿主服务：`@seaveyon/dsh-di/host`
+
+宿主的服务按名字挂在插件上下文上。`host` 入口为这些名字提供标识符——`IWebServer`、
+`IConnection`、`ITools`，以及代表上下文自身的 `IPluginContext`——并用一次调用把它们
+作为现成实例复制进集合：
+
+```ts
+import { IConnection, ITools, IWebServer, registerHostServices } from '@seaveyon/dsh-di/host'
+
+const collection = registerHostServices(new ServiceCollection(), ctx, {
+  required: [IWebServer, ITools],   // 缺失 → apply() 抛错并点名该服务
+  optional: [IConnection],          // 缺失 → 跳过，于是 optional(IConnection) 得到 undefined
+})
+```
+
+标识符的名字**就是** Cordis 服务名，而 `createDecorator` 对同一个名字只返回一个对象。
+插件手写的宿主类型若比这里导出的最小形状更丰富——大多如此——只需声明
+`createDecorator<自己的WebServer类型>('webServer')`，拿到的就是同一个键。`host` 里的
+形状是插件能依赖的最小集合；插件自己的契约文件仍是其兼容性承诺所在。
 
 ### 延迟构造
 
@@ -150,8 +171,9 @@ testkit 宿主替身之上的容器，插件的服务可以在没有 DSH 进程�
   装饰器——`constructor(@ILogService log: ILogService)`——`inject` 仍是类装饰器。
 - 声明存放在 `Symbol.for(...)` 键下，标识符放在以 `Symbol.for` 为键的全局注册表里，
   因此分别打包了本包副本的插件与宿主仍共享同一张图。
-- 零依赖、不引用 Node 内建模块：产物在任何 ES2022 环境可用，插件的浏览器侧若想要
-  容器也可直接使用。
+- 零依赖，主入口不引用 Node 内建模块：产物在任何 ES2022 环境可用，插件的浏览器侧若
+  想要容器也可直接使用。只有 `@seaveyon/dsh-di/host` 提及 `node:http` 类型，因为 DSH
+  的路由处理器就是 Node 的。
 
 ## 许可证
 

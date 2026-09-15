@@ -14,6 +14,7 @@ test('the entry exports the container, the declarations, and the lifecycle helpe
   expect(Object.keys(di).toSorted()).toEqual([
     'DI_DEPENDENCIES',
     'DI_TARGET',
+    'FactoryDescriptor',
     'IInstantiationService',
     'InstantiationService',
     'ServiceCollection',
@@ -25,6 +26,10 @@ test('the entry exports the container, the declarations, and the lifecycle helpe
     'optional',
     'toDisposable',
   ])
+  // The DSH-specific identifiers live on their own entry, so the main one stays
+  // free of any host vocabulary (and of `node:http` in its declarations).
+  expect(Object.keys(di)).not.toContain('IWebServer')
+  expect(Object.keys(di)).not.toContain('registerHostServices')
   expect(typeof di.DI_DEPENDENCIES).toBe('symbol')
   expect(typeof di.DI_TARGET).toBe('symbol')
   // The identifier is a function (it doubles as a legacy parameter decorator)
@@ -37,4 +42,15 @@ test('a container built from the entry resolves itself', () => {
   const services = new di.InstantiationService()
   expect(services.get(di.IInstantiationService)).toBe(services)
   services.dispose()
+})
+
+test('the host entry exports the DSH identifiers and the bridge', async () => {
+  const host = await import('../src/host.js')
+  expect(Object.keys(host).toSorted()).toEqual([
+    'IConnection',
+    'IPluginContext',
+    'ITools',
+    'IWebServer',
+    'registerHostServices',
+  ])
 })
