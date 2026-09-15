@@ -1,16 +1,25 @@
+/**
+ * The operations behind the management API: the world-line projection
+ * (`worldLines`, `labStatus`) and the action dispatcher (`operate`). Pure
+ * functions of a `CliContext`; the route that calls them is ./api and the
+ * graph that wires them is ./services.
+ *
+ * @module @seaveyon/dsh-world-line/web/operations
+ */
+
 import { verificationState } from '../domain/probe.js'
 import { withOperations } from '../fs/operation.js'
 import { snapshotsDir } from '../fs/paths.js'
 import { adapterDsh01x } from '../host-adapters/dsh-0.1.x.js'
-import { readArtifact } from '../lab/artifacts.js'
-import { closeProbeResultWindows } from '../lab/browser.js'
-import { upgradeTick } from '../workflows/upgrades.js'
-import { jobEvents } from './job-events.js'
-import { openJobStream } from './job-stream.js'
-import { mapLimited, ReadCache, watchWorldLine } from './read-cache.js'
-import { revisionResponse } from './revisions.js'
+import { mapLimited, ReadCache } from './read-cache.js'
 
-const reads = new ReadCache()
+/**
+ * Derived-read cache shared by every function in this module. Registered in
+ * the plugin's service graph under `IReadCache` (see ./services) so the API
+ * and the invalidation watcher use this same instance.
+ */
+export const readCache = new ReadCache()
+const reads = readCache
 
 function restoreTimelineEvent(entry: PromotionJournalEntry, lineId: string): WorldEvent | null {
   if (entry.kind !== 'restore' || entry.outcome !== 'committed' || !entry.snapshotId) return null
@@ -50,9 +59,7 @@ async function readJournalEntries(
 }
 
 import { readFile } from 'node:fs/promises'
-import type { IncomingMessage, ServerResponse } from 'node:http'
-import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { runDoctor } from '../commands/doctor.js'
 import {
   runLabAdd,
@@ -77,14 +84,11 @@ import { runSnapshotCreate, validateLabel } from '../commands/snapshot.js'
 import type { CliContext } from '../context.js'
 import { UsageError } from '../domain/errors.js'
 import type { WorldEvent } from '../domain/insight-types.js'
-import { redactText } from '../domain/redaction.js'
-import { loadDshEnvironment, loadExperimentEnvironment } from '../environment.js'
 import { acquireLock } from '../fs/lock.js'
 import { resolveLabId, runLabAlias } from '../lab/aliases.js'
 import { defaultLabId, runLabDefault } from '../lab/defaults.js'
 import { journalPath, type PromotionJournalEntry } from '../lab/journal.js'
 import { labHomeDir, labRoot, listLabs } from '../lab/layout.js'
-import { currentLabId, managerHome } from '../lab/manager.js'
 import type { LabManifest } from '../lab/manifest.js'
 import { readLabManifest } from '../lab/manifest.js'
 import { classifyClientGate } from '../lab/promote.js'
@@ -101,19 +105,11 @@ import {
   snapshotDetail,
   snapshotEvents,
 } from './insights.js'
-import { getJob, listJobs, startScopedJob, subscribeJobs } from './jobs.js'
+import { getJob, listJobs, startScopedJob } from './jobs.js'
 import { commitMerge, mergePreview, prepareMerge } from './merge.js'
 import { projectMerges } from './merge-events.js'
 import { projectOperations } from './operation-events.js'
 import type { WorldLineInfo } from './types.js'
-
-export const name = '@seaveyon/dsh-world-line'
-export const inject = ['webServer', 'connection']
-type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
-export interface WebContext {
-  get<T>(name: string): T | undefined
-  effect(fn: () => () => void, label?: string): void
-}
 
 export async function labStatus(ctx: CliContext, id: string) {
   const { manifest, probes } = await reads.read(
@@ -663,197 +659,4 @@ async function dispatchAction(
   if (Object.hasOwn(labHandlers, action)) return labHandlers[action]!()
 
   throw new UsageError('未知操作')
-}
-
-export function apply(host: WebContext, config: { profile?: string } = {}): void {
-  const server = host.get<{
-    register(route: { kind: 'exact'; path: string; handler: Handler }): () => void
-  }>('webServer')
-  const connection = host.get<{ requestRejection(req: IncomingMessage): number | undefined }>(
-    'connection',
-  )
-  if (!server || !connection?.requestRejection)
-    throw new Error('World Line requires DSH browser authentication')
-  const runtimeHome = resolve(process.env.DSH_HOME ?? join(homedir(), '.dsh'))
-  const currentId = currentLabId(runtimeHome, process.env.WORLD_LINE_LAB)
-  const home = managerHome(runtimeHome, currentId, process.env.WORLD_LINE_MANAGER_HOME)
-  host.effect(() => watchWorldLine(home, reads), 'world-line: metadata invalidation')
-  host.effect(
-    () => () => {
-      void closeProbeResultWindows()
-    },
-    'world-line: result window ownership',
-  )
-  const context = async (): Promise<CliContext> => {
-    const env = await loadDshEnvironment(home, process.env)
-    return {
-      home,
-      env,
-      experimentEnv: await loadExperimentEnvironment(env, process.env),
-      cwd: home,
-      profileName: config.profile ?? 'web',
-      json: true,
-      breakStaleLock: false,
-      now: () => new Date(),
-    }
-  }
-  host.effect(() => {
-    let stopped = false
-    const tick = () => {
-      if (!stopped)
-        void context()
-          .then(upgradeTick)
-          .catch(() => {})
-    }
-    const timer = setInterval(tick, 60000)
-    tick()
-    return () => {
-      stopped = true
-      clearInterval(timer)
-    }
-  }, 'world-line: upgrade scheduler')
-  host.effect(
-    () =>
-      server.register({
-        kind: 'exact',
-        path: '/api/world-line',
-        handler: async (req, res) => {
-          const send = (status: number, data: unknown) => {
-            res.writeHead(status, {
-              'content-type': 'application/json; charset=utf-8',
-              'cache-control': 'no-store',
-              'referrer-policy': 'no-referrer',
-            })
-            res.end(JSON.stringify(data))
-          }
-          const rejection = connection.requestRejection(req)
-          if (rejection) {
-            send(rejection, { error: '请重新打开 DSH 登录入口' })
-            return
-          }
-          try {
-            if (
-              req.method === 'GET' &&
-              new URL(req.url ?? '/', 'http://localhost').searchParams.get('stream') === 'jobs'
-            ) {
-              const ctx = await context()
-              res.writeHead(200, {
-                'content-type': 'text/event-stream',
-                'cache-control': 'no-store',
-                'x-accel-buffering': 'no',
-              })
-              let last =
-                typeof req.headers['last-event-id'] === 'string'
-                  ? req.headers['last-event-id']
-                  : undefined
-              openJobStream(
-                res,
-                () => {
-                  const events = jobEvents(ctx, last)
-                  if (events.length) last = events.at(-1)!.id
-                  return events
-                },
-                subscribeJobs,
-                () => !!connection.requestRejection(req),
-              )
-              return
-            }
-            if (
-              req.method === 'GET' &&
-              new URL(req.url ?? '/', 'http://localhost').searchParams.has('artifact')
-            ) {
-              const params = new URL(req.url ?? '/', 'http://localhost').searchParams
-              const ctx = await context()
-              const labId = params.get('lab') ?? ''
-              await reportContext(ctx, labId)
-              const name = params.get('file') ?? ''
-              const bytes = await readArtifact(ctx.home, labId, params.get('artifact') ?? '', name)
-              res.writeHead(200, {
-                'content-type': name === 'failure.png' ? 'image/png' : 'application/zip',
-                'cache-control': 'no-store',
-                'x-content-type-options': 'nosniff',
-                'content-disposition': `attachment; filename="${name}"`,
-                'referrer-policy': 'no-referrer',
-              })
-              res.end(bytes)
-              return
-            }
-            if (req.method === 'GET') {
-              const ctx = await context()
-              const result = await reads.read(
-                `${ctx.home}:${ctx.profileName}:${currentId}:world-lines`,
-                [labRoot(ctx.home), journalPath(ctx.home), snapshotsDir(ctx.home)],
-                () => worldLines(ctx, currentId),
-                1500,
-              )
-              const since = new URL(req.url ?? '/', 'http://localhost').searchParams.get('since')
-              send(
-                200,
-                revisionResponse(`${ctx.home}:${ctx.profileName}:${currentId}`, result, since),
-              )
-              return
-            }
-            if (req.method !== 'POST') {
-              send(405, { error: 'Method not allowed' })
-              return
-            }
-            // Require an explicit same-origin JSON request in addition to native authentication.
-            if (
-              !req.headers.origin ||
-              new URL(req.headers.origin).host !== req.headers.host ||
-              req.headers['content-type'] !== 'application/json'
-            ) {
-              send(403, { error: 'Same-origin JSON request required' })
-              return
-            }
-            const chunks: Buffer[] = []
-            let length = 0
-            for await (const chunk of req) {
-              const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-              length += bytes.length
-              if (length > 34 * 1024 * 1024) {
-                send(413, { error: 'Request too large' })
-                return
-              }
-              chunks.push(bytes)
-            }
-            const raw = Buffer.concat(chunks, length).toString('utf8')
-            let body: unknown
-            try {
-              body = JSON.parse(raw)
-            } catch (error) {
-              if (Buffer.byteLength(raw) > 8192) {
-                send(413, { error: 'Request too large' })
-                return
-              }
-              throw error
-            }
-            if (
-              Buffer.byteLength(raw) > 8192 &&
-              !['lab-config-apply', 'environment-import'].includes(
-                (body as { action?: string })?.action ?? '',
-              )
-            ) {
-              send(413, { error: 'Request too large' })
-              return
-            }
-            if (!body || typeof body !== 'object' || Array.isArray(body))
-              throw new UsageError('无效请求')
-            send(
-              200,
-              await operate(
-                { ...(await context()), authenticatedWebAction: true },
-                body as Record<string, unknown>,
-                currentId,
-              ),
-            )
-          } catch (error) {
-            send(error instanceof UsageError ? 400 : 500, {
-              error: redactText(error instanceof Error ? error.message : '操作失败'),
-            })
-          }
-        },
-      }),
-    'world-line: authenticated management API',
-  )
 }

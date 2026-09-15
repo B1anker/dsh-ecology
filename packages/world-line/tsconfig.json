@@ -11,7 +11,15 @@
     "lib": ["ES2023", "DOM"],
     "types": ["node"],
     "noEmit": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    // The container is a workspace sibling; typecheck against its source so
+    // build order does not decide whether this package typechecks.
+    // tsconfig.build.json resets `paths` so the emitted output resolves the
+    // bare specifier through node_modules, as a consumer's Node will.
+    "paths": {
+      "@seaveyon/dsh-di": ["../di/src/index.ts"],
+      "@seaveyon/dsh-di/host": ["../di/src/host.ts"]
+    }
   },
   "include": ["src", "test", "rstest.config.ts"]
 }
