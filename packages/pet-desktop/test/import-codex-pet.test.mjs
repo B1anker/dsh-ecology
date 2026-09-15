@@ -129,7 +129,12 @@ describe('importCodexPet', () => {
         file: 'mockpet/working.png',
         frames: 2,
         frameDurationMs: 50,
-        mirroredFile: 'mockpet/working-mirrored.png',
+      })
+      expect(manifest.pets.mockpet.drag).toEqual({
+        file: 'mockpet/drag.png',
+        frames: 2,
+        frameDurationMs: 50,
+        mirroredFile: 'mockpet/drag-mirrored.png',
       })
       expect(moods.sleeping).toEqual({
         file: 'mockpet/sleeping.png',
@@ -150,11 +155,10 @@ describe('importCodexPet', () => {
       expect(px(128, 128)).toEqual([0, 0, 200, 255]) // sprite 0
       expect(px(384, 128)).toEqual([37, 91, 200, 255]) // sprite 1
 
-      // The mirrored run strip rides along (Windows software renderer
-      // cannot flip at draw time): same geometry as working.png.
-      const mirrored = decodePng(readFileSync(join(spritesDir, 'mockpet', 'working-mirrored.png')))
-      const working = decodePng(readFileSync(join(spritesDir, 'mockpet', 'working.png')))
-      expect([mirrored.width, mirrored.height]).toEqual([working.width, working.height])
+      // The dedicated drag strip rides along with a mirrored counterpart.
+      const mirrored = decodePng(readFileSync(join(spritesDir, 'mockpet', 'drag-mirrored.png')))
+      const drag = decodePng(readFileSync(join(spritesDir, 'mockpet', 'drag.png')))
+      expect([mirrored.width, mirrored.height]).toEqual([drag.width, drag.height])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

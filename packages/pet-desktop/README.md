@@ -58,9 +58,12 @@ source of truth** for strip geometry:
     { "file": "<petId>/<mood>.png", "frames": 24, "frameDurationMs": 250 } } } } }
 ```
 
-The `working` mood additionally carries an optional `"mirroredFile":
-"<petId>/working-mirrored.png"` — a copy of the run strip with every frame
-mirrored horizontally in place (frame order unchanged). It exists because
+An imported pet may additionally carry an optional `"drag"` entry with a
+`"mirroredFile": "<petId>/drag-mirrored.png"` — a directional locomotion
+strip and a copy with every frame mirrored horizontally in place (frame order
+unchanged). `working` remains the agent's focused-work animation; dragging
+uses `drag`, falling back to `working` only for older manifests. The mirror
+exists because
 the SDK's software reference renderer ignores the sign of negative-scale
 transforms, and Windows transparent windows always render through that
 path — so instead of mirroring at draw time with an Affine, a rightward
@@ -109,12 +112,17 @@ animation wins; missing ones fall back to idle frames with a warning):
 | --- | --- | --- |
 | idle | `idle` | |
 | thinking | `review` | |
-| working | `running` → `running-right` → `move_right` | |
+| working | `running` → `running-right` → `move_right` | Agent task work; separate from drag locomotion |
 | waiting | `waiting` | |
 | sad | `failed` → `sad` | |
 | sleeping | `sleeping`/`sleep`/`rest` if defined, else idle frames ×1.5 slower | Codex has no sleep state |
 | celebrating | `jumping` → `bounce` | |
 | pet | `waving` → `wave` | |
+
+The importer separately maps the optional native-left `drag` strip from
+`running-left` → `move_left` → `running-right` → `move_right`, then produces
+its right-facing mirrored counterpart. This lets carrying use a real gait
+without changing the agent's ordinary `working` animation.
 
 Limitations:
 
@@ -198,7 +206,7 @@ channel (`fx.openChannel` → thread-safe `ChannelHandle.post`, the
   gesture, a 60 Hz poll follows the absolute pointer position —
   `NSEvent.mouseLocation` on macOS, `GetCursorPos` on Windows — until
   button-up). The
-  pet plays its working (run) strip while carried — a display-layer override
+  pet plays its directional drag strip while carried — a display-layer override
   (`Model.effectiveMood`), so bridge state keeps landing underneath and the
   pet returns to the latest mood on release.
 - **Click** toggles a 1.25× zoom (stays inside the window's transparent

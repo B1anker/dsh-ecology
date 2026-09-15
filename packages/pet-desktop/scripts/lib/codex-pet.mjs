@@ -113,6 +113,22 @@ export const MOOD_SOURCES = Object.freeze({
   pet: ['waving', 'wave'],
 })
 
+/**
+ * The strip played while the native window is carried.  This is deliberately
+ * separate from `working`: Codex's `running` row means focused task work,
+ * whereas the directional rows are the actual locomotion cycle.
+ *
+ * All built-in Codex pets have `running-left`; `running-right` is retained
+ * for custom packages that supply only that direction.  The desktop player
+ * mirrors this native-left strip for a rightward drag.
+ */
+export const DRAG_SOURCES = Object.freeze([
+  'running-left',
+  'move_left',
+  'running-right',
+  'move_right',
+])
+
 /** Derived `sleeping` strips replay the idle frames this much slower. */
 export const SLEEP_DURATION_FACTOR = 1.5
 
@@ -387,6 +403,25 @@ export function buildStripPlan(animations) {
     })
   }
   return { plan, warnings }
+}
+
+/** Build the optional native-drag strip, falling back to working safely. */
+export function buildDragStripPlan(animations, working) {
+  let source = null
+  for (const candidate of DRAG_SOURCES) {
+    if (animations[candidate]) {
+      source = candidate
+      break
+    }
+  }
+  const selected = source === null ? working : animations[source]
+  const capped = capStripFrames(selected.sprites, selected.frameDurationMs)
+  return {
+    sprites: capped.sprites,
+    frameDurationMs: Math.round(capped.frameDurationMs * 1000) / 1000,
+    source: source ?? 'working-fallback',
+    thinned: capped.thinned,
+  }
 }
 
 /**
