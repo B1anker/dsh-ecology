@@ -18,14 +18,13 @@
  *    contract (MOODS order, bridge port) can never drift between the two
  *    sides. On macOS it is also the path with no Gatekeeper friction:
  *    npm-installed files carry no quarantine attribute, so an unsigned binary
- *    spawns cleanly.
+ *    spawns cleanly. The sprite assets ride beside the binary in that same
+ *    package (`bin/assets/`), so this plugin's own tarball carries no
+ *    desktop bytes at all — see {@link desktopAssetsEnv}.
  * 2. The legacy staging directory inside this package
- *    (`desktop/dsh-pet-desktop-*`), which only exists in a development
- *    checkout after `bun run build:desktop`; the published tarball no longer
- *    carries it. The sprite assets stay here (`desktop/assets/`) — they are
- *    shared by every platform — and the spawn sets DSH_PET_DESKTOP_ASSETS to
- *    point the binary at them, because the exe now lives in a different
- *    package than its sprites.
+ *    (`desktop/dsh-pet-desktop-*`, with the assets beside them at
+ *    `desktop/assets/`), which only exists in a development checkout after
+ *    `bun run build:desktop`; the published tarball carries neither.
  * 3. An installed copy, per platform. On macOS, Launch Services (`open -b`
  *    the bundle id, then the standard Applications folders) — development
  *    installs and pre-split packages. On Windows there is no `open -b` and
@@ -118,27 +117,32 @@ export function platformPackageBinary(
 }
 
 /**
- * The sprite assets shared by every platform build, shipped inside this
- * package at `desktop/assets/`. The binary lives in a different package now,
- * so the spawn environment names this directory through
- * DSH_PET_DESKTOP_ASSETS — see {@link desktopAssetsEnv}.
+ * The sprite assets that belong to one desktop binary: the `assets/`
+ * directory beside it. Both layouts the launcher spawns are shaped this way —
+ * the per-platform package stages `bin/dsh-pet-desktop` next to `bin/assets/`,
+ * and a development checkout's `build:desktop` stages `desktop/dsh-pet-desktop-*`
+ * next to `desktop/assets/` — so the sprites always travel with the exe that
+ * renders them, and this plugin's tarball ships none.
  */
-export function desktopAssetsDir(): string {
-  return fileURLToPath(new URL('../desktop/assets', import.meta.url))
+export function desktopAssetsDir(binary: string): string {
+  return join(dirname(binary), 'assets')
 }
 
 /**
  * The environment addition that points a spawned desktop binary at its
- * sprites: `{ DSH_PET_DESKTOP_ASSETS: <this package>/desktop/assets }` when
- * that directory exists, `{}` otherwise (a development checkout before
- * `build:desktop`, where the exe's own probing finds assets beside the staged
- * binary). Factored out of the spawn so tests can assert the computation
+ * sprites: `{ DSH_PET_DESKTOP_ASSETS: <beside the binary>/assets }` when that
+ * directory exists, `{}` otherwise. The exe probes the same location on its
+ * own (packages/pet-desktop/src/assets.zig, layout 3), so the variable is a
+ * belt for its braces: it wins over a stray `./assets` in whatever directory
+ * the DSH server happens to run from, and over any symlink resolution of the
+ * exe path. Factored out of the spawn so tests can assert the computation
  * without starting a process.
  */
 export function desktopAssetsEnv(
+  binary: string,
   exists: (path: string) => boolean = existsSync,
 ): Record<string, string> {
-  const dir = desktopAssetsDir()
+  const dir = desktopAssetsDir(binary)
   return exists(dir) ? { DSH_PET_DESKTOP_ASSETS: dir } : {}
 }
 
@@ -177,9 +181,8 @@ export interface LaunchDeps {
    * Starts a desktop binary as a detached child that outlives the request
    * (and even the DSH server). Resolves once the process is spawned, rejects
    * on spawn error. Defaults to a detached, stdio-ignored spawn whose
-   * environment points DSH_PET_DESKTOP_ASSETS at this package's
-   * `desktop/assets/` — the exe lives in a different package than its
-   * sprites, so without the variable its own probing would find nothing.
+   * environment points DSH_PET_DESKTOP_ASSETS at the `assets/` directory
+   * beside the binary — see {@link desktopAssetsEnv}.
    */
   spawnDetached?: (path: string) => Promise<void>
 }
@@ -195,7 +198,7 @@ async function defaultSpawnDetached(path: string): Promise<void> {
     const child = spawn(path, [], {
       detached: true,
       stdio: 'ignore',
-      env: { ...process.env, ...desktopAssetsEnv() },
+      env: { ...process.env, ...desktopAssetsEnv(path) },
     })
     child.once('error', reject)
     child.once('spawn', () => resolve())

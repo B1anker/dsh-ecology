@@ -36,7 +36,6 @@
   },
   "files": [
     "dist/",
-    "desktop/assets/",
     "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",
@@ -78,7 +77,7 @@
     "test:watch": "rstest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pack:check": "bun run build && npm pack --dry-run",
-    "build:desktop": "cd ../pet-desktop && zig build -Doptimize=ReleaseSmall --prefix zig-out-arm64 && zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-macos --prefix zig-out-x64 && zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-windows-gnu --prefix zig-out-win-x64 && mkdir -p ../pet/desktop && install -m 755 zig-out-arm64/bin/dsh-pet-desktop ../pet/desktop/dsh-pet-desktop-arm64 && install -m 755 zig-out-x64/bin/dsh-pet-desktop ../pet/desktop/dsh-pet-desktop-x64 && install -m 755 zig-out-win-x64/bin/dsh-pet-desktop.exe ../pet/desktop/dsh-pet-desktop-windows-x64.exe && rm -rf ../pet/desktop/assets && cp -R assets ../pet/desktop/assets"
+    "build:desktop": "cd ../pet-desktop && zig build -Doptimize=ReleaseSmall --prefix zig-out-arm64 && zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-macos --prefix zig-out-x64 && zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-windows-gnu --prefix zig-out-win-x64 && mkdir -p ../pet/desktop && install -m 755 zig-out-arm64/bin/dsh-pet-desktop ../pet/desktop/dsh-pet-desktop-arm64 && install -m 755 zig-out-x64/bin/dsh-pet-desktop ../pet/desktop/dsh-pet-desktop-x64 && install -m 755 zig-out-win-x64/bin/dsh-pet-desktop.exe ../pet/desktop/dsh-pet-desktop-windows-x64.exe && rm -rf ../pet/desktop/assets && cp -R assets ../pet/desktop/assets && mkdir -p ../pet-desktop-darwin-arm64/bin ../pet-desktop-darwin-x64/bin ../pet-desktop-win32-x64/bin && install -m 755 zig-out-arm64/bin/dsh-pet-desktop ../pet-desktop-darwin-arm64/bin/dsh-pet-desktop && install -m 755 zig-out-x64/bin/dsh-pet-desktop ../pet-desktop-darwin-x64/bin/dsh-pet-desktop && install -m 755 zig-out-win-x64/bin/dsh-pet-desktop.exe ../pet-desktop-win32-x64/bin/dsh-pet-desktop.exe && for d in ../pet-desktop-darwin-arm64 ../pet-desktop-darwin-x64 ../pet-desktop-win32-x64; do rm -rf $d/bin/assets && cp -R assets $d/bin/assets || exit 1; done"
   },
   "devDependencies": {
     "@rsbuild/plugin-react": "^1",

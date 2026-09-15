@@ -171,14 +171,21 @@ describe('launchDesktopApp', () => {
     expect(platformPackageBinary('linux', 'x64')).toBeNull()
   })
 
-  test('the spawn env points the binary at the shipped sprite assets', () => {
-    expect(desktopAssetsDir().endsWith(join('desktop', 'assets'))).toBe(true)
-    expect(desktopAssetsEnv(() => true)).toEqual({
-      DSH_PET_DESKTOP_ASSETS: desktopAssetsDir(),
+  test('the spawn env points the binary at the sprite assets beside it', () => {
+    // The platform package: bin/dsh-pet-desktop next to bin/assets/.
+    const platformExe = join('/', 'node_modules', '@seaveyon', 'pkg', 'bin', 'dsh-pet-desktop')
+    expect(desktopAssetsDir(platformExe)).toBe(
+      join('/', 'node_modules', '@seaveyon', 'pkg', 'bin', 'assets'),
+    )
+    // A development checkout: desktop/dsh-pet-desktop-arm64 next to desktop/assets/.
+    const staged = join('/', 'checkout', 'pet', 'desktop', 'dsh-pet-desktop-arm64')
+    expect(desktopAssetsDir(staged)).toBe(join('/', 'checkout', 'pet', 'desktop', 'assets'))
+    expect(desktopAssetsEnv(staged, () => true)).toEqual({
+      DSH_PET_DESKTOP_ASSETS: desktopAssetsDir(staged),
     })
-    // No staged assets (a source checkout before build:desktop): nothing is
-    // set, leaving the exe's own path probing alone.
-    expect(desktopAssetsEnv(() => false)).toEqual({})
+    // No assets beside the binary: nothing is set, leaving the exe's own path
+    // probing alone.
+    expect(desktopAssetsEnv(staged, () => false)).toEqual({})
   })
 
   test('the default bundled path follows the host architecture', async () => {

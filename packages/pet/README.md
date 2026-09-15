@@ -65,11 +65,12 @@ What the host starts, in order:
    machine. It is version-locked to the plugin (the optionalDependencies
    entries name the exact same version), so the bridge protocol can never
    drift, and on macOS npm-installed files carry no quarantine attribute,
-   so it spawns without a Gatekeeper prompt. Its sprite assets stay in this
-   package (`desktop/assets/`, staged by the release workflow); the launcher
-   points the binary at them through `DSH_PET_DESKTOP_ASSETS`. In a
-   development checkout the staged `desktop/dsh-pet-desktop-*` copy
-   (`bun run build:desktop`) plays this role.
+   so it spawns without a Gatekeeper prompt. Its sprite assets ride in the
+   same package, beside the binary (`bin/assets/`, staged by the release
+   workflow), so this plugin's own tarball carries no desktop bytes; the
+   launcher points the binary at them through `DSH_PET_DESKTOP_ASSETS`. In a
+   development checkout the staged `desktop/dsh-pet-desktop-*` copy with
+   `desktop/assets/` beside it (`bun run build:desktop`) plays this role.
 2. An installed copy, per platform. On macOS, `DSH Pet.app` — resolved by
    bundle id first, then the standard Applications folders (development and
    pre-split installs). On Windows there is no `open -b` and no installer,
