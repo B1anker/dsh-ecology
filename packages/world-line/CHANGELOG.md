@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/B1anker/dsh-ecology/compare/world-line-v0.2.0...world-line-v0.3.0) (2026-09-15)
+
+
+### Features
+
+* **world-line:** 优化任务台与故障定位弹窗布局 ([#32](https://github.com/B1anker/dsh-ecology/issues/32)) ([b33761e](https://github.com/B1anker/dsh-ecology/commit/b33761e5a81b78d51e3a83c4fe5b44e3a87b007a))
+
 # [0.2.0](https://github.com/B1anker/dsh-ecology/compare/world-line-v0.1.1...world-line-v0.2.0) (2026-09-09)
 
 
