@@ -25,6 +25,10 @@ sessions/
 .rslib/
 .rstest/
 *.tsbuildinfo
+# Declarations belong in dist/. A tsc run whose `paths` reach into a sibling's
+# src (the typecheck configs do that on purpose) can drop .d.ts files beside
+# the sibling's sources; they must never be committed.
+packages/*/src/**/*.d.ts
 
 # Editor and operating-system files
 .vscode/

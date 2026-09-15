@@ -1,4 +1,3 @@
-import { createLabSessionGate } from './lab-session.js'
 /**
  * dsh-web-login — a cookie-session login gate for the dsh Web surface.
  *
