@@ -1,5 +1,6 @@
 import { CheckCircle } from '@phosphor-icons/react/dist/csr/CheckCircle'
 import { CircleNotch } from '@phosphor-icons/react/dist/csr/CircleNotch'
+import { Info } from '@phosphor-icons/react/dist/csr/Info'
 import { MinusCircle } from '@phosphor-icons/react/dist/csr/MinusCircle'
 import { Question } from '@phosphor-icons/react/dist/csr/Question'
 import { Warning } from '@phosphor-icons/react/dist/csr/Warning'
@@ -15,6 +16,7 @@ import { errorMessage } from './async.js'
 import { jobsConnected, useJobFeed } from './job-feed.js'
 import { CompatibilityMatrix } from './result-visuals.js'
 import { probeStatusText } from './status-text.js'
+import { TooltipButton } from './tooltip-button.js'
 
 export type { Job, JobKind } from '../web/jobs.js'
 
@@ -121,29 +123,47 @@ export function ProbeLadder({ job, onLogs }: { job: Job; onLogs?(): void }) {
             </li>
           )}
           {job.probes.map((probe, index) => (
-            <li key={`${probe.check}-${index}`}>
-              <StatusMark status={probe.status} />
-              <span>
-                {(
-                  {
-                    'plugin-add': '安装插件到实验环境',
-                    'plugin-update': '升级实验中的插件',
-                    'plugin-remove': '从实验移除插件',
-                    compose: '检查配置与依赖组合',
-                    'client-ready': '检查浏览器页面启动',
-                    'core-ui': '检查核心界面',
-                  } as Record<string, string>
-                )[probe.check] ?? probe.label}
-                {probe.required ? '' : <span className="wl-muted">（可选）</span>}
-              </span>
-              <time>{duration(probe)}</time>
-              {probe.status === 'fail' && onLogs && (
-                <button className="wl-button" onClick={onLogs}>
-                  查看本次验证日志
-                </button>
-              )}
+            <li className="wl-probe-row" key={`${probe.check}-${index}`}>
+              <div className="wl-probe-heading">
+                <StatusMark status={probe.status} />
+                <span>
+                  {(
+                    {
+                      'plugin-add': '安装插件到实验环境',
+                      'plugin-update': '升级实验中的插件',
+                      'plugin-remove': '从实验移除插件',
+                      compose: '检查配置与依赖组合',
+                      'client-ready': '检查浏览器页面启动',
+                      'core-ui': '检查核心界面',
+                    } as Record<string, string>
+                  )[probe.check] ?? probe.label}
+                  {probe.required ? '' : <span className="wl-muted">（可选）</span>}
+                </span>
+              </div>
+              <div className="wl-probe-actions">
+                <time>{duration(probe)}</time>
+                {probe.status === 'fail' && onLogs && (
+                  <button className="wl-button" onClick={onLogs}>
+                    查看本次验证日志
+                  </button>
+                )}
+              </div>
               {probe.status !== 'pass' && probe.status !== 'skip' && probe.detail && (
-                <p className={probe.status === 'fail' ? 'wl-error' : 'wl-muted'}>{probe.detail}</p>
+                <TooltipButton
+                  type="button"
+                  className={`wl-probe-detail ${probe.status === 'fail' ? 'wl-error' : 'wl-muted'}`}
+                  tooltipColor={
+                    probe.status === 'fail'
+                      ? 'var(--dsw-alias-state-error-primary, #c43b48)'
+                      : undefined
+                  }
+                  tooltipTitle={`${probe.label || probe.check} · ${statusText(probe.status)}`}
+                  tooltipDescription={<div className="wl-probe-detail-full">{probe.detail}</div>}
+                  aria-label="查看完整验证信息"
+                >
+                  <Info size={14} aria-hidden="true" />
+                  <span>{probe.detail}</span>
+                </TooltipButton>
               )}
             </li>
           ))}

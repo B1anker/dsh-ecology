@@ -290,3 +290,9 @@ Remaining limitations: production login/session, actual investigation execution,
 The rebuilt client was atomically installed into `/Users/seavey/.dsh/profiles/web/node_modules/@seaveyon/dsh-world-line/dist/client.js`. Source and installed SHA-256 match. Previous client is backed up under `/Users/seavey/.dsh/backups/world-line-layout-20260915-105159/client.js`. The DSH process was not restarted.
 
 Live host visual verification: blocked. The existing authenticated Chrome tab could not be attached (timeout, then debugger unattached); native Chrome inspection also failed because macOS screen capture could not start. The component-fixture QA above remains passed; it is not a claim that the installed host was visually verified. Refresh the existing DSH page to load the new client.
+
+### Compact probe rows — 2026-09-15
+
+User screenshot follow-up: log buttons now occupy an independent right-side action column; status icon and title share a flex row with an 8px gap. Non-pass/non-skip details are displayed as a single ellipsized line and the existing accessible TooltipButton exposes the complete text. Status semantics and log callback remain unchanged.
+
+Actual-component fixture checked at default desktop panel width and 390 × 844: title alignment, intrinsic log-button width, one-line detail, full tooltip, Escape dismissal and log callback passed. Evidence: `probe-compact.png` and `probe-tooltip.png` under the same visualization directory above. Typecheck, build and touched-file formatting pass. Rebuilt client installed locally with backup; no new formal-host visual verification claim.
