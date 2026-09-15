@@ -4,7 +4,12 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "noEmit": true,
+    // Workspace siblings are typechecked against their source so build order
+    // does not decide whether this package typechecks. The build config resets
+    // `paths`; see tsconfig.build.json.
     "paths": {
+      "@seaveyon/dsh-di": ["../di/src/index.ts"],
+      "@seaveyon/dsh-di/host": ["../di/src/host.ts"],
       "@seaveyon/dsh-plugin-testkit": ["../plugin-testkit/src/index.ts"]
     }
   },

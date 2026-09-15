@@ -1,25 +1,8 @@
-import { defineTool } from '@deepseek-ai/dsh-tools'
-import {
-  classifyWorkspacePaths,
-  createDetachedWorktreeFromLatest,
-  createWorktree,
-  createWorktreeFromLatest,
-  inspectWorktreeConflict,
-  listBranches,
-  listWorktrees,
-  removeWorktree,
-  resolveSessionCwd,
-} from './git.js'
-import { fileManagerKind, revealInFileManager } from './reveal.js'
-import {
-  type ConnectionService,
-  fenceRoutes,
-  readJsonBody,
-  sendJson,
-  type WebServerService,
-  withHandlerTimeout,
-} from './web.js'
+import { InstantiationService } from '@seaveyon/dsh-di'
+import type { PluginContext } from './host-services.js'
+import { createServices, IWorktreeApi, IWorktreeTools } from './services.js'
 
+export type { ManagementRoute } from './api.js'
 export {
   assertBranchName,
   createWorktree,
@@ -27,274 +10,43 @@ export {
   listWorktrees,
   repositoryRoot,
 } from './git.js'
+export type { PluginContext, ToolsService } from './host-services.js'
+// `IWorktreeApi` and `IWorktreeTools` are each an interface and an identifier
+// of the same name; one plain re-export carries both meanings.
+export {
+  createServices,
+  IConnection,
+  IPluginContext,
+  ITools,
+  IWebServer,
+  IWorktreeApi,
+  IWorktreeTools,
+} from './services.js'
 export type { ConnectionService } from './web.js'
 
 export const name = 'dsh-git-worktree'
 /**
  * `connection` is the host side of DSH browser authentication. It is injected
  * (not merely looked up) so the loader never starts this plugin on a host
- * without it: the management API below runs `git worktree add/remove` on a
+ * without it: the management API runs `git worktree add/remove` on a
  * caller-supplied `cwd`, and must not exist unfenced.
  */
 export const inject = ['tools', 'webServer', 'connection']
 
-function text(value: unknown) {
-  return [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
-}
-
-// Tool values must be lossless JSON. The Git domain objects contain only
-// strings and booleans, but serializing at this boundary also keeps a future
-// internal implementation detail from leaking into a durable tool event.
-function json(value: unknown) {
-  return JSON.parse(JSON.stringify(value))
-}
-
 /**
- * The host face: three agent tools through `tools`, and the management API
- * the browser bundle (`./client`) calls, registered behind the host's
- * connection fence. The tools run against the session's own workspace; the
- * routes take the path from the caller, which is why they are fenced.
+ * The composition root. Builds the service graph (`services.ts`) over the
+ * host's `tools`, `webServer` and `connection`, then mounts the two services
+ * it has: the management API — one effect per route, so the host sees each
+ * registration by name — and the agent tools. The container is disposed with
+ * the plugin, after the routes it registered are gone.
  */
-export function apply(ctx: {
-  tools: { register(tool: ReturnType<typeof defineTool>): unknown }
-  get<T>(name: string): T | undefined
-  effect(fn: () => (() => void) | void, label?: string): void
-}) {
-  const registry = ctx.get<WebServerService>('webServer')
-  if (registry === undefined) throw new Error('dsh-git-worktree: webServer service missing')
-  const connection = ctx.get<ConnectionService>('connection')
-  if (connection === undefined || typeof connection.requestRejection !== 'function')
-    throw new Error(
-      'dsh-git-worktree: connection service missing; the management API must stay behind DSH browser authentication',
-    )
-  const server = fenceRoutes(registry, connection)
-  ctx.effect(
-    () =>
-      server.register({
-        kind: 'exact',
-        path: '/api/plugins/dsh-git-worktree/branches',
-        handler: async (req, res) => {
-          if (req.method !== 'POST') return sendJson(res, 405, { error: 'method_not_allowed' })
-          const body = await readJsonBody(req)
-          if (typeof body.cwd !== 'string') return sendJson(res, 400, { error: 'cwd_required' })
-          try {
-            sendJson(res, 200, await listBranches(body.cwd))
-          } catch (error) {
-            sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-          }
-        },
-      }),
-    'dsh-git-worktree: branches endpoint',
-  )
-  ctx.effect(
-    () =>
-      server.register({
-        kind: 'exact',
-        path: '/api/plugins/dsh-git-worktree/create-conflict',
-        handler: async (req, res) => {
-          if (req.method !== 'POST') return sendJson(res, 405, { error: 'method_not_allowed' })
-          const body = await readJsonBody(req)
-          if (typeof body.cwd !== 'string' || typeof body.branch !== 'string')
-            return sendJson(res, 400, { error: 'cwd_and_branch_required' })
-          try {
-            sendJson(
-              res,
-              200,
-              await inspectWorktreeConflict({ cwd: body.cwd, branch: body.branch }),
-            )
-          } catch (error) {
-            sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-          }
-        },
-      }),
-    'dsh-git-worktree: create conflict endpoint',
-  )
-  ctx.effect(
-    () =>
-      server.register({
-        kind: 'exact',
-        path: '/api/plugins/dsh-git-worktree/create',
-        handler: async (req, res) => {
-          if (req.method !== 'POST') return sendJson(res, 405, { error: 'method_not_allowed' })
-          const body = await readJsonBody(req)
-          if (
-            typeof body.cwd !== 'string' ||
-            typeof body.baseRef !== 'string' ||
-            (body.branch !== undefined && typeof body.branch !== 'string') ||
-            (body.overwrite !== undefined && typeof body.overwrite !== 'boolean')
-          )
-            return sendJson(res, 400, { error: 'cwd_and_base_ref_required' })
-          try {
-            const branch = typeof body.branch === 'string' ? body.branch.trim() : ''
-            sendJson(
-              res,
-              201,
-              branch.length > 0
-                ? await createWorktreeFromLatest({
-                    cwd: body.cwd,
-                    baseRef: body.baseRef,
-                    branch,
-                    overwrite: body.overwrite === true,
-                  })
-                : await createDetachedWorktreeFromLatest(body.cwd, body.baseRef),
-            )
-          } catch (error) {
-            sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-          }
-        },
-      }),
-    'dsh-git-worktree: create endpoint',
-  )
-  ctx.effect(
-    () =>
-      server.register({
-        kind: 'exact',
-        path: '/api/plugins/dsh-git-worktree/remove',
-        handler: async (req, res) => {
-          if (req.method !== 'POST') return sendJson(res, 405, { error: 'method_not_allowed' })
-          const body = await readJsonBody(req)
-          if (typeof body.cwd !== 'string') return sendJson(res, 400, { error: 'cwd_required' })
-          try {
-            sendJson(res, 200, await removeWorktree(body.cwd))
-          } catch (error) {
-            sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-          }
-        },
-      }),
-    'dsh-git-worktree: remove endpoint',
-  )
-  ctx.effect(
-    () =>
-      server.register({
-        kind: 'exact',
-        path: '/api/plugins/dsh-git-worktree/workspace-groups',
-        handler: async (req, res) => {
-          await withHandlerTimeout(res, 8_000, async () => {
-            let paths: string[] | undefined
-            if (req.method === 'GET') {
-              const raw = new URL(req.url ?? '/', 'http://x').searchParams.get('paths')
-              if (raw === null) return sendJson(res, 400, { error: 'paths_required' })
-              const parsed: unknown = JSON.parse(raw)
-              if (!Array.isArray(parsed) || parsed.some((path) => typeof path !== 'string'))
-                return sendJson(res, 400, { error: 'paths_required' })
-              paths = parsed
-            } else if (req.method === 'POST') {
-              const body = await readJsonBody(req)
-              if (!Array.isArray(body.paths) || body.paths.some((path) => typeof path !== 'string'))
-                return sendJson(res, 400, { error: 'paths_required' })
-              paths = body.paths
-            } else {
-              return sendJson(res, 405, { error: 'method_not_allowed' })
-            }
-            sendJson(res, 200, { items: await classifyWorkspacePaths(paths) })
-          })
-        },
-      }),
-    'dsh-git-worktree: workspace groups endpoint',
-  )
-  ctx.effect(
-    () =>
-      server.register({
-        kind: 'exact',
-        path: '/api/plugins/dsh-git-worktree/reveal',
-        handler: async (req, res) => {
-          if (req.method === 'GET') {
-            sendJson(res, 200, { kind: fileManagerKind() })
-            return
-          }
-          if (req.method !== 'POST') return sendJson(res, 405, { error: 'method_not_allowed' })
-          const body = await readJsonBody(req)
-          if (typeof body.path !== 'string') return sendJson(res, 400, { error: 'path_required' })
-          try {
-            sendJson(res, 200, await revealInFileManager(body.path))
-          } catch (error) {
-            sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-          }
-        },
-      }),
-    'dsh-git-worktree: reveal endpoint',
-  )
-  ctx.tools.register(
-    defineTool({
-      name: 'worktree_list',
-      description:
-        'List Git worktrees for the repository containing the current DSH session workspace.',
-      parameters: {},
-      output: {
-        schema: { type: 'json' } as const,
-        render: (_args, value) => text(value),
-      },
-      async execute(_args, execution) {
-        return json(
-          await listWorktrees(
-            resolveSessionCwd(execution.agent?.session.header.cwd),
-            execution.signal,
-          ),
-        )
-      },
-      presentCall: () => ({ card: 'generic', title: 'List Git worktrees', kind: 'read' }),
-    }),
-  )
+export function apply(ctx: PluginContext) {
+  const services = new InstantiationService(createServices(ctx))
+  ctx.effect(() => () => services.dispose(), 'dsh-git-worktree: service container')
 
-  ctx.tools.register(
-    defineTool({
-      name: 'worktree_create',
-      description:
-        'Create a new Git worktree on a new branch. The repository is inferred from the current DSH session workspace. This never reuses or overwrites an existing directory.',
-      parameters: {
-        branch: {
-          type: 'string',
-          required: true,
-          description: 'New Git branch name, for example feat/add-login.',
-        },
-        base_ref: {
-          type: 'string',
-          description: 'Existing commit, branch, or tag to start from. Defaults to HEAD.',
-        },
-      } as const,
-      output: {
-        schema: { type: 'json' } as const,
-        render: (_args, value) => text(value),
-      },
-      async execute(args, execution) {
-        return json(
-          await createWorktree(
-            {
-              cwd: resolveSessionCwd(execution.agent?.session.header.cwd),
-              branch: args.branch,
-              baseRef: args.base_ref,
-            },
-            execution.signal,
-          ),
-        )
-      },
-      presentCall: (args) => ({
-        card: 'generic',
-        title: `Create worktree: ${args.branch}`,
-        kind: 'execute',
-      }),
-    }),
-  )
-
-  ctx.tools.register(
-    defineTool({
-      name: 'worktree_remove',
-      description:
-        'Remove the current linked Git worktree, physically delete its directory, and delete its local branch. The primary repository checkout is protected.',
-      parameters: {},
-      output: {
-        schema: { type: 'json' } as const,
-        render: (_args, value) => text(value),
-      },
-      async execute(_args, execution) {
-        return json(
-          await removeWorktree(
-            resolveSessionCwd(execution.agent?.session.header.cwd),
-            execution.signal,
-          ),
-        )
-      },
-      presentCall: () => ({ card: 'generic', title: 'Remove Git worktree', kind: 'execute' }),
-    }),
-  )
+  const api = services.get(IWorktreeApi)
+  for (const route of api.routes) {
+    ctx.effect(() => api.register(route), `dsh-git-worktree: ${route.label}`)
+  }
+  services.get(IWorktreeTools).register()
 }
