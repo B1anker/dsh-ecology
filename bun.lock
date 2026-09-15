@@ -128,6 +128,9 @@
         "dsh-web-login-hash": "./dist/hash-password.js",
         "dsh-web-login-recovery": "./dist/create-recovery.js",
       },
+      "dependencies": {
+        "@seaveyon/dsh-di": "^0.1.0",
+      },
       "devDependencies": {
         "@rsbuild/plugin-react": "^1",
         "@rslib/core": "^0.23.2",
