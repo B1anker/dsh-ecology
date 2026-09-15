@@ -4,7 +4,8 @@
   // See packages/web-login/tsconfig.build.json for why this file exists.
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "paths": {}
   },
   "include": ["src/index.ts", "src/desktop.ts"]
 }

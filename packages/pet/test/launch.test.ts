@@ -8,8 +8,17 @@
 import { join } from 'node:path'
 
 import { describe, expect, test } from '@rstest/core'
+import { InstantiationService, SyncDescriptor } from '@seaveyon/dsh-di'
 import { createMockContext, fakeRequest, fakeResponse } from '@seaveyon/dsh-plugin-testkit'
-import { apply, inject } from '../src/index.js'
+import type { Route } from '../src/host-types.js'
+import {
+  apply,
+  createServices,
+  IDesktopLauncher,
+  ILaunchRoute,
+  IWebServer,
+  inject,
+} from '../src/index.js'
 import {
   bundledDesktopBinary,
   createLaunchHandler,
@@ -380,7 +389,12 @@ describe('host entry', () => {
     apply(ctx)
 
     expect(registered).toEqual([LAUNCH_ROUTE_PATH])
-    expect(ctx.teardowns.map((t) => t.label)).toEqual(['dsh-pet: launch-desktop route'])
+    // The container's teardown is mounted first so it runs last: the route is
+    // unregistered before the services behind it are disposed.
+    expect(ctx.teardowns.map((t) => t.label)).toEqual([
+      'dsh-pet: service container',
+      'dsh-pet: launch-desktop route',
+    ])
 
     await ctx.dispose()
     expect(registered).toHaveLength(0)
@@ -390,6 +404,100 @@ describe('host entry', () => {
     const ctx = createMockContext({})
     expect(() => apply(ctx)).not.toThrow()
     expect(ctx.teardowns).toHaveLength(0)
+  })
+})
+
+describe('service graph', () => {
+  const webServer = { register: () => () => {} }
+
+  test('declares the host registry and the two services the face builds', () => {
+    const ctx = createMockContext({ webServer })
+    const collection = createServices(ctx)
+    expect(collection.get(IWebServer)).toBe(webServer)
+    expect(collection.get(IDesktopLauncher)).toBeInstanceOf(SyncDescriptor)
+    expect(collection.get(ILaunchRoute)).toBeInstanceOf(SyncDescriptor)
+    expect(String(IWebServer)).toBe('webServer')
+    expect(String(IDesktopLauncher)).toBe('petDesktopLauncher')
+    expect(String(ILaunchRoute)).toBe('petLaunchRoute')
+  })
+
+  test('refuses a context without the registry, naming it', () => {
+    expect(() => createServices(createMockContext({}))).toThrow(
+      "Host service 'webServer' is not available on this plugin context",
+    )
+  })
+
+  test('the launcher service is launchDesktopApp over the seams it was built with', async () => {
+    const { calls, run } = runStub()
+    const ctx = createMockContext({ webServer })
+    const services = new InstantiationService(
+      createServices(ctx, {
+        platform: 'darwin',
+        platformBinary: null,
+        bundledBinary: null,
+        exists: () => false,
+        run,
+      }),
+    )
+    await expect(services.get(IDesktopLauncher).launch()).resolves.toBe('launched')
+    expect(calls).toEqual([{ command: 'open', args: ['-b', DESKTOP_BUNDLE_ID] }])
+    services.dispose()
+  })
+
+  test('the route resolves over a launcher double, so a test never reaches the seams', async () => {
+    const registered: Route[] = []
+    const ctx = createMockContext({
+      webServer: {
+        register: (route: Route) => {
+          registered.push(route)
+          return () => {
+            registered.splice(registered.indexOf(route), 1)
+          }
+        },
+      },
+    })
+    const collection = createServices(ctx).clone()
+    const launches: number[] = []
+    const launcher: IDesktopLauncher = {
+      _serviceBrand: undefined,
+      launch: () => {
+        launches.push(1)
+        return Promise.resolve('not-installed')
+      },
+    }
+    collection.set(IDesktopLauncher, launcher)
+    const services = new InstantiationService(collection)
+
+    const route = services.get(ILaunchRoute)
+    expect(route.path).toBe(LAUNCH_ROUTE_PATH)
+    const dispose = route.register()
+    expect(registered.map(({ kind, path }) => ({ kind, path }))).toEqual([
+      { kind: 'exact', path: LAUNCH_ROUTE_PATH },
+    ])
+
+    // What the host got is the guarded handler over the double: the guards
+    // still run first (no header → 400, no launch), and a request that clears
+    // them maps the double's outcome onto the status.
+    const handler = registered[0]!.handler
+    const refused = fakeResponse()
+    await handler(fakeRequest({ method: 'POST', remoteAddress: LOOPBACK }), refused)
+    expect(refused.status).toBe(400)
+    expect(launches).toHaveLength(0)
+    const answered = fakeResponse()
+    await handler(
+      fakeRequest({
+        method: 'POST',
+        headers: { 'x-dsh-pet-launch': '1' },
+        remoteAddress: LOOPBACK,
+      }),
+      answered,
+    )
+    expect(answered.status).toBe(404)
+    expect(launches).toHaveLength(1)
+
+    dispose()
+    expect(registered).toEqual([])
+    services.dispose()
   })
 })
 

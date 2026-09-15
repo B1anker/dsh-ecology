@@ -8,11 +8,30 @@
  * the desktop-app launch route: the panel cannot start a local process from
  * the browser, but this face runs inside the DSH server, which for a loopback
  * page is the user's own machine (see src/launch.ts for the guards). No other
- * routes, no services — nothing else to break when the host moves.
+ * routes — nothing else to break when the host moves.
+ *
+ * The route and the launcher behind it are composed through
+ * `@seaveyon/dsh-di` (see src/services.ts), like every plugin here: `apply`
+ * builds the container, registers the one route, and disposes the container
+ * with the plugin.
  */
 
-import type { HostContext, WebServerService } from './host-types.js'
-import { createLaunchHandler, LAUNCH_ROUTE_PATH } from './launch.js'
+import { InstantiationService } from '@seaveyon/dsh-di'
+import type { HostContext } from './host-types.js'
+import { createServices, ILaunchRoute } from './services.js'
+
+export type { Disposer, HostContext, Route, RouteHandler, WebServerService } from './host-types.js'
+export type { LaunchDeps, LaunchOutcome } from './launch.js'
+// `IDesktopLauncher` and `ILaunchRoute` are each an interface and an
+// identifier of the same name; one plain re-export carries both meanings.
+export {
+  createServices,
+  DesktopLauncher,
+  IDesktopLauncher,
+  ILaunchRoute,
+  IWebServer,
+  LaunchRoute,
+} from './services.js'
 
 export const name = 'dsh-pet'
 
@@ -23,15 +42,11 @@ export const name = 'dsh-pet'
 export const inject = ['webServer', 'dshWebLoginReady']
 
 export function apply(ctx: HostContext): void {
-  const server = ctx.get<WebServerService>('webServer')
-  if (server === undefined) return
-  ctx.effect(
-    () =>
-      server.register({
-        kind: 'exact',
-        path: LAUNCH_ROUTE_PATH,
-        handler: createLaunchHandler(),
-      }),
-    'dsh-pet: launch-desktop route',
-  )
+  // A host without the registry loads to a no-op rather than a failed row:
+  // the client bundle — the whole product — does not depend on this route.
+  if (ctx.get('webServer') === undefined) return
+  const services = new InstantiationService(createServices(ctx))
+  ctx.effect(() => () => services.dispose(), 'dsh-pet: service container')
+  const route = services.get(ILaunchRoute)
+  ctx.effect(() => route.register(), 'dsh-pet: launch-desktop route')
 }

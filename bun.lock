@@ -62,6 +62,9 @@
     "packages/pet": {
       "name": "@seaveyon/dsh-pet",
       "version": "0.3.0",
+      "dependencies": {
+        "@seaveyon/dsh-di": "^0.1.0",
+      },
       "devDependencies": {
         "@rsbuild/plugin-react": "^1",
         "@rslib/core": "^0.23.2",
@@ -77,9 +80,9 @@
         "typescript": "^5.9.3",
       },
       "optionalDependencies": {
-        "@seaveyon/dsh-pet-desktop-darwin-arm64": "0.1.0",
-        "@seaveyon/dsh-pet-desktop-darwin-x64": "0.1.0",
-        "@seaveyon/dsh-pet-desktop-win32-x64": "0.1.0",
+        "@seaveyon/dsh-pet-desktop-darwin-arm64": "0.3.0",
+        "@seaveyon/dsh-pet-desktop-darwin-x64": "0.3.0",
+        "@seaveyon/dsh-pet-desktop-win32-x64": "0.3.0",
       },
     },
     "packages/pet-desktop": {
