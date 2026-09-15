@@ -102,7 +102,7 @@
     },
     "packages/web-login": {
       "name": "@seaveyon/dsh-web-login",
-      "version": "0.4.2",
+      "version": "0.6.0",
       "bin": {
         "dsh-web-login-hash": "./dist/hash-password.js",
         "dsh-web-login-recovery": "./dist/create-recovery.js",
@@ -132,7 +132,7 @@
     },
     "packages/world-line": {
       "name": "@seaveyon/dsh-world-line",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "dsh-world-line": "./bin/dsh-world-line.mjs",
         "world-line": "./bin/dsh-world-line.mjs",
@@ -153,6 +153,7 @@
         "@types/react-dom": "^19",
         "@xyflow/react": "12.11.6",
         "react": "^19.0.0",
+        "react-dom": "^19.0.0",
         "typescript": "^5.9.3",
       },
     },
