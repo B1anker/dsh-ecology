@@ -1,13 +1,13 @@
 {
-  "dshVersion": "0.1.2-rc.1",
+  "dshVersion": "0.1.5-rc.1",
   "pnpmVersion": "",
-  "runAt": "2026-09-04T10:08:51.881Z",
-  "labHome": "/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-phase2-y7in1M",
+  "runAt": "2026-09-15T03:48:23.427Z",
+  "labHome": "/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-phase2-rkwoEe",
   "transcript": [
     {
       "name": "boot-fresh",
       "stderr": "",
-      "pid": 27239
+      "pid": 47703
     },
     {
       "name": "plugin-add",
@@ -20,7 +20,7 @@
         "name": "dsh-profile-web",
         "private": true,
         "dependencies": {
-          "@fixture/world-line-probe": "file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-plugin-XjEGGO"
+          "@fixture/world-line-probe": "file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-plugin-cB3Uf6"
         },
         "dsh": {
           "profile": {
@@ -37,19 +37,19 @@
     {
       "name": "boot-with-candidate",
       "stderr": "",
-      "pid": 27372
+      "pid": 47759
     }
   ],
   "assertions": [
     {
       "name": "a fresh profile boots with a ready URL carrying host and token",
       "ok": true,
-      "detail": "http://127.0.0.1:49525/?token=tIf71bI3jqvHkzIuRBZYcDVPw4qtBD0tAxzy3DDoplY"
+      "detail": "http://127.0.0.1:63273/?token=mx-uzPWcAXlMjrNHB-lE3TrrwViHo__gvgj-UCiqdcc"
     },
     {
       "name": "the ready URL carries a valid port",
       "ok": true,
-      "detail": "49525"
+      "detail": "63273"
     },
     {
       "name": "the ready URL answers HTTP",
@@ -79,7 +79,7 @@
     {
       "name": "the lab profile boots with the candidate plugin loaded",
       "ok": true,
-      "detail": "http://127.0.0.1:49532/?token=o6w3yqGS_qxfdakoKyTD47CTO_MKwkwDzCvOkFXwVP8"
+      "detail": "http://127.0.0.1:63293/?token=QqTBJS4rtjDcDLhweIu6k5GTCCXOlIQihwgiK4xpp70"
     },
     {
       "name": "the lab ready URL answers HTTP",

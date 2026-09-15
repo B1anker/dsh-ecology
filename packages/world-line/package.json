@@ -41,7 +41,8 @@
   "files": [
     "dist/",
     "bin/",
-    "docs/",
+    "docs/compatibility.md",
+    "docs/threat-model.md",
     "README.md",
     "LICENSE",
     "cordis.patch.yml"

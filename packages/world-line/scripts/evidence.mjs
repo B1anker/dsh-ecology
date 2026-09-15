@@ -94,6 +94,17 @@ async function main() {
   const profileDir = join(home, 'profiles', 'web')
   const env = { DSH_HOME: home }
   try {
+    // ---- 0. Which dsh is this? The run is evidence *for that version*: it
+    // must be one the adapter already lists, and the artifact names it.
+    const version = runDsh(['--version'], env)
+    transcript.push(step('dsh-version', version.entry))
+    const dshVersion = version.stdout.trim().split('\n')[0] ?? ''
+    recordAssertion(
+      'dsh --version names a version in the adapter evidence set',
+      version.status === 0 && adapterDsh01x.testedVersions.includes(dshVersion),
+      `${JSON.stringify(dshVersion)} vs tested ${adapterDsh01x.testedVersions.join(', ')}`,
+    )
+
     // ---- 1. Real DSH boot: profile initialization from the shipped template.
     const boot = runDsh(['--profile', 'web', '--dump-config'], env)
     transcript.push(step('dsh-boot', boot.entry))
@@ -152,7 +163,7 @@ async function main() {
     )
     recordAssertion(
       'the real dsh version is known to the adapter',
-      envelope.data.dsh.cliVersion === '0.1.2-rc.1' && envelope.data.dsh.known === true,
+      envelope.data.dsh.cliVersion === dshVersion && envelope.data.dsh.known === true,
       JSON.stringify(envelope.data.dsh),
     )
 
@@ -210,10 +221,20 @@ async function main() {
       '',
     )
     const secondEnvelope = JSON.parse(second.stdout)
+    // Two policies satisfy "plaintext never reaches the vault": without a key
+    // service the file is skipped (`skippedSecrets`); with one (macOS
+    // Keychain, $WORLD_LINE_SECRET_KEY) it is stored only in the encrypted
+    // bundle, so its record has no plaintext object. Either way the file must
+    // not be a stored plaintext object.
+    const patchRecord = secondEnvelope.data.files.find((file) => file.name === 'cordis.patch.yml')
+    const skipped = secondEnvelope.data.skippedSecrets.includes('cordis.patch.yml')
+    const encrypted =
+      patchRecord?.stored === false &&
+      secondEnvelope.data.warnings.some((line) => line.includes('stored encrypted'))
     recordAssertion(
-      'the secret-bearing patch was skipped from the plaintext vault',
-      secondEnvelope.data.skippedSecrets.includes('cordis.patch.yml'),
-      JSON.stringify(secondEnvelope.data.skippedSecrets),
+      'the secret-bearing patch never became a plaintext vault object',
+      patchRecord !== undefined && patchRecord.stored === false && (skipped || encrypted),
+      `${skipped ? 'skipped' : encrypted ? 'stored encrypted' : 'neither'}; ${JSON.stringify(patchRecord)}`,
     )
     const objectsDirPath = join(home, 'world-line', 'vault', 'objects')
     if (existsSync(objectsDirPath)) {
@@ -305,7 +326,7 @@ async function main() {
     mkdirSync(EVIDENCE_DIR, { recursive: true })
     const artifact = {
       worldLineVersion: process.env.npm_package_version ?? null,
-      dshVersion: '0.1.2-rc.1 (detected from PATH)',
+      dshVersion: `${dshVersion} (detected from PATH)`,
       runAt: new Date().toISOString(),
       dshHome: home,
       transcript,

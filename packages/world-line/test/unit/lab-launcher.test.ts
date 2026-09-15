@@ -118,7 +118,9 @@ describe('launchDsh', () => {
       args: ['-e', `console.log('silent boot'); setInterval(() => {}, 1000)`],
       cwd: process.cwd(),
       env,
-      readyTimeoutMs: 400,
+      // Generous enough that the child has printed before the deadline even
+      // when node's cold start is slowed by the other packages' suites.
+      readyTimeoutMs: 1_500,
       settleGraceMs: 20,
     })
     expect(result.kind).toBe('timeout')

@@ -15,10 +15,11 @@
  *     transaction — official bytes become the snapshot bytes, journal kind
  *     `restore` + snapshotId; `--restart` (with Chrome) marks the after
  *     snapshot lastKnownGood, then `restore --last-known-good` resolves it,
- *  4. `rescue start --allow <row>`: temporary home boots core + the allowed
- *     row while the official cordis.patch.yml stays byte-identical; rescue
- *     list shows it alive; rescue stop terminates the process and removes
- *     the directory,
+ *  4. `lab start --clean` (which absorbed `rescue start`): a core-only mirror
+ *     boots in the background while the official cordis.patch.yml stays
+ *     byte-identical; lab list shows it with its port; lab stop terminates
+ *     the process and retains the files; the old `rescue start` spelling is
+ *     a usage error that names the replacement,
  *  5. `report <snapshot-id>` and `report <lab-id>`: redacted bundles land in
  *     world-line/reports/ (log tokens never appear),
  *  6. `timeline prune` dry-run + `--yes` with lastKnownGood protection.
@@ -313,34 +314,52 @@ async function main() {
       )
     }
 
-    // ----------------------------------------------------------- 4. rescue
-    // Make the official patch meaningful again (secret row restored above is
-    // the allow target), snapshot the official patch bytes for comparison.
+    // ------------------------------------------ 4. clean mirror (was rescue)
+    // `rescue start` was folded into `lab start --clean`: a core-only mirror
+    // booted in the background beside the official home, which stays
+    // untouched. Snapshot the official patch bytes for comparison first.
     const officialPatchBytes = readFileSync(patchPath, 'utf8')
-    const rescue = cli(home, ['rescue', 'start', '--allow', 'ui-settings-models'])
-    const rescuePid = (rescue.stdout.match(/pid (\d+)/) ?? [])[1]
+    const clean = cli(home, ['lab', 'start', '--clean', '--json'])
+    const cleanData = clean.exit === 0 ? JSON.parse(clean.stdout).data : null
     record(
-      'rescue start boots a temp safe profile with the allowed row',
-      rescue.exit === 0 && rescuePid !== undefined && /running/.test(rescue.stdout),
-      `exit=${rescue.exit} pid=${rescuePid ?? '(none)'}`,
+      'lab start --clean boots a core-only mirror in the background',
+      clean.exit === 0 &&
+        cleanData?.ok === true &&
+        Number.isInteger(cleanData?.pid) &&
+        /^http:\/\/127\.0\.0\.1:\d+\//.test(cleanData?.url ?? ''),
+      `exit=${clean.exit} pid=${cleanData?.pid ?? '(none)'}`,
     )
     record(
-      'rescue leaves the official patch byte-identical',
+      'a clean mirror leaves the official patch byte-identical',
       readFileSync(patchPath, 'utf8') === officialPatchBytes,
       '',
     )
-    const rescueList = cli(home, ['rescue', 'list'])
+    const mirrorRow = (id) =>
+      JSON.parse(cli(home, ['lab', 'list', '--json']).stdout).data.labs.find((lab) => lab.id === id)
+    const running = mirrorRow(cleanData?.id)
     record(
-      'rescue list reports the running rescue',
-      /alive/.test(rescueList.stdout),
-      rescueList.stdout.split('\n')[0] ?? '',
+      'lab list reports the running mirror with its port',
+      running !== undefined &&
+        running.port === cleanData?.port &&
+        running.runtimeState === 'running',
+      JSON.stringify(running ?? null),
     )
-    const rescueId = (rescueList.stdout.match(/(rescue-\S+)/) ?? [])[1]
-    const stopped = cli(home, ['rescue', 'stop', rescueId ?? ''])
+    const stopped = cli(home, ['lab', 'stop', cleanData?.id ?? '', '--json'])
+    const stoppedData = stopped.exit === 0 ? JSON.parse(stopped.stdout).data : null
+    const afterStop = mirrorRow(cleanData?.id)
     record(
-      'rescue stop removes the directory (process group terminated)',
-      stopped.exit === 0 && /stopped/.test(stopped.stdout),
-      `exit=${stopped.exit}`,
+      'lab stop terminates the mirror, retaining the files',
+      stopped.exit === 0 &&
+        stoppedData?.stopped === true &&
+        afterStop !== undefined &&
+        afterStop.runtimeState === 'stopped',
+      `exit=${stopped.exit} row=${JSON.stringify(afterStop ?? null)}`,
+    )
+    const legacy = cli(home, ['rescue', 'start', '--allow', 'ui-settings-models'])
+    record(
+      'rescue start is a usage error that points at lab start --clean',
+      legacy.exit === 2 && /lab start --clean/.test(`${legacy.stdout}${legacy.stderr}`),
+      `exit=${legacy.exit}`,
     )
 
     // ---------------------------------------------------------- 5. report

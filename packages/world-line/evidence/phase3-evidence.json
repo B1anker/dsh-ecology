@@ -1,6 +1,6 @@
 {
   "milestone": "phase-3",
-  "generatedAt": "2026-09-04T15:42:54.499Z",
+  "generatedAt": "2026-09-15T04:37:28.454Z",
   "prerequisites": {
     "dsh": true,
     "pnpm": true,
@@ -46,7 +46,7 @@
     {
       "name": "official package.json now declares the candidate",
       "ok": true,
-      "detail": "{\"@fixture/world-line-phase3-probe\":\"file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-p3-plugin-gMeDwZ\"}"
+      "detail": "{\"@fixture/world-line-phase3-probe\":\"file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-p3-plugin-Vu1jHK\"}"
     },
     {
       "name": "journal carries one committed promotion",
@@ -56,7 +56,7 @@
     {
       "name": "auto pre-promote + after snapshots recorded in the timeline",
       "ok": true,
-      "detail": "post-promote: lab lab-20260904T154229Z-28acabc5 | pre-promote: lab lab-20260904T154229Z-28acabc5"
+      "detail": "post-promote: lab lab-20260915T043449Z-c21e5b4c | pre-promote: lab lab-20260915T043449Z-c21e5b4c"
     },
     {
       "name": "successful promote cleans the lab up by default",
@@ -66,32 +66,32 @@
     {
       "name": "no reliable browser signal refuses promotion (exit 1)",
       "ok": true,
-      "detail": "exit=1 stdout-first=lab add file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-p3-plugin3-3Lqb5U stderr="
+      "detail": "exit=1 stdout-first=lab add file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-p3-plugin3-9z52oi stderr="
     },
     {
-      "name": "--accept-inconclusive lets the user accept the risk and commits",
+      "name": "--accept-inconclusive does not bypass missing browser evidence: refused, official untouched",
       "ok": true,
-      "detail": "exit=0 client    gate inconclusive (accepted with --accept-inconclusive)"
+      "detail": "exit=1 verdict   FAIL (host ready on loopback port 60265) stderr="
     },
     {
-      "name": "journal records the gate promotion so far",
+      "name": "journal still carries only the browser-verified promotion",
       "ok": true,
-      "detail": "2"
+      "detail": "1"
     },
     {
       "name": "lab add --promote --restart passes with restart verification",
       "ok": true,
-      "detail": "exit=0 stderr= lab add file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-p3-plugin2-QKYvlb | profile   web"
+      "detail": "exit=0 stderr= lab add file:/var/folders/bz/p58xpnw167vfpzs71y26qbmw0000gn/T/world-line-p3-plugin2-5pCeMa | profile   web"
     },
     {
       "name": "after-snapshot of the restarted promote is lastKnownGood",
       "ok": true,
-      "detail": "lkg=snap-20260904T154248Z-ded0a7d4 latest=snap-20260904T154248Z-ded0a7d4"
+      "detail": "lkg=snap-20260915T043728Z-19059e6e latest=snap-20260915T043728Z-19059e6e"
     },
     {
       "name": "journal now has a committed entry flagged lastKnownGood",
       "ok": true,
-      "detail": "[false,false,true]"
+      "detail": "[false,true]"
     }
   ]
 }

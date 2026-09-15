@@ -1,6 +1,6 @@
 {
   "milestone": "phase-4",
-  "generatedAt": "2026-09-04T19:36:38.360Z",
+  "generatedAt": "2026-09-15T04:47:34.186Z",
   "prerequisites": {
     "dsh": true,
     "chrome": true,
@@ -61,7 +61,7 @@
     {
       "name": "journal records kind restore with the snapshotId",
       "ok": true,
-      "detail": "{\"id\":\"restore-20260904T193618Z-1536d004\",\"kind\":\"restore\",\"createdAt\":\"2026-09-04T19:36:18.977Z\",\"profileName\":\"web\",\"labId\":\"lab-20260904T193613Z-6962be38\",\"preSnapshot\":\"snap-20260904T193618Z-c4b8051e\",\"afterSnapshot\":\"snap-20260904T193618Z-549b2c40\",\"outcome\":\"committed\",\"receiptBefore\":\"d24b727c6d77fdb76e62152f1fbb9945beda05625d517c57f89404177188bc5d\",\"receiptAfter\":\"6c7ed504a8ce3306920f629e64c7b37310420979e26138a156d8c745131f28d7\",\"files\":[\"package.json\",\"pnpm-lock.yaml\",\"pnpm-workspace.yaml\",\"cordis.patch.yml\"],\"lastKnownGood\":false,\"snapshotId\":\"snap-20260904T193607Z-14bf21ef\"}"
+      "detail": "{\"id\":\"restore-20260915T044636Z-29ef9078\",\"kind\":\"restore\",\"createdAt\":\"2026-09-15T04:46:36.507Z\",\"profileName\":\"web\",\"labId\":\"lab-20260915T044617Z-c9109903\",\"preSnapshot\":\"snap-20260915T044636Z-4c9334f6\",\"afterSnapshot\":\"snap-20260915T044636Z-8f4c6cbe\",\"outcome\":\"committed\",\"receiptBefore\":\"d24b727c6d77fdb76e62152f1fbb9945beda05625d517c57f89404177188bc5d\",\"receiptAfter\":\"d5c4d4703be32c5b3d65f948de3a1b1fa209b7d253f0177aaca1ae3f34b09936\",\"files\":[\"package.json\",\"pnpm-lock.yaml\",\"pnpm-workspace.yaml\",\"cordis.patch.yml\"],\"lastKnownGood\":false,\"snapshotId\":\"snap-20260915T044527Z-284fdf63\"}"
     },
     {
       "name": "restore --promote --restart re-verifies the official boot",
@@ -71,7 +71,7 @@
     {
       "name": "after-snapshot recorded as lastKnownGood",
       "ok": true,
-      "detail": "snap-20260904T193624Z-3ad3211c"
+      "detail": "snap-20260915T044708Z-48a044ef"
     },
     {
       "name": "restore --last-known-good resolves and verifies the LKG snapshot",
@@ -79,24 +79,29 @@
       "detail": "exit=0"
     },
     {
-      "name": "rescue start boots a temp safe profile with the allowed row",
+      "name": "lab start --clean boots a core-only mirror in the background",
       "ok": true,
-      "detail": "exit=0 pid=17064"
+      "detail": "exit=0 pid=64364"
     },
     {
-      "name": "rescue leaves the official patch byte-identical",
+      "name": "a clean mirror leaves the official patch byte-identical",
       "ok": true,
       "detail": ""
     },
     {
-      "name": "rescue list reports the running rescue",
+      "name": "lab list reports the running mirror with its port",
       "ok": true,
-      "detail": "rescue    rescue-20260904T193634Z-4f435811  alive   web port 54752"
+      "detail": "{\"runtimeState\":\"running\",\"id\":\"lab-20260915T044727Z-06cebb26\",\"isDefault\":false,\"profileName\":\"web\",\"state\":\"passed\",\"runCount\":0,\"createdAt\":\"2026-09-15T04:47:27.197Z\",\"lastOk\":null,\"port\":62753}"
     },
     {
-      "name": "rescue stop removes the directory (process group terminated)",
+      "name": "lab stop terminates the mirror, retaining the files",
       "ok": true,
-      "detail": "exit=0"
+      "detail": "exit=0 row={\"runtimeState\":\"stopped\",\"id\":\"lab-20260915T044727Z-06cebb26\",\"isDefault\":false,\"profileName\":\"web\",\"state\":\"passed\",\"runCount\":0,\"createdAt\":\"2026-09-15T04:47:27.197Z\",\"lastOk\":null,\"port\":62753}"
+    },
+    {
+      "name": "rescue start is a usage error that points at lab start --clean",
+      "ok": true,
+      "detail": "exit=2"
     },
     {
       "name": "report writes a redacted bundle for a snapshot target",

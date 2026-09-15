@@ -189,9 +189,13 @@ async function main() {
       labsDir,
     )
     const probeJson = JSON.parse(readFileSync(join(labsDir, 'probe.json'), 'utf8'))
+    // The probe set has grown since Phase 2 (later phases added checks), so
+    // assert the summary is consistent with the recorded probes and that the
+    // Phase 2 pair is among them, not a fixed count.
     record(
-      'probe.json records all five acceptance probes (compose, plugin, boot, http)',
-      probeJson.summary?.total === 5 &&
+      'probe.json records the acceptance probes (compose … http-ready) with none failed',
+      probeJson.summary?.total === probeJson.probes.length &&
+        probeJson.summary?.total >= 5 &&
         probeJson.summary?.failed === 0 &&
         probeJson.probes.some((p) => p.check === 'compose') &&
         probeJson.probes.some((p) => p.check === 'http-ready'),
@@ -236,10 +240,11 @@ async function main() {
           readFileSync(join(home, 'world-line', 'labs', failedId, 'manifest.json'), 'utf8'),
         )
       : null
+    const expiresIn = Date.parse(failedManifest?.retention?.expiresAt ?? '') - Date.now()
+    const day = 24 * 60 * 60 * 1000
     record(
       'failed labs keep a 7-day retention window',
-      failedManifest?.state === 'failed' &&
-        /^2026-09-1[1-9]T/.test(failedManifest?.retention?.expiresAt ?? ''),
+      failedManifest?.state === 'failed' && expiresIn > 6.5 * day && expiresIn < 7.5 * day,
       JSON.stringify(failedManifest?.retention ?? {}),
     )
 
