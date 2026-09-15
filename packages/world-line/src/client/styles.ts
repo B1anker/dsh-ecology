@@ -1,5 +1,6 @@
 import { menuEntranceStyles } from './menu-motion.js'
 import { panelMaterialStyles } from './panel-material.js'
+import { taskDiagnosisStyles } from './task-diagnosis-styles.js'
 
 export const styles = `
 .wl-experiment-count{display:block;border:0;background:transparent;color:var(--wl-accent);padding:1px 0;font:inherit;font-size:11px;cursor:pointer}.wl-experiment-count:hover{text-decoration:underline}.wl-experiment-actions{display:flex;gap:6px;flex-wrap:wrap}.wl-experiment-actions .wl-button{font-size:12px;padding:6px 8px}.wl-experiment-search{padding:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;color:inherit;background:var(--dsw-alias-bg-base);width:100%}
@@ -537,4 +538,5 @@ ${panelMaterialStyles}
 .wl-page :is(.wl-panel,.wl-dialog) label> :is(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=hidden]),textarea,select,.wl-hud-select-field,.wl-select){margin-block:0;min-width:0;max-width:100%}
 .wl-page :is(.wl-panel,.wl-dialog) .wl-select{gap:var(--wl-field-label-gap)}
 @media(forced-colors:active){.wl-page :is(button,input,textarea,select,[tabindex]):focus-visible{outline-color:Highlight}.wl-page input:is([type=checkbox],[type=radio]){appearance:auto}.wl-page input:is([type=checkbox],[type=radio])::after{display:none}.wl-page .wl-event-marker[data-expanded=true]{border-color:Highlight}}
+${taskDiagnosisStyles}
 `
