@@ -1,6 +1,10 @@
-# This plugin intentionally changes no host or Web client service. Its only
-# integration point is the stable server-side `tools` service.
+# This plugin changes no host or Web client service. Its integration points
+# are the server-side `tools` service (three worktree tools), a management API
+# on `webServer` that the browser bundle calls, and `connection` — the host
+# side of DSH browser authentication — which every management route consults
+# before answering. `connection` is injected rather than looked up so the
+# loader never starts the plugin where the API would be unfenced.
 - insert:
     - id: dsh-git-worktree
       name: '@seaveyon/dsh-git-worktree'
-      inject: [tools, webServer]
+      inject: [tools, webServer, connection]

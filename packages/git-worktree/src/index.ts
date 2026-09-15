@@ -11,7 +11,14 @@ import {
   resolveSessionCwd,
 } from './git.js'
 import { fileManagerKind, revealInFileManager } from './reveal.js'
-import { readJsonBody, sendJson, type WebServerService, withHandlerTimeout } from './web.js'
+import {
+  type ConnectionService,
+  fenceRoutes,
+  readJsonBody,
+  sendJson,
+  type WebServerService,
+  withHandlerTimeout,
+} from './web.js'
 
 export {
   assertBranchName,
@@ -20,9 +27,16 @@ export {
   listWorktrees,
   repositoryRoot,
 } from './git.js'
+export type { ConnectionService } from './web.js'
 
 export const name = 'dsh-git-worktree'
-export const inject = ['tools', 'webServer']
+/**
+ * `connection` is the host side of DSH browser authentication. It is injected
+ * (not merely looked up) so the loader never starts this plugin on a host
+ * without it: the management API below runs `git worktree add/remove` on a
+ * caller-supplied `cwd`, and must not exist unfenced.
+ */
+export const inject = ['tools', 'webServer', 'connection']
 
 function text(value: unknown) {
   return [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
@@ -36,16 +50,24 @@ function json(value: unknown) {
 }
 
 /**
- * Adds server-only tools.  There is deliberately no `dsh.client` entry: this
- * plugin neither replaces Web services nor assumes a particular UI slot.
+ * The host face: three agent tools through `tools`, and the management API
+ * the browser bundle (`./client`) calls, registered behind the host's
+ * connection fence. The tools run against the session's own workspace; the
+ * routes take the path from the caller, which is why they are fenced.
  */
 export function apply(ctx: {
   tools: { register(tool: ReturnType<typeof defineTool>): unknown }
   get<T>(name: string): T | undefined
   effect(fn: () => (() => void) | void, label?: string): void
 }) {
-  const server = ctx.get<WebServerService>('webServer')
-  if (server === undefined) throw new Error('dsh-git-worktree: webServer service missing')
+  const registry = ctx.get<WebServerService>('webServer')
+  if (registry === undefined) throw new Error('dsh-git-worktree: webServer service missing')
+  const connection = ctx.get<ConnectionService>('connection')
+  if (connection === undefined || typeof connection.requestRejection !== 'function')
+    throw new Error(
+      'dsh-git-worktree: connection service missing; the management API must stay behind DSH browser authentication',
+    )
+  const server = fenceRoutes(registry, connection)
   ctx.effect(
     () =>
       server.register({
