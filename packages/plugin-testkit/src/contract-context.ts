@@ -39,6 +39,36 @@ export function runContextContract(label: string, create: () => MockContext): vo
     expect(ctx.get('name')).toBe('from-set')
   })
 
+  test(`${label}: the availability predicate gates dependents, not get`, () => {
+    const ctx = create()
+    let ready = false
+    ctx.provide('gate', { ready: () => ready }, () => ready)
+    // Cordis consults the predicate when deciding whether an injecting fiber
+    // may load; reflect.get never does, so the value stays readable.
+    expect(ctx.available('gate')).toBe(false)
+    expect(ctx.get('gate')).toBeDefined()
+    ready = true
+    expect(ctx.available('gate')).toBe(true)
+  })
+
+  test(`${label}: a throwing availability predicate counts as unavailable`, () => {
+    const ctx = create()
+    ctx.provide('flaky', 1, () => {
+      throw new Error('probe failed')
+    })
+    expect(ctx.available('flaky')).toBe(false)
+    expect(ctx.logs.warn.some((line) => line.includes('probe failed'))).toBe(true)
+  })
+
+  test(`${label}: a service without a predicate is available while provided`, () => {
+    const ctx = create()
+    expect(ctx.available('plain')).toBe(false)
+    const dispose = ctx.provide('plain', 1)
+    expect(ctx.available('plain')).toBe(true)
+    dispose()
+    expect(ctx.available('plain')).toBe(false)
+  })
+
   test(`${label}: on returns a disposer that removes the listener`, () => {
     const ctx = create()
     const seen: string[] = []

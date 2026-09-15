@@ -3,8 +3,10 @@
  *
  * Declared structurally and by hand, for the same reason a plugin binding to
  * this host declares them by hand: `@deepseek-ai/dsh-host-webserver` and
- * `@deepseek-ai/cordis` are not on the public registry at the version this
- * describes, so an import would resolve to a different shape or to nothing.
+ * `@deepseek-ai/cordis` are optional peers that a consumer's test graph need
+ * not contain, so an import would resolve to nothing. The repository's
+ * `scripts/check-host-contract.mjs` keeps the members named here honest
+ * against every installed host copy it can find.
  *
  * A package under test will have its own copy of these. That is not duplication
  * to be eliminated — it is the plugin's compatibility contract, which belongs in

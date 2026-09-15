@@ -34,7 +34,7 @@ test('slots record registrations per slot name and the disposer removes them', (
 test('sessions publish drives the two-level provide shape', () => {
   const runtime = createMockClientRuntime<{ running: boolean }>()
   const seen: Array<boolean> = []
-  const info = runtime.sessions.currentProvideInfo.getSnapshot()
+  const info = runtime.sessions.currentProvideInfo!.getSnapshot()
   expect(info).not.toBeNull()
   info?.hooks.session.subscribe(() => {
     const snap = info.hooks.session.getSnapshot()
@@ -47,7 +47,7 @@ test('sessions publish drives the two-level provide shape', () => {
 
   // A session switch replaces the whole bundle, not the snapshot inside it.
   runtime.sessions.select(null)
-  expect(runtime.sessions.currentProvideInfo.getSnapshot()).toBeNull()
+  expect(runtime.sessions.currentProvideInfo!.getSnapshot()).toBeNull()
 })
 
 test('settingsScope namespaces are independent and writes notify', async () => {
