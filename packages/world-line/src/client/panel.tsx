@@ -20,6 +20,7 @@ type PanelProps = Omit<ComponentPropsWithoutRef<'form'>, 'title'> & {
   title: ReactNode
   close(): void
   closeDisabled?: boolean
+  headerActions?: ReactNode
   footer?: ReactNode
   back?: () => void
 }
@@ -31,6 +32,7 @@ export function Panel({
   close,
   closeDisabled,
   footer,
+  headerActions,
   back,
   children,
   className = '',
@@ -85,6 +87,7 @@ export function Panel({
           </ChromeButton>
         )}
         <h2 id={titleId}>{title}</h2>
+        {headerActions}
         <CloseButton disabled={closeDisabled} onClick={close} />
       </header>
       <div className="wl-panel-body">{children}</div>

@@ -14,6 +14,7 @@ export function BackupSelect({
   id,
   api,
   disabled,
+  compact = false,
 }: {
   label: string
   value: string
@@ -22,6 +23,7 @@ export function BackupSelect({
   events: WorldEvent[]
   id: string
   api: ApiFn
+  compact?: boolean
   disabled: boolean
 }) {
   // 原实现忽略底层错误、统一展示固定文案：抛出非 Error 使 errorMessage 落到 fallback。
@@ -82,7 +84,7 @@ export function BackupSelect({
           ) : !detail ? (
             <p role="status">正在读取备份内容…</p>
           ) : (
-            <details key={value} open>
+            <details key={value} open={compact ? undefined : true}>
               <summary>备份内的插件（{detail.dependencies.length}）</summary>
               {detail.dependencies.map((plugin) => (
                 <p key={plugin.name}>

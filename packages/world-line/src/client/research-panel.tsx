@@ -1,4 +1,8 @@
+import { ArrowRight } from '@phosphor-icons/react/dist/csr/ArrowRight'
+import { ArrowsClockwise } from '@phosphor-icons/react/dist/csr/ArrowsClockwise'
+import { Info } from '@phosphor-icons/react/dist/csr/Info'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { WorldEvent } from '../domain/insight-types.js'
 import type { ApiFn } from './api-types.js'
 import { errorMessage, useActionRunner, useApiQuery } from './async.js'
@@ -19,11 +23,15 @@ export function ResearchPanel({
   id,
   api,
   onJob,
+  onClose,
+  footerHost,
   events,
   initialTopic = 'diagnose',
 }: {
   id: string
   api: ApiFn
+  footerHost?: HTMLElement | null
+  onClose?(): void
   onJob(id: string): void
   events: WorldEvent[]
   initialTopic?: ResearchTopic
@@ -204,8 +212,42 @@ export function ResearchPanel({
   try {
     required = JSON.parse(bundle).requiredFiles ?? []
   } catch {}
+  const diagnosisFooter = (
+    <div className="wl-diagnosis-footer">
+      <span className="wl-muted">关闭面板不影响排查任务的执行。</span>
+      {onClose && (
+        <button type="button" className="wl-button" onClick={onClose}>
+          取消
+        </button>
+      )}
+      <button
+        type="button"
+        className="wl-button wl-primary"
+        disabled={
+          busy ||
+          (diagnosisMethod === 'time' &&
+            (loading ||
+              good === bad ||
+              !snapshots.some((point) => point.snapshotId === good) ||
+              !snapshots.some((point) => point.snapshotId === bad)))
+        }
+        onClick={() =>
+          void act({
+            action: 'investigation-create',
+            kind: diagnosisMethod,
+            sourceId: id,
+            ...(diagnosisMethod === 'time' ? { good, bad } : {}),
+          })
+        }
+      >
+        {busy ? '正在开始排查…' : '开始排查'}
+      </button>
+    </div>
+  )
   return (
-    <div className="wl-flow-actions wl-workflow-body">
+    <div
+      className={`wl-flow-actions wl-workflow-body ${topic === 'diagnose' ? 'wl-diagnosis-body' : ''}`}
+    >
       <p className="wl-workflow-intro">
         {
           {
@@ -231,10 +273,7 @@ export function ResearchPanel({
           ]}
         />
       )}
-      {(topic !== 'diagnose' ||
-        diagnosisTab === 'records' ||
-        diagnosisMethod === 'time' ||
-        error) && (
+      {(topic !== 'diagnose' || diagnosisTab === 'records' || error) && (
         <>
           <button
             className="wl-button"
@@ -260,76 +299,97 @@ export function ResearchPanel({
           )}
         </>
       )}
-      <section hidden={topic !== 'diagnose' || diagnosisTab !== 'new'} className="wl-event-detail">
-        <h3>选择问题定位方式</h3>
-        <label>
-          你掌握哪些线索？
-          <HudSelect value={diagnosisMethod} onChange={(e) => setDiagnosisMethod(e.target.value)}>
-            <option value="plugins">不知道何时出错，先排查当前插件</option>
-            <option value="time">从历史备份查找问题</option>
-          </HudSelect>
-        </label>
-        {diagnosisMethod === 'time' ? (
-          <>
-            <p>选择一份可正常使用的备份和一份需要排查的备份，系统会在这段历史中查找问题原因。</p>
-            {!loading && snapshots.length < 2 && (
-              <p className="wl-muted">
-                {snapshots.length === 0
-                  ? '还没有可用的历史备份。可以切换到“排查当前插件”，无需准备备份。'
-                  : '至少需要两份历史备份才能比较。现在可以先排查当前插件。'}
-              </p>
-            )}
-            <BackupSelect
-              label="可正常使用的备份"
-              value={good}
-              onChange={setGood}
-              points={snapshots}
-              events={events}
-              id={id}
-              api={api}
-              disabled={loading || snapshots.length < 2}
-            />
-            <BackupSelect
-              label="需要排查的备份"
-              value={bad}
-              onChange={setBad}
-              points={snapshots}
-              events={events}
-              id={id}
-              api={api}
-              disabled={loading || snapshots.length < 2}
-            />
-            {good && good === bad && <p className="wl-muted">请选择两份不同的备份。</p>}
-            <button
-              className="wl-button wl-primary"
-              disabled={
-                busy ||
-                loading ||
-                good === bad ||
-                !snapshots.some((point) => point.snapshotId === good) ||
-                !snapshots.some((point) => point.snapshotId === bad)
-              }
-              onClick={() =>
-                void act({ action: 'investigation-create', kind: 'time', sourceId: id, good, bad })
-              }
-            >
-              开始查找问题原因
-            </button>
-          </>
-        ) : (
-          <>
-            <p>在隔离环境中逐组验证当前插件，缩小问题范围。无需历史快照。</p>
-            <button
-              className="wl-button wl-primary"
-              disabled={busy}
-              onClick={() =>
-                void act({ action: 'investigation-create', kind: 'plugins', sourceId: id })
-              }
-            >
-              开始排查当前插件
-            </button>
-          </>
+      <section
+        hidden={topic !== 'diagnose' || diagnosisTab !== 'new'}
+        className="wl-diagnosis-form"
+      >
+        <fieldset className="wl-diagnosis-methods" disabled={busy}>
+          <legend>选择问题定位方式</legend>
+          {[
+            {
+              value: 'plugins',
+              title: '排查当前插件',
+              description: '逐组验证当前插件，无需历史备份。',
+            },
+            {
+              value: 'time',
+              title: '从历史备份定位',
+              description: '对比正常与异常备份，定位问题变更范围。',
+            },
+          ].map((method) => (
+            <label key={method.value} className="wl-diagnosis-choice">
+              <input
+                type="radio"
+                name="diagnosis-method"
+                value={method.value}
+                checked={diagnosisMethod === method.value}
+                onChange={() => setDiagnosisMethod(method.value)}
+              />
+              <span>
+                <strong>{method.title}</strong>
+                <small>{method.description}</small>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        <p className="wl-diagnosis-note">
+          <Info size={18} aria-hidden="true" />
+          排查在独立环境中进行，不影响当前使用。
+        </p>
+        {diagnosisMethod === 'time' && (
+          <div className="wl-diagnosis-backups">
+            <div className="wl-diagnosis-section-heading">
+              <h3>选择备份版本</h3>
+              <button
+                type="button"
+                className="wl-button wl-text-action"
+                disabled={busy || loading}
+                onClick={() => {
+                  manualRefresh.current = true
+                  reload()
+                }}
+              >
+                <ArrowsClockwise size={16} aria-hidden="true" />
+                {loading ? '正在读取…' : '刷新备份'}
+              </button>
+            </div>
+            <div className="wl-diagnosis-pair">
+              <BackupSelect
+                label="正常备份"
+                value={good}
+                onChange={setGood}
+                points={snapshots}
+                events={events}
+                id={id}
+                api={api}
+                disabled={busy || loading || snapshots.length < 2}
+                compact
+              />
+              <ArrowRight className="wl-diagnosis-arrow" size={22} aria-hidden="true" />
+              <BackupSelect
+                label="待排查备份"
+                value={bad}
+                onChange={setBad}
+                points={snapshots}
+                events={events}
+                id={id}
+                api={api}
+                disabled={busy || loading || snapshots.length < 2}
+                compact
+              />
+            </div>
+            <p className="wl-diagnosis-help wl-muted" role="status">
+              {!loading && snapshots.length < 2
+                ? '至少需要两份历史备份。现在可以先排查当前插件。'
+                : good && good === bad
+                  ? '请选择两份不同的备份。'
+                  : refreshMessage || '选择可正常使用的备份与出现问题的备份。'}
+            </p>
+          </div>
         )}
+        {topic === 'diagnose' &&
+          diagnosisTab === 'new' &&
+          (footerHost ? createPortal(diagnosisFooter, footerHost) : diagnosisFooter)}
       </section>
       {topic === 'diagnose' &&
         diagnosisTab === 'records' &&

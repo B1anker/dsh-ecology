@@ -1,3 +1,4 @@
+import { Bell } from '@phosphor-icons/react/dist/csr/Bell'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReportResult } from '../commands/report.js'
 import type { WorldEvent } from '../domain/insight-types.js'
@@ -40,6 +41,7 @@ export function WorkspaceTools({
   onCompareLines(id: string): void
   onSnapshot(id: string): void
 }) {
+  const [researchFooter, setResearchFooter] = useState<HTMLDivElement | null>(null)
   const jobs = useJobFeed()
   const [olderJobs, setOlderJobs] = useState<Job[]>([])
   const allJobs = [
@@ -171,7 +173,31 @@ export function WorkspaceTools({
           : title
       }
       close={close}
-      className="wl-inspector"
+      className={`wl-inspector ${panel.section === 'tasks' ? 'wl-task-panel' : panel.section === 'research' && (!panel.researchTopic || panel.researchTopic === 'diagnose') ? 'wl-diagnosis-panel' : ''}`}
+      headerActions={
+        panel.section === 'tasks' ? (
+          <button
+            className="wl-button wl-task-notifications"
+            aria-label="启用任务完成通知"
+            title="启用任务完成通知"
+            onClick={async () => {
+              const current = currentScope()
+              if ('Notification' in window) {
+                const permission = await Notification.requestPermission()
+                if (current())
+                  setError(permission === 'denied' ? '浏览器未允许通知，仍会显示站内提醒。' : '')
+                localStorage.setItem(
+                  'wl-task-notifications',
+                  permission === 'granted' ? 'on' : 'off',
+                )
+              }
+            }}
+          >
+            <Bell size={16} aria-hidden="true" />
+            <span>启用任务完成通知</span>
+          </button>
+        ) : undefined
+      }
       aria-label={title}
       back={
         candidate
@@ -210,6 +236,9 @@ export function WorkspaceTools({
               {busy ? '正在创建实验…' : candidate.action === 'lab-remove' ? '验证卸载' : '开始验证'}
             </button>
           </>
+        ) : panel.section === 'research' &&
+          (!panel.researchTopic || panel.researchTopic === 'diagnose') ? (
+          <div className="wl-research-footer-slot" ref={setResearchFooter} />
         ) : undefined
       }
     >
@@ -229,6 +258,8 @@ export function WorkspaceTools({
           id={panel.id}
           api={api}
           onJob={onJob}
+          onClose={close}
+          footerHost={researchFooter}
         />
       )}
       {panel.section === 'recovery' && (
@@ -254,76 +285,71 @@ export function WorkspaceTools({
       {panel.section === 'tasks' && (
         <>
           <p className="wl-muted">关闭面板不影响任务。中断任务需要检查结果后重新验证。</p>
-          <button
-            className="wl-button"
-            onClick={async () => {
-              const current = currentScope()
-              if ('Notification' in window) {
-                const permission = await Notification.requestPermission()
-                if (current())
-                  setError(permission === 'denied' ? '浏览器未允许通知，仍会显示站内提醒。' : '')
-                localStorage.setItem(
-                  'wl-task-notifications',
-                  permission === 'granted' ? 'on' : 'off',
-                )
-              }
-            }}
-          >
-            启用任务完成通知
-          </button>
-          {allJobs.map((job) => (
-            <article className="wl-event-detail wl-task-card" data-status={job.status} key={job.id}>
-              <strong>{jobKindLabel(job.kind)}</strong>
-              <span className="wl-task-state">{jobStatusText(job.status)}</span>
-              <small className="wl-task-source">
-                环境：{(() => {
-                  const id = job.resource ?? job.labId
-                  const line = lines.find((item) => item.id === id)
-                  return line ? label(line) : id === 'origin' ? 'main' : (id ?? '未记录')
-                })()}
-              </small>
-              <time dateTime={job.startedAt}>{new Date(job.startedAt).toLocaleString()}</time>
-              {job.error && <p className="wl-error">{job.error}</p>}
-              <button className="wl-button" onClick={() => onJob(job.id)}>
-                查看进度与结果
-              </button>
-              {(job.labId || jobResearchTopic(job.kind)) && (
-                <details className="wl-task-details">
-                  <summary>报告与相关记录</summary>
-                  {jobResearchTopic(job.kind) && (
-                    <button
-                      className="wl-button"
-                      onClick={() =>
-                        navigate({
-                          section: 'research',
-                          id: job.resource ?? 'origin',
-                          researchTopic: jobResearchTopic(job.kind),
-                        })
-                      }
-                    >
-                      查看{researchGoals[jobResearchTopic(job.kind)!].title}记录
-                    </button>
-                  )}
-                  {job.labId && (
-                    <>
+          <h3 className="wl-task-list-heading">任务列表（{allJobs.length}）</h3>
+          {!allJobs.length && (
+            <p className="wl-muted">还没有任务。开始验证或排查后，可在这里查看进度与结果。</p>
+          )}
+          <div className="wl-task-list">
+            {allJobs.map((job) => (
+              <article
+                className="wl-event-detail wl-task-card"
+                data-status={job.status}
+                key={job.id}
+              >
+                <strong>{jobKindLabel(job.kind)}</strong>
+                <span className="wl-task-state">{jobStatusText(job.status)}</span>
+                <div className="wl-task-meta">
+                  <small className="wl-task-source">
+                    环境：{(() => {
+                      const id = job.resource ?? job.labId
+                      const line = lines.find((item) => item.id === id)
+                      return line ? label(line) : id === 'origin' ? 'main' : (id ?? '未记录')
+                    })()}
+                  </small>
+                  <time dateTime={job.startedAt}>{new Date(job.startedAt).toLocaleString()}</time>
+                </div>
+                {job.error && <p className="wl-error">{job.error}</p>}
+                <button className="wl-button wl-task-open" onClick={() => onJob(job.id)}>
+                  {job.status === 'running' || job.status === 'queued' ? '查看进度' : '查看结果'}
+                </button>
+                {(job.labId || jobResearchTopic(job.kind)) && (
+                  <details className="wl-task-details">
+                    <summary>报告与相关记录</summary>
+                    {jobResearchTopic(job.kind) && (
                       <button
                         className="wl-button"
-                        onClick={() => navigate({ section: 'report', id: job.labId! })}
+                        onClick={() =>
+                          navigate({
+                            section: 'research',
+                            id: job.resource ?? 'origin',
+                            researchTopic: jobResearchTopic(job.kind),
+                          })
+                        }
                       >
-                        验证报告
+                        查看{researchGoals[jobResearchTopic(job.kind)!].title}记录
                       </button>
-                      <button
-                        className="wl-button"
-                        onClick={() => navigate({ section: 'compare', id: job.labId! })}
-                      >
-                        实验与来源的差异
-                      </button>
-                    </>
-                  )}
-                </details>
-              )}
-            </article>
-          ))}
+                    )}
+                    {job.labId && (
+                      <>
+                        <button
+                          className="wl-button"
+                          onClick={() => navigate({ section: 'report', id: job.labId! })}
+                        >
+                          验证报告
+                        </button>
+                        <button
+                          className="wl-button"
+                          onClick={() => navigate({ section: 'compare', id: job.labId! })}
+                        >
+                          实验与来源的差异
+                        </button>
+                      </>
+                    )}
+                  </details>
+                )}
+              </article>
+            ))}
+          </div>
           {allJobs.length >= 200 && (
             <button
               className="wl-button"

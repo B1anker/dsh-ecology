@@ -255,3 +255,52 @@ final result: passed
 - Interaction checks: opened snapshot context menu and its management submenu; alias action opened its dialog and was cancelled; right-edge submenu flipped; 390px menu used inline drill-down, Escape returned to its parent, all actions stayed reachable. No instance mutations were performed. Browser error log was empty and viewport override was reset.
 - Comparison history: first rendered comparison found no actionable P0/P1/P2 issues within the requested scope. Expected differences are Chinese text, DSH canvas background, two levels rather than unrelated desktop widgets, and dark selection text for contrast. No follow-up P3 changes required.
 - Validation: typecheck/build and touched-file formatting/lint passed; all 234 world-line tests passed. Installed client bundle in ui-preview and formal DSH without restarting either server.
+
+
+## Task desk and fault investigation — selected option 1 — 2026-09-15
+
+final result: passed
+
+Scope: actual WorkspaceTools, ResearchPanel, BackupSelect and Panel components in an isolated browser fixture using illustrative data. No production API calls or installation were performed. This is layout and frontend interaction verification, not end-to-end backend certification.
+
+- Source visual: `/Users/seavey/.codex/generated_images/01a08a38-99a5-7081-ad37-29a810fee894/exec-19e57839-1209-43b7-ba2e-76754d9e3c8a.png` (1536 × 1024 presentation sheet, two panels, no declared CSS density).
+- Desktop evidence: `/Users/seavey/.codex/visualizations/2026/09/10/01a08a38-99a5-7081-ad37-29a810fee894/tasks-implemented.png` and `diagnosis-implemented.png` in the same directory. Browser viewport and screenshot: 1440 × 1024. Task and diagnosis panels are 620 and 680 CSS pixels wide respectively. Compared panel regions proportionally to the two-panel reference, not canvas placement; no screenshot resampling.
+- Narrow evidence: `tasks-mobile.png` and `diagnosis-mobile.png` in the same evidence directory; viewport and output 390 × 844. Long body content scrolls; heading and diagnosis actions remain visible. Temporary viewport override reset.
+- Source and both final screenshots opened together for full-view comparison. Narrow screenshots were separately inspected at readable size; desktop controls were checked through a focused browser capture and accessibility tree. The browser's clipped capture adds blank space, so full captures remain the authoritative evidence.
+
+Fidelity review:
+- Typography: native system/PingFang fallback, 18px headings, 14px task and method titles, 12px supporting controls/text. Keeps the host's compact typography rather than scaling the enlarged concept sheet literally.
+- Layout: title-level notification control, aligned task rows and intrinsic-width actions, paired method choices and backup fields, gold underlined tabs, fixed footer. Backup explanations remain available and plugin details are collapsed initially only in the compact diagnosis variant. Long content scrolls instead of enlarging the dialog.
+- Tokens: inherited host semantic colors and panel material retained; gold selection/primary diagnosis action, restrained red attention row and blue informational note. Host close/back controls retained instead of replacing shared chrome to match the concept's generic X.
+- Assets: existing Phosphor Bell, Info, ArrowRight and ArrowsClockwise icons. No raster assets needed in the implementation.
+- Copy: live component status names and backup provenance wording retained. Fixture data labeled as illustrative. Full backup option text remains available in the popup when the selected trigger truncates it.
+
+Comparison/fix history:
+1. P2: legacy first-button selector still stretched task actions. Scoped override corrected the grid placement; desktop and narrow recaptures confirm intrinsic width.
+2. P2: lengthy backup details could push actions below the scrollport. Moved diagnosis actions into the shared Panel footer using a portal. Checked that records view removes this footer and returning to new investigation restores it.
+3. P2: sticky tabs overlaid backup labels on narrow scrolling. Scoped tabs now scroll with the body. Final narrow capture confirms unobstructed backup labels and fixed footer.
+4. P2: mobile shared footer auto-margin split the two buttons. Scoped margin rule now groups Cancel and Start at the right.
+
+Interaction evidence: task progress callback; report disclosure and report callback; switching diagnosis methods; opening both backup selectors; same-backup rejection; valid pair enables Start; pending state disables method/backup controls and Start; start resolves to a mock task callback; empty records tab; cancel closes the panel. Browser error log empty. Notification permission was not requested during preview. Existing notification handler retained.
+
+Remaining limitations: production login/session, actual investigation execution, and dark-theme host rendering were not tested in this isolated fixture. No remaining actionable P0/P1/P2 layout findings in the verified light desktop/narrow scope.
+
+### Local host installation — 2026-09-15
+
+The rebuilt client was atomically installed into `/Users/seavey/.dsh/profiles/web/node_modules/@seaveyon/dsh-world-line/dist/client.js`. Source and installed SHA-256 match. Previous client is backed up under `/Users/seavey/.dsh/backups/world-line-layout-20260915-105159/client.js`. The DSH process was not restarted.
+
+Live host visual verification: blocked. The existing authenticated Chrome tab could not be attached (timeout, then debugger unattached); native Chrome inspection also failed because macOS screen capture could not start. The component-fixture QA above remains passed; it is not a claim that the installed host was visually verified. Refresh the existing DSH page to load the new client.
+
+### Compact probe rows — 2026-09-15
+
+User screenshot follow-up: log buttons now occupy an independent right-side action column; status icon and title share a flex row with an 8px gap. Non-pass/non-skip details are displayed as a single ellipsized line and the existing accessible TooltipButton exposes the complete text. Status semantics and log callback remain unchanged.
+
+Actual-component fixture checked at default desktop panel width and 390 × 844: title alignment, intrinsic log-button width, one-line detail, full tooltip, Escape dismissal and log callback passed. Evidence: `probe-compact.png` and `probe-tooltip.png` under the same visualization directory above. Typecheck, build and touched-file formatting pass. Rebuilt client installed locally with backup; no new formal-host visual verification claim.
+
+### Probe log no-op regression — 2026-09-15
+
+Root cause: Maintenance always supplied a callback guarded by failedLabId. An investigate job with overall status ok and failed probes therefore exposed an enabled button whose callback did nothing. The previous fixture only asserted a callback and did not represent this production guard.
+
+ProbeLadder now directly expands the selected probe's saved, redacted detail regardless of parent job status or lab ID. Missing detail produces an explicit empty message. Optional experiment report generation is a separate action and Maintenance only supplies it when targetLabId exists. Callback renamed onReport to express that boundary.
+
+Regression verification: actual component with status ok, two failed probes, no lab ID and no report callback. Each log button reveals its own output; selecting another row moves the expanded region; Enter collapses it. No network call is required to read a retained probe. Evidence: `probe-log-expanded.png` in the visualization directory above. Typecheck/build and touched-file lint pass. Client installed locally with backup.

@@ -318,7 +318,7 @@ export function LabFlow({
       {step === 'verify' && (
         <>
           {job ? (
-            <ProbeLadder job={job} onLogs={() => void report()} />
+            <ProbeLadder job={job} onReport={() => void report()} />
           ) : (
             <p className="wl-insight-loading" role="status">
               <CircleNotch size={18} className="wl-spin" />
