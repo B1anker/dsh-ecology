@@ -2,7 +2,7 @@ import type { WorldEvent } from '../domain/insight-types.js'
 import type { WorldLineInfo } from '../web/types.js'
 import { lineStateText } from './status-text.js'
 
-// forkedAt 由后端在 lines 响应上动态附加（web/index.ts），WorldLineInfo 未声明。
+// forkedAt 由后端在 lines 响应上动态附加（web/operations.ts 的 worldLines），WorldLineInfo 未声明。
 export interface Line extends WorldLineInfo {
   forkedAt?: string
 }

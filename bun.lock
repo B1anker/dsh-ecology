@@ -33,7 +33,7 @@
       "name": "@seaveyon/dsh-git-worktree",
       "version": "0.1.0",
       "dependencies": {
-        "@seaveyon/dsh-di": "^0.1.0",
+        "@seaveyon/dsh-di": ">=0.1.0 <1.0.0",
       },
       "devDependencies": {
         "@deepseek-ai/cordis": "^4.0.2",
@@ -63,7 +63,7 @@
       "name": "@seaveyon/dsh-pet",
       "version": "0.3.0",
       "dependencies": {
-        "@seaveyon/dsh-di": "^0.1.0",
+        "@seaveyon/dsh-di": ">=0.1.0 <1.0.0",
       },
       "devDependencies": {
         "@rsbuild/plugin-react": "^1",
@@ -105,7 +105,7 @@
       "name": "@seaveyon/dsh-plugin-testkit",
       "version": "0.4.0",
       "dependencies": {
-        "@seaveyon/dsh-di": "^0.1.0",
+        "@seaveyon/dsh-di": ">=0.1.0 <1.0.0",
       },
       "devDependencies": {
         "@rslib/core": "^0.23.2",
@@ -129,7 +129,7 @@
         "dsh-web-login-recovery": "./dist/create-recovery.js",
       },
       "dependencies": {
-        "@seaveyon/dsh-di": "^0.1.0",
+        "@seaveyon/dsh-di": ">=0.1.0 <1.0.0",
       },
       "devDependencies": {
         "@rsbuild/plugin-react": "^1",
@@ -162,7 +162,7 @@
         "world-line": "./bin/dsh-world-line.mjs",
       },
       "dependencies": {
-        "@seaveyon/dsh-di": "^0.1.0",
+        "@seaveyon/dsh-di": ">=0.1.0 <1.0.0",
         "js-yaml": "4.3.1",
         "playwright-core": "^1.62.1",
       },

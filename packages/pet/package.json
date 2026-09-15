@@ -42,7 +42,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@seaveyon/dsh-di": "^0.1.0"
+    "@seaveyon/dsh-di": ">=0.1.0 <1.0.0"
   },
   "optionalDependencies": {
     "@seaveyon/dsh-pet-desktop-darwin-arm64": "0.3.0",

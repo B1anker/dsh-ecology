@@ -56,7 +56,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@seaveyon/dsh-di": "^0.1.0"
+    "@seaveyon/dsh-di": ">=0.1.0 <1.0.0"
   },
   "peerDependencies": {
     "@rstest/core": ">=0.11.0"
