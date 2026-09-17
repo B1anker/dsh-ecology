@@ -1,5 +1,6 @@
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { findMountHost } from './client-anchor.js'
 import type { LocaleService, Services } from './client-contracts.js'
 import { DICTS, LOCALE_NS } from './locales.js'
 import { SidebarWorktreeGrouper } from './sidebar-worktree-grouper.js'
@@ -28,18 +29,11 @@ function ensureStyles(): void {
   document.head.append(style)
 }
 
-function findHost(): HTMLElement | undefined {
-  const mode = [...document.querySelectorAll('button')].find((element) =>
-    /标准模式|standard mode/i.test(element.textContent ?? ''),
-  )
-  return mode?.parentElement ?? undefined
-}
-
 function mount(services: Services, current?: MountedControl): MountedControl | undefined {
   if (current?.container.isConnected === true) return current
   current?.root.unmount()
   ensureStyles()
-  const host = findHost()
+  const host = findMountHost(document)
   if (host === undefined) return undefined
   const container = document.createElement('span')
   container.dataset.dshGitWorktree = 'true'

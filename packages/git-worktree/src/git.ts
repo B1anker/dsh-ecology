@@ -68,8 +68,25 @@ export interface WorkspaceGroupEntry {
   status?: 'active' | 'removed'
 }
 
+/**
+ * How a Git invocation failed. `exit` is Git itself answering with a non-zero
+ * status; the other three never reached a verdict, so a caller that reads
+ * meaning into a status (`show-ref --verify` uses 1 for "no such ref") must
+ * not treat them as one.
+ */
+export type GitFailureKind = 'exit' | 'timeout' | 'aborted' | 'spawn' | 'invariant'
+
 export class GitWorktreeError extends Error {
   override name = 'GitWorktreeError'
+  readonly kind: GitFailureKind
+  /** Git's exit status when `kind` is `exit`; otherwise undefined. */
+  readonly exitCode: number | undefined
+
+  constructor(message: string, details: { kind?: GitFailureKind; exitCode?: number } = {}) {
+    super(message)
+    this.kind = details.kind ?? 'invariant'
+    this.exitCode = details.exitCode
+  }
 }
 
 const GIT_TIMEOUT_MS = 8_000
@@ -77,7 +94,10 @@ const GIT_TIMEOUT_MS = 8_000
 async function git(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {
   const controller = new AbortController()
   const onAbort = () => controller.abort()
-  signal?.addEventListener('abort', onAbort, { once: true })
+  // A signal that is already aborted never fires the event; honour it too,
+  // otherwise a cancelled caller would still spawn Git and read its answer.
+  if (signal?.aborted === true) controller.abort()
+  else signal?.addEventListener('abort', onAbort, { once: true })
   const timer = setTimeout(() => controller.abort(), GIT_TIMEOUT_MS)
   try {
     const result = await execFile('git', args, {
@@ -88,14 +108,24 @@ async function git(cwd: string, args: string[], signal?: AbortSignal): Promise<s
     })
     return result.stdout
   } catch (error) {
-    if (controller.signal.aborted && signal?.aborted !== true) {
-      throw new GitWorktreeError(`git ${args.join(' ')} timed out after ${GIT_TIMEOUT_MS}ms`)
+    if (controller.signal.aborted) {
+      const kind = signal?.aborted === true ? 'aborted' : 'timeout'
+      throw new GitWorktreeError(
+        kind === 'timeout'
+          ? `git ${args.join(' ')} timed out after ${GIT_TIMEOUT_MS}ms`
+          : `git ${args.join(' ')} was aborted`,
+        { kind },
+      )
     }
-    const detail =
-      error instanceof Error && 'stderr' in error
-        ? String((error as { stderr?: unknown }).stderr).trim()
-        : ''
-    throw new GitWorktreeError(detail || `git ${args.join(' ')} failed`)
+    const failure = error as { stderr?: unknown; code?: unknown }
+    const detail = error instanceof Error && 'stderr' in error ? String(failure.stderr).trim() : ''
+    // execFile reports a non-zero exit through a numeric `code`; a string
+    // there (ENOENT, EACCES, …) means the process never ran.
+    const exitCode = typeof failure.code === 'number' ? failure.code : undefined
+    throw new GitWorktreeError(
+      detail || `git ${args.join(' ')} failed`,
+      exitCode === undefined ? { kind: 'spawn' } : { kind: 'exit', exitCode },
+    )
   } finally {
     clearTimeout(timer)
     signal?.removeEventListener('abort', onAbort)
@@ -155,7 +185,13 @@ async function pathExists(path: string): Promise<boolean> {
     .catch(() => false)
 }
 
-async function localBranchExists(
+/**
+ * Whether `refs/heads/<branch>` exists. Exported for its tests: the answer
+ * decides between "create the branch" and "overwrite a worktree", so a
+ * failure that is not Git's own "no such ref" must surface rather than pass
+ * for a missing branch.
+ */
+export async function localBranchExists(
   repositoryPath: string,
   branch: string,
   signal?: AbortSignal,
@@ -164,9 +200,12 @@ async function localBranchExists(
     await git(repositoryPath, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], signal)
     return true
   } catch (error) {
-    // `show-ref --verify --quiet` uses exit status 1 for an ordinary miss.
-    // Re-run only actual Git failures as an actionable domain error.
-    if (error instanceof GitWorktreeError) return false
+    // `show-ref --verify --quiet` uses exit status 1 for an ordinary miss and
+    // nothing else. A timeout, an abort, a repository that is not one (128),
+    // or a Git that would not start all keep their own error.
+    if (error instanceof GitWorktreeError && error.kind === 'exit' && error.exitCode === 1) {
+      return false
+    }
     throw error
   }
 }

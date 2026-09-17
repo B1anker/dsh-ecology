@@ -13,6 +13,7 @@ import {
   inspectWorktreeConflict,
   listBranches,
   listWorktrees,
+  localBranchExists,
   removeWorktree,
   repositoryRoot,
 } from '../src/git.js'
@@ -60,6 +61,41 @@ describe('worktree operations', () => {
     for (const branch of ['../escape', 'feat//double', 'feat..double', 'feature name', '']) {
       expect(() => assertBranchName(branch)).toThrow(GitWorktreeError)
     }
+  })
+
+  it('reads only exit status 1 from show-ref as a missing branch', async () => {
+    const cwd = await repository()
+    expect(await localBranchExists(cwd, 'main')).toBe(true)
+    expect(await localBranchExists(cwd, 'feat/never-created')).toBe(false)
+
+    // Not a repository: Git exits 128, which used to read as "no such
+    // branch" and let a create proceed on a directory Git cannot even open.
+    const notARepository = dirname(cwd)
+    const failure = await localBranchExists(notARepository, 'main').catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(GitWorktreeError)
+    expect(failure).toMatchObject({ kind: 'exit', exitCode: 128 })
+
+    // A caller's abort is reported as such, never as an answer about the ref.
+    const controller = new AbortController()
+    controller.abort()
+    const aborted = await localBranchExists(cwd, 'main', controller.signal).catch(
+      (error: unknown) => error,
+    )
+    expect(aborted).toBeInstanceOf(GitWorktreeError)
+    expect(aborted).toMatchObject({ kind: 'aborted', exitCode: undefined })
+  })
+
+  it('records why a Git call failed on the error it throws', async () => {
+    const cwd = await repository()
+    const missing = await repositoryRoot(join(cwd, 'does-not-exist')).catch(
+      (error: unknown) => error,
+    )
+    expect(missing).toMatchObject({ kind: 'invariant', exitCode: undefined })
+
+    const notARepository = await repositoryRoot(dirname(cwd)).catch((error: unknown) => error)
+    expect(notARepository).toBeInstanceOf(GitWorktreeError)
+    expect(notARepository).toMatchObject({ kind: 'exit', exitCode: 128 })
+    expect((notARepository as Error).message).toMatch(/not a git repository/i)
   })
 
   it('will not overwrite an already existing destination', async () => {
