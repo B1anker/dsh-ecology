@@ -16,7 +16,7 @@
  * @module @seaveyon/dsh-pet/client/bridge
  */
 
-import { MOODS } from '../desktop.js'
+import { DESKTOP_BRIDGE_PORT, MOODS } from '../desktop.js'
 import { detectLocale, type Locale } from './i18n.js'
 import type { Mood, PetStateMachine } from './mood.js'
 import type { PetSettingsStore } from './settings.js'
@@ -24,9 +24,11 @@ import type { PetSettingsStore } from './settings.js'
 /**
  * Contract with the desktop app: it serves `POST /state` on this loopback
  * port, accepting a JSON {@link DesktopBridgeState} body. The port is fixed
- * on both sides; changing it here without changing the app breaks the pair.
+ * on both sides and written once per side — `DESKTOP_BRIDGE_PORT` here and
+ * `server.zig`'s `port` in the app, which test/desktop-contract.test.ts keeps
+ * equal.
  */
-export const DESKTOP_COMPANION_PORT = 45731
+export const DESKTOP_COMPANION_PORT = DESKTOP_BRIDGE_PORT
 
 export const DEFAULT_ENDPOINT = `http://127.0.0.1:${DESKTOP_COMPANION_PORT}/state`
 

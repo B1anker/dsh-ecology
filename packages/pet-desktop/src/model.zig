@@ -1190,6 +1190,7 @@ test {
     _ = @import("assets.zig");
     _ = @import("state.zig");
     _ = @import("server.zig");
+    _ = @import("origin.zig");
     _ = @import("manifest.zig");
     _ = @import("persist.zig");
     _ = @import("view.zig");

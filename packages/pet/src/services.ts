@@ -19,6 +19,7 @@ import {
   LAUNCH_ROUTE_PATH,
   type LaunchDeps,
   type LaunchOutcome,
+  type LaunchRequest,
   launchDesktopApp,
   launchRouteHandler,
 } from './launch.js'
@@ -32,7 +33,7 @@ export const IWebServer = createDecorator<WebServerService>('webServer')
 /** Starts the desktop app. One method, so a test double is one line. */
 export interface IDesktopLauncher {
   readonly _serviceBrand: undefined
-  launch(): Promise<LaunchOutcome>
+  launch(request?: LaunchRequest): Promise<LaunchOutcome>
 }
 export const IDesktopLauncher = createDecorator<IDesktopLauncher>('petDesktopLauncher')
 
@@ -42,8 +43,8 @@ export class DesktopLauncher implements IDesktopLauncher {
 
   constructor(private readonly deps: LaunchDeps = {}) {}
 
-  launch(): Promise<LaunchOutcome> {
-    return launchDesktopApp(this.deps)
+  launch(request: LaunchRequest = {}): Promise<LaunchOutcome> {
+    return launchDesktopApp(this.deps, request)
   }
 }
 
@@ -66,7 +67,7 @@ export class LaunchRoute implements ILaunchRoute {
     private readonly server: WebServerService,
     launcher: IDesktopLauncher,
   ) {
-    this.handler = launchRouteHandler(() => launcher.launch())
+    this.handler = launchRouteHandler((request) => launcher.launch(request))
   }
 
   register(): Disposer {

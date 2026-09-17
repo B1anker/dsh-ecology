@@ -21,7 +21,7 @@ import type { HostContext } from './host-types.js'
 import { createServices, ILaunchRoute } from './services.js'
 
 export type { Disposer, HostContext, Route, RouteHandler, WebServerService } from './host-types.js'
-export type { LaunchDeps, LaunchOutcome } from './launch.js'
+export type { LaunchDeps, LaunchOutcome, LaunchRequest } from './launch.js'
 // `IDesktopLauncher` and `ILaunchRoute` are each an interface and an
 // identifier of the same name; one plain re-export carries both meanings.
 export {

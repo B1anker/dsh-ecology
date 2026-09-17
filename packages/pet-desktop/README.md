@@ -181,9 +181,22 @@ The app runs a loopback-only HTTP server (`src/server.zig`) on
 - `GET /sprites/<pet>/<mood>.png` → `200 image/png`: the strip file itself.
   Only manifest-declared `file` names are served (exact match — no path
   traversal surface); unknown or undeclared paths → `404`.
-- `OPTIONS` preflight → 204; every response carries
-  `access-control-allow-origin: *` so the plugin can fetch/POST from the
-  shell page's origin.
+- `OPTIONS` preflight → 204. Responses carry a CORS grant only for an
+  **allowed origin**, echoed back with `vary: origin` — never `*`, which
+  would have let every page open in the browser repaint the pet, read its
+  name, list the imported pets, and watch `/events`. `src/origin.zig`
+  decides: loopback origins (`http(s)://localhost`, `127.0.0.1`, `[::1]`,
+  any port) are always allowed; `DSH_PET_DESKTOP_ORIGINS` — a
+  comma-separated list of exact origins — adds a shell reached through a
+  reverse proxy or LAN name on the same machine. A request carrying any
+  other `Origin` is answered `403` before its route is looked at (its
+  preflight gets a bare `204`); a request with no `Origin` header is not a
+  browser and is served without a grant.
+- The port is fixed at 45731 and written once per side — here and
+  `DESKTOP_BRIDGE_PORT` in the plugin, which has a test reading
+  `server.zig` to keep them equal. If the app cannot listen on it (usually a
+  second copy already running), it says so on stderr / the run log and
+  quits instead of leaving a pet on screen that nothing can reach.
 
 The bridge is on by default — there is no companion toggle in the pet
 plugin's settings panel; as soon as the plugin is installed it starts POSTing
@@ -194,7 +207,11 @@ binary from the install's per-platform optional package
 (`@seaveyon/dsh-pet-desktop-<platform>-<arch>`), then asks Launch Services to
 open the bundle id `dev.seaveyon.dsh-pet-desktop` (falling back to
 `/Applications/DSH Pet.app` and `~/Applications/DSH Pet.app`;
-`DSH_PET_DESKTOP_APP` overrides the search).
+`DSH_PET_DESKTOP_APP` overrides the search). Whichever path starts the app,
+the launcher hands it the requesting page's origin as
+`DSH_PET_DESKTOP_ORIGINS` (through the environment, or `open --env`) when
+that origin is not loopback, so a proxied shell needs no hand configuration;
+a copy you start yourself gets the variable from you.
 
 The server thread feeds the UI loop through the framework's external-source
 channel (`fx.openChannel` → thread-safe `ChannelHandle.post`, the

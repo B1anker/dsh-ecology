@@ -1,6 +1,12 @@
+/**
+ * Detached deployment watchdog: runs `runDeploymentWatchdog` for one profile
+ * and answers the CLI over the loopback control endpoint (control-server.ts)
+ * whose port and token it writes to `service.json` once it is listening. The
+ * script is the process shell; everything it does is in the modules it calls.
+ */
 import { randomBytes } from 'node:crypto'
-import { createServer } from 'node:http'
 import { join } from 'node:path'
+import { createControlServer, listenLoopback } from '../control-server.js'
 import { redactText } from '../domain/redaction.js'
 import { loadDshEnvironment, loadExperimentEnvironment } from '../environment.js'
 import { writeFileAtomic } from '../fs/atomic.js'
@@ -24,20 +30,10 @@ const controller = new AbortController(),
 let ready: { slot: string; url: string; port: number } | null = null,
   error: string | null = null,
   running = true
-const server = createServer((req, res) => {
-  if (req.headers.authorization !== `Bearer ${token}`) {
-    res.writeHead(403)
-    res.end()
-    return
-  }
-  if (req.url === '/stop' && req.method === 'POST') controller.abort()
-  else if (req.url !== '/status') {
-    res.writeHead(404)
-    res.end()
-    return
-  }
-  res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-  res.end(JSON.stringify({ running, ready, error, stopping: controller.signal.aborted }))
+const server = createControlServer({
+  token: () => token,
+  status: () => ({ running, ready, error, stopping: controller.signal.aborted }),
+  stop: () => controller.abort(),
 })
 process.on('SIGTERM', () => controller.abort())
 process.on('SIGINT', () => controller.abort())
@@ -49,12 +45,10 @@ try {
       ready = value
     },
     async () => {
-      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-      const address = server.address()
-      if (!address || typeof address === 'string') throw new Error('no control port')
+      const port = await listenLoopback(server)
       await writeFileAtomic(
         join(deploymentRoot(ctx), 'service.json'),
-        JSON.stringify({ version: 1, port: address.port, token, pid: process.pid }),
+        JSON.stringify({ version: 1, port, token, pid: process.pid }),
       )
       process.send?.({ running: true, starting: true })
     },

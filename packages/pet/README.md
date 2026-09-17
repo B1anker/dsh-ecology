@@ -77,6 +77,12 @@ What the host starts, in order:
    so the fallback is the `DSH_PET_DESKTOP_APP` environment variable pointing
    at an exe.
 
+Either way the launcher passes the requesting page's origin to the app as
+`DSH_PET_DESKTOP_ORIGINS` when it is not a loopback one (a reverse proxy or
+LAN name in front of the same machine): the app's bridge grants CORS only to
+loopback origins and that list, never to every page in the browser. A copy of
+the app you start by hand takes the same variable from your shell.
+
 If the host finds neither, the panel links to the download page instead.
 
 Settings persist through the DSH settings service when it is available and

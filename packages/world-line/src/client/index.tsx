@@ -14,6 +14,7 @@ import { errorMessage } from './async.js'
 import { CleanOptions } from './clean-options.js'
 import { CloseButton } from './close-button.js'
 import { useWorldLineEntry } from './entry.js'
+import { crashStyles, ErrorBoundary, PanelCrash } from './error-boundary.js'
 import { ErrorText } from './error-text.js'
 import { Experiments } from './experiments.js'
 import { Inspector } from './inspector.js'
@@ -29,7 +30,7 @@ import { TimeControls } from './time-controls.js'
 import { type Line, label, Timeline } from './timeline.js'
 import { aliasValidation, cursorTime } from './timeline-model.js'
 import { WorkspaceTools } from './workspace-tools.js'
-import { mergeWorldResponse } from './world-data.js'
+import { worldReader } from './world-fetch.js'
 
 declare const worldLineFlowCss: string
 export const name = '@seaveyon/dsh-world-line'
@@ -45,40 +46,31 @@ interface Data {
   now: string
 }
 const requestKeys = new Map<string, string>()
-let lastWorldData: any = null
+/**
+ * Reads go through the page's single-flight reader (world-fetch.ts), so the
+ * canvas poll and the corner entry's poll never race each other for the
+ * cached baseline; writes are one POST each, keyed for idempotent retry.
+ */
 async function api(body?: unknown, signal?: AbortSignal) {
-  const base = lastWorldData
-  const fingerprint = body ? JSON.stringify(body) : ''
-  if (body && !requestKeys.has(fingerprint)) requestKeys.set(fingerprint, crypto.randomUUID())
-  const response = await fetch(
-    !body && base?.revision
-      ? `/api/world-line?since=${encodeURIComponent(base.revision)}`
-      : '/api/world-line',
-    body
-      ? {
-          method: 'POST',
-          signal,
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            ...(body as object),
-            requestId: requestKeys.get(fingerprint),
-          }),
-        }
-      : { cache: 'no-store', signal },
-  )
-  if (body) requestKeys.delete(fingerprint)
+  if (!body) return worldReader.read(signal)
+  const fingerprint = JSON.stringify(body)
+  if (!requestKeys.has(fingerprint)) requestKeys.set(fingerprint, crypto.randomUUID())
+  const response = await fetch('/api/world-line', {
+    method: 'POST',
+    signal,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...(body as object),
+      requestId: requestKeys.get(fingerprint),
+    }),
+  })
+  requestKeys.delete(fingerprint)
   if (response.status === 401 || response.status === 403)
     throw new Error('登录已失效，请返回 DSH 重新登录后再试。')
   if (!response.headers.get('content-type')?.includes('application/json'))
     throw new Error('未收到管理服务响应，请检查连接或重新登录。')
   const data = await response.json()
   if (!response.ok) throw new Error(data.error ?? `请求失败 (${response.status})`)
-  if (!body) {
-    signal?.throwIfAborted()
-    if (lastWorldData !== base) throw new Error('更新已过期，保留当前画布')
-    lastWorldData = mergeWorldResponse(base, data, base?.revision)
-    return lastWorldData
-  }
   return data
 }
 function WorldLine({
@@ -1364,30 +1356,45 @@ export function apply(ctx: {
     const [taskRequest, setTaskRequest] = useState(0)
     const [locked, setLocked] = useState(false)
     const [modal, setModal] = useState(false)
+    // A crashed panel may have left the entry locked or hidden behind a
+    // modal it no longer renders; leaving through the crash card resets both.
+    const leaveCrashedPanel = () => {
+      setLocked(false)
+      setModal(false)
+      close()
+    }
     return (
       <>
-        <TaskNotifier
-          jobs={jobs}
-          onOpen={() => {
-            setOpen(true)
-            setTaskRequest((n) => n + 1)
-          }}
-        />
-        <Navigator locked={locked} hidden={modal} />
-        {open && (
-          <WorldLine
-            taskRequest={taskRequest}
-            close={close}
-            onBusyChange={setLocked}
-            onModalChange={setModal}
+        <ErrorBoundary fallback={() => null}>
+          <TaskNotifier
+            jobs={jobs}
+            onOpen={() => {
+              setOpen(true)
+              setTaskRequest((n) => n + 1)
+            }}
           />
+          <Navigator locked={locked} hidden={modal} />
+        </ErrorBoundary>
+        {open && (
+          <ErrorBoundary
+            fallback={({ error, reset }) => (
+              <PanelCrash error={error} reset={reset} close={leaveCrashedPanel} />
+            )}
+          >
+            <WorldLine
+              taskRequest={taskRequest}
+              close={close}
+              onBusyChange={setLocked}
+              onModalChange={setModal}
+            />
+          </ErrorBoundary>
         )}
       </>
     )
   }
   ctx.effect(() => {
     const style = document.createElement('style')
-    style.textContent = worldLineFlowCss + styles
+    style.textContent = worldLineFlowCss + styles + crashStyles
     document.head.append(style)
     return () => style.remove()
   }, 'world-line: host theme styles')

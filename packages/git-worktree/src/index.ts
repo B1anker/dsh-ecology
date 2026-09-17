@@ -3,6 +3,7 @@ import type { PluginContext } from './host-services.js'
 import { createServices, IWorktreeApi, IWorktreeTools } from './services.js'
 
 export type { ManagementRoute } from './api.js'
+export type { GitFailureKind } from './git.js'
 export {
   assertBranchName,
   createWorktree,

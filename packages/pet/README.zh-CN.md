@@ -61,6 +61,11 @@ dsh plugin --profile web add @seaveyon/dsh-pet
    再查标准 Applications 目录（开发和拆分前的旧包走这条路）。Windows 没有
    `open -b` 也没有安装器，回退为指向 exe 路径的 `DSH_PET_DESKTOP_APP` 环境变量。
 
+无论走哪条路，只要发起请求的页面不是 loopback 来源（例如同机反向代理或局域网
+主机名），启动器都会把该来源作为 `DSH_PET_DESKTOP_ORIGINS` 传给桌面 App：桥接
+服务只向 loopback 来源和这份名单授予 CORS，而不是浏览器里的任意页面。手工启动
+的 App 副本则从你的 shell 读取同一个变量。
+
 两者都找不到时，面板改为给出下载链接。
 
 有 settings 服务时配置写入 DSH settings，否则回退 `localStorage`——远端浏览器

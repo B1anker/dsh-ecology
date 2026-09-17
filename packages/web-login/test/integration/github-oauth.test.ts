@@ -529,6 +529,98 @@ test('an unregistered GitHub account is rejected and recovery can rebind the own
   }
 })
 
+test('a callback refused by the concurrency gate keeps its state for a retry', async () => {
+  const app = await fixture({ githubMaxConcurrentCallbacks: 1 })
+  try {
+    await completeOwnerEnroll(app, { id: 11, login: 'owner' })
+
+    // The first token exchange parks until the test lets it go, so one
+    // callback occupies the whole gate while a second one arrives.
+    let releaseHeld: (() => void) | undefined
+    const held = new Promise<void>((resolve) => {
+      releaseHeld = resolve
+    })
+    let heldStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      heldStarted = resolve
+    })
+    let exchanges = 0
+    const prior = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/login/oauth/access_token')) {
+        exchanges += 1
+        if (exchanges === 1) {
+          heldStarted?.()
+          await held
+        }
+        return new Response(JSON.stringify({ access_token: 'test-access-token' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.includes('api.github.com/user')) {
+        return new Response(JSON.stringify({ id: 11, login: 'owner' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.includes('/applications/') && url.endsWith('/token') && init?.method === 'DELETE') {
+        return new Response(null, { status: 204 })
+      }
+      throw new Error(`unexpected fetch in test: ${url}`)
+    }) as typeof fetch
+
+    try {
+      const stateOf = async (): Promise<string> => {
+        const start = await request(app.port, '/auth/github/login')
+        expect(start.status).toBe(302)
+        return new URL(String(start.headers.location)).searchParams.get('state') ?? ''
+      }
+      const first = await stateOf()
+      const second = await stateOf()
+
+      const firstCallback = request(
+        app.port,
+        `/auth/github/callback?code=held&state=${encodeURIComponent(first)}`,
+      )
+      await started
+
+      const refused = await request(
+        app.port,
+        `/auth/github/callback?code=waiting&state=${encodeURIComponent(second)}`,
+      )
+      expect(refused.status).toBe(503)
+      expect(refused.headers['retry-after']).toBe('5')
+      expect(setCookie(refused)).toBe('')
+
+      releaseHeld?.()
+      const admitted = await firstCallback
+      expect(admitted.status).toBe(200)
+
+      // Same state, same code: the refusal did not consume it.
+      const retried = await request(
+        app.port,
+        `/auth/github/callback?code=waiting&state=${encodeURIComponent(second)}`,
+      )
+      expect(retried.status).toBe(200)
+      expect(setCookie(retried)).toMatch(/^dsh_session=/)
+      expect(exchanges).toBe(2)
+
+      // And a state is still single-use once it has actually been exchanged.
+      const replay = await request(
+        app.port,
+        `/auth/github/callback?code=waiting&state=${encodeURIComponent(second)}`,
+      )
+      expect(replay.status).toBe(401)
+    } finally {
+      globalThis.fetch = prior
+    }
+  } finally {
+    await app.close()
+  }
+})
+
 test('githubEnabled false keeps the classic password gate', async () => {
   const web = createMockWebServer()
   const ctx = createMockContext({ webServer: web.service })
