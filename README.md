@@ -9,6 +9,7 @@ endorsed by DeepSeek AI.
 | Package | Version | Description |
 | --- | --- | --- |
 | [`@seaveyon/dsh-web-login`](packages/web-login) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-web-login.svg)](https://www.npmjs.com/package/@seaveyon/dsh-web-login) | Cookie-session login gate for the DSH Web surface, replacing a reverse proxy's HTTP Basic prompt with a styled sign-in page. |
+| [`@seaveyon/dsh-di`](packages/di) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-di.svg)](https://www.npmjs.com/package/@seaveyon/dsh-di) | A small VS Code-style dependency injection container: service identifiers, constructor injection, lazy singletons, child scopes and disposal. Every plugin here composes its server side through it. |
 | [`@seaveyon/dsh-plugin-testkit`](packages/plugin-testkit) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-plugin-testkit.svg)](https://www.npmjs.com/package/@seaveyon/dsh-plugin-testkit) | Test doubles for the `webServer` registry, Cordis context events, a minimal tools pipeline, and the shell's client-side services, plus the conformance suites that keep them honest. |
 | [`@seaveyon/dsh-pet`](packages/pet) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-pet.svg)](https://www.npmjs.com/package/@seaveyon/dsh-pet) | A desktop pet for the DSH Web surface: hand-crafted sprites whose mood follows the live agent state, installable with one command. |
 | [`@seaveyon/dsh-world-line`](packages/world-line) | [![npm](https://img.shields.io/npm/v/%40seaveyon%2Fdsh-world-line.svg)](https://www.npmjs.com/package/@seaveyon/dsh-world-line) | Safe change manager for DSH profiles: divergence labs, lastKnownGood snapshots, and a local time machine for profile and plugin composition. |
@@ -208,6 +209,25 @@ they are version-locked to pet, and `pet-v*` tags are the shared history.
    its tarball. That job is the only one that tests what `engines.node`
    promises.
 6. Run `bun install` at the root to link the new workspace member.
+
+If the package depends on another member at runtime — the plugins do, on
+[`@seaveyon/dsh-di`](packages/di) — three more things hold it together:
+
+- Declare the range as `>=0.1.0 <1.0.0` rather than `^0.1.0`. Below 1.0 a
+  caret pins the minor, so the first `feat` release of the dependency would
+  leave every published dependent installing the version before it. The wide
+  range is what the workspace already tests on every commit, and it closes on
+  the dependency's next breaking change, which is the one bump that has to be
+  reviewed by hand anyway. `workspace:` ranges are not an option: the release
+  packs with `npm pack`, which ships them verbatim.
+- Point `tsconfig.json`'s `paths` at the dependency's `src/` so `typecheck`
+  sees the same source as the build, and reset them (`"paths": {}`) in
+  `tsconfig.build.json` so the emitted declarations resolve through
+  `node_modules` the way a consumer's will.
+- Order the `release_package` lines in `publish.yml` so the dependency releases
+  first, and leave [`scripts/smoke-tarball.mjs`](scripts/smoke-tarball.mjs)
+  to pack the sibling from the checkout rather than the registry — that is
+  what lets the smoke pass before the dependency's first version exists.
 
 Lint and formatting need no per-package setup; they apply from the root.
 

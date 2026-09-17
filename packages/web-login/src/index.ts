@@ -1,4 +1,3 @@
-import { createLabSessionGate } from './lab-session.js'
 /**
  * dsh-web-login — a cookie-session login gate for the dsh Web surface.
  *
@@ -43,8 +42,7 @@ import { createLabSessionGate } from './lab-session.js'
 
 import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { createAttemptLimiter } from './attempt-limiter.js'
-import { createSecurityAudit } from './audit.js'
+import { InstantiationService } from '@seaveyon/dsh-di'
 import {
   type AuthLifecycle,
   type AuthorizationDocument,
@@ -66,7 +64,6 @@ import {
 } from './cookies.js'
 import {
   buildAuthorizeUrl,
-  createConcurrencyGate,
   exchangeCode,
   fetchGitHubUser,
   type GitHubAppCredentials,
@@ -83,14 +80,39 @@ import {
   sendJsonError,
   sendRedirect,
 } from './http.js'
-import { createKdfGate } from './kdf-gate.js'
-import { createOAuthStateStore } from './oauth-state.js'
 import { type LoginPageMode, renderLoginPage, renderOAuthContinuePage } from './page.js'
-import { createSessionStore, PASSWORD_PRINCIPAL, type SessionPrincipal } from './sessions.js'
+import {
+  createServices,
+  IAttemptLimiter,
+  ICallbackGate,
+  IKdfGate,
+  ILabSessionGate,
+  IOAuthStateStore,
+  ISecurityAudit,
+  ISessionStore,
+  IWebServer,
+} from './services.js'
+import { PASSWORD_PRINCIPAL, type SessionPrincipal } from './sessions.js'
 import type { PluginContext, RouteHandler, WebServerService } from './types.js'
 import { requireVerifier, verifyPassword } from './verifier.js'
 
 export type { LoginConfig, ResolvedConfig } from './config.js'
+export {
+  type ConcurrencyGate,
+  createServices,
+  IAttemptLimiter,
+  ICallbackGate,
+  IKdfGate,
+  ILabSessionGate,
+  ILoginConfig,
+  IOAuthStateStore,
+  IPluginContext,
+  ISecurityAudit,
+  ISessionStore,
+  IWebServer,
+  type LabSessionGate,
+  type ServiceInputs,
+} from './services.js'
 export type { PluginContext, WebServerService } from './types.js'
 
 /** Stable Cordis plugin name; labels the row in diagnostics. */
@@ -205,41 +227,26 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     githubCredentials = { clientId, clientSecret }
   }
 
-  const server = ctx.get<WebServerService>('webServer')
-  if (server === undefined) throw new Error('dsh-web-login: webServer service missing')
+  if (ctx.get('webServer') === undefined)
+    throw new Error('dsh-web-login: webServer service missing')
 
-  const sessions = createSessionStore({
-    ttlMs: options.sessionTtlMs,
-    maxSessions: options.maxSessions,
-    persistentFile: options.persistentSessions ? options.sessionFile : undefined,
-    binding: createHash('sha256')
-      .update(verifierText ?? '')
-      .digest('hex'),
-  })
-  const audit = options.auditEnabled
-    ? createSecurityAudit(options.auditFile, undefined, (error) =>
-        ctx.logger.warn(
-          `dsh-web-login: could not append security audit: ${error instanceof Error ? error.message : String(error)}`,
-        ),
-      )
-    : undefined
-  const limiter = createAttemptLimiter({
-    limit: options.attemptLimit,
-    windowMs: options.attemptWindowMs,
-    blockMs: options.blockMs,
-    maxClients: options.maxAttemptClients,
-    globalLimit: options.globalAttemptLimit,
-    globalBlockMs: options.globalBlockMs,
-  })
-  const kdf = createKdfGate({
-    concurrency: options.kdfConcurrency,
-    queueDepth: options.kdfQueueDepth,
-  })
-  const oauthStates = createOAuthStateStore({
-    ttlMs: options.githubStateTtlMs,
-    maxPending: options.githubMaxPendingStates,
-  })
-  const callbackGate = createConcurrencyGate(options.githubMaxConcurrentCallbacks)
+  // The graph is declared in ./services; this is where it is realised. Its
+  // teardown is not mounted yet: startup can still fail closed below, and a
+  // failed start must leave nothing behind — not even a disposer.
+  const services = new InstantiationService(
+    createServices(ctx, options, {
+      sessionBinding: createHash('sha256')
+        .update(verifierText ?? '')
+        .digest('hex'),
+    }),
+  )
+  const server = services.get(IWebServer)
+  const sessions = services.get(ISessionStore)
+  const audit = services.has(ISecurityAudit) ? services.get(ISecurityAudit) : undefined
+  const limiter = services.get(IAttemptLimiter)
+  const kdf = services.get(IKdfGate)
+  const oauthStates = services.get(IOAuthStateStore)
+  const callbackGate = services.get(ICallbackGate)
 
   const cookieName = sessionCookieName(options.secureCookie, options.cookieNamespace)
   const redirectUri = options.githubEnabled ? `${options.publicUrl}${GITHUB_CALLBACK_PATH}` : ''
@@ -270,15 +277,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   /**
    * Whether a request carries a live, still-authorized session cookie.
    */
-  const delegatedLabSession = createLabSessionGate(process.env, Date.now, (req) => {
-    const connection = ctx.get<{
-      requestRejection?: (request: IncomingMessage) => number | undefined
-    }>('connection')
-    return (
-      typeof connection?.requestRejection === 'function' &&
-      connection.requestRejection(req) === undefined
-    )
-  })
+  const delegatedLabSession = services.get(ILabSessionGate)
   const readPrincipal = (req: IncomingMessage): SessionPrincipal | undefined => {
     if (delegatedLabSession(req)) return { provider: 'password', role: 'member', authzVersion: 0 }
     const record = sessions.get(readCookie(req.headers.cookie, cookieName))
@@ -545,6 +544,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     }
     if (isCurrentWrapper(server[member], wrapper)) return
     undecorate()
+    services.dispose()
     throw new Error(
       `dsh-web-login: webServer.${member} could not be wrapped — the host does not ` +
         'expose it as a replaceable property, so the gate cannot guard the routes ' +
@@ -555,6 +555,11 @@ export function apply(ctx: PluginContext, config?: unknown): void {
   install('register', decoratedRegister)
   install('registerUpgrade', decoratedRegisterUpgrade)
   install('registerFallback', decoratedRegisterFallback)
+
+  // Past the last point that can fail. Mounted before every other effect so
+  // it runs last: routes, the sweep, and the registry decoration go first, the
+  // stores behind them after.
+  ctx.effect(() => () => services.dispose(), 'dsh-web-login: service container')
 
   ctx.effect(
     () => () => {

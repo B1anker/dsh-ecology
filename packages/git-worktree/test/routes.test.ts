@@ -1,12 +1,25 @@
 import { afterEach, describe, expect, it } from '@rstest/core'
+import { InstantiationService, SyncDescriptor } from '@seaveyon/dsh-di'
 import {
   createMockConnection,
   createMockContext,
+  createMockServices,
   createMockWebServer,
   type MockConnection,
   type MockWebServer,
 } from '@seaveyon/dsh-plugin-testkit'
-import { apply, inject } from '../src/index.js'
+import { WorktreeApi } from '../src/api.js'
+import {
+  apply,
+  createServices,
+  IConnection,
+  IPluginContext,
+  ITools,
+  IWebServer,
+  IWorktreeApi,
+  IWorktreeTools,
+  inject,
+} from '../src/index.js'
 
 /**
  * The management API runs Git against a caller-supplied path, so every route
@@ -114,12 +127,86 @@ describe('management API fence', () => {
     expect(registered).toEqual(['worktree_list', 'worktree_create', 'worktree_remove'])
   })
 
-  it('unregisters every route on disposal', async () => {
+  it('unregisters every route on disposal, then the container', async () => {
     const { ctx, listen } = boot(createMockConnection())
     const port = await listen()
-    expect(ctx.teardowns).toHaveLength(ROUTES.length)
+    // One teardown per route, each labelled for the host, plus the container's.
+    expect(ctx.teardowns).toHaveLength(ROUTES.length + 1)
+    expect(ctx.teardowns[0]?.label).toBe('dsh-git-worktree: service container')
+    expect(ctx.teardowns.slice(1).map((entry) => entry.label)).toEqual([
+      'dsh-git-worktree: branches endpoint',
+      'dsh-git-worktree: create conflict endpoint',
+      'dsh-git-worktree: create endpoint',
+      'dsh-git-worktree: remove endpoint',
+      'dsh-git-worktree: workspace groups endpoint',
+      'dsh-git-worktree: reveal endpoint',
+    ])
     await ctx.dispose()
     const response = await fetch(`http://127.0.0.1:${port}${ROUTES[0]}`, { method: 'POST' })
     expect(response.status).toBe(404)
+  })
+})
+
+describe('service graph', () => {
+  it('declares the host services and the two the plugin builds', () => {
+    web = createMockWebServer()
+    const connection = createMockConnection()
+    const tools = { register() {} }
+    const ctx = Object.assign(createMockContext({ webServer: web.service, connection }), { tools })
+    const collection = createServices(ctx)
+
+    expect(collection.get(IWebServer)).toBe(web.service)
+    expect(collection.get(IConnection)).toBe(connection)
+    expect(collection.get(ITools)).toBe(tools)
+    expect(collection.get(IPluginContext)).toBe(ctx)
+    expect(collection.get(IWorktreeApi)).toBeInstanceOf(SyncDescriptor)
+    expect(collection.get(IWorktreeTools)).toBeInstanceOf(SyncDescriptor)
+    expect(String(IWorktreeApi)).toBe('worktreeApi')
+    expect(String(IWorktreeTools)).toBe('worktreeTools')
+  })
+
+  it('resolves the API against the testkit doubles, fenced, without apply', async () => {
+    const mock = createMockServices({ connection: createMockConnection(() => 403) })
+    web = mock.web
+    try {
+      const api = mock.services.createInstance(WorktreeApi)
+      expect(api.routes.map((route) => route.path)).toEqual(ROUTES)
+      const dispose = api.register(api.routes[0]!)
+      const port = await mock.web.listen()
+      const rejected = await fetch(`http://127.0.0.1:${port}${ROUTES[0]}`, { method: 'POST' })
+      expect(rejected.status).toBe(403)
+      dispose()
+      const gone = await fetch(`http://127.0.0.1:${port}${ROUTES[0]}`, { method: 'POST' })
+      expect(gone.status).toBe(404)
+    } finally {
+      await mock.dispose()
+      web = undefined
+    }
+  })
+
+  it('lets a test swap the API for a double while keeping the rest of the graph', () => {
+    web = createMockWebServer()
+    const registered: string[] = []
+    const ctx = Object.assign(
+      createMockContext({ webServer: web.service, connection: createMockConnection() }),
+      {
+        tools: {
+          register(tool: { name: string }) {
+            registered.push(tool.name)
+          },
+        },
+      },
+    )
+    const collection = createServices(ctx).clone()
+    const fake: IWorktreeApi = { _serviceBrand: undefined, routes: [], register: () => () => {} }
+    collection.set(IWorktreeApi, fake)
+    const services = new InstantiationService(collection)
+
+    expect(services.get(IWorktreeApi)).toBe(fake)
+    const tools = services.get(IWorktreeTools)
+    expect(tools.names).toEqual(['worktree_list', 'worktree_create', 'worktree_remove'])
+    tools.register()
+    expect(registered).toEqual(tools.names)
+    services.dispose()
   })
 })

@@ -242,6 +242,17 @@ bunx tsc -p tsconfig.json --noEmit
 Tests build real profile layouts in temp DSH homes; none of them touch
 `~/.dsh`.
 
+The DSH host face (`src/web/`) is composed through
+[`@seaveyon/dsh-di`](../di). `identifiers.ts` names the services — the host's
+`webServer` and `connection`, the instance's `WorldLineLocation`, the shared
+read cache, the per-request `ContextFactory`, the `OperateDeps` the dispatcher
+uses, and the `ManagementApi` route; `services.ts` declares the recipes;
+`api.ts` is the route class with the collaborators injected; `operations.ts`
+holds `worldLines` / `labStatus` / `operate` unchanged; and `index.ts` is
+`apply`, which builds the container, mounts the effects, and disposes the
+container with the plugin. `test/unit/web-services.test.ts` resolves the real
+route over a context-factory double without running `apply`.
+
 Lab aliases work with `start`, `stop`, `inspect`, `destroy`, and `promote`, and
 appear in `lab list`. Names are case-sensitive, 1–64 ASCII letters, digits,
 underscores or hyphens; start with a letter or digit and cannot start with

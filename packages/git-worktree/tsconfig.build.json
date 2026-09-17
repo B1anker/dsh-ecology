@@ -1,7 +1,13 @@
 {
+  // Declaration emit only, from `src`. `paths` is reset: the typecheck config
+  // maps workspace siblings to their source, which would sit outside this
+  // `rootDir`; the build resolves them through node_modules — the siblings'
+  // built declarations — the way a consumer's compiler will. The workspace
+  // build runs in dependency order, so they exist by the time this runs.
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "paths": {}
   },
   "include": ["src"]
 }

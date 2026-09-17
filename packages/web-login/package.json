@@ -65,6 +65,9 @@
   "publishConfig": {
     "access": "public"
   },
+  "dependencies": {
+    "@seaveyon/dsh-di": ">=0.1.0 <1.0.0"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.7"

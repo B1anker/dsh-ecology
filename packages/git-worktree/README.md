@@ -14,6 +14,12 @@ It replaces no DSH service. The bundle mounts beside the existing workspace cont
 
 The browser bundle talks to the host through `POST /api/plugins/dsh-git-worktree/{branches,create-conflict,create,remove,workspace-groups,reveal}`. Every route is registered behind the host's `connection.requestRejection` fence — the same Host/Origin check and browser authentication DSH applies to its own `/api` — because the routes run Git against a caller-supplied path. The plugin injects `connection`, so the loader never starts it on a host where that fence is unavailable.
 
+## Composition
+
+The server side is wired through [`@seaveyon/dsh-di`](../di). `src/services.ts` is the one place the graph is declared: the host's `tools`, `webServer` and `connection` are registered as ready instances under the identifiers in `src/host-services.ts`, and the plugin's two services — `WorktreeApi` (the fenced management routes, `@inject(IWebServer, IConnection)`) and `WorktreeTools` (the three agent tools, `@inject(ITools)`) — as recipes. `apply` builds an `InstantiationService` over that collection, mounts one effect per route so the host sees each registration by name, registers the tools, and disposes the container with the plugin.
+
+A test that wants the real graph over doubles calls `createServices(ctx)`, `clone()`s it, and overrides an entry — or resolves a single service against `@seaveyon/dsh-plugin-testkit`'s `createMockServices()` without running `apply` at all. `test/routes.test.ts` does both.
+
 ## Install from this repository during development
 
 Build this workspace package, then point the DSH profile dependency at its packed tarball or published version:

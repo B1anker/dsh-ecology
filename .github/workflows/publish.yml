@@ -313,6 +313,13 @@ jobs:
             done
           }
 
+          # di is a production dependency of the plugins below, so it releases
+          # first: a plugin's new version must not reach the registry ahead of
+          # the container version it declares. Its first version (0.1.0, tag
+          # di-v0.1.0) has to be published by hand per README → "Bootstrapping
+          # a new package on npm" before this line can succeed; until then the
+          # trusted-publisher check fails here and the packages after it wait.
+          release_package packages/di ./release/di.config.mjs
           release_package packages/plugin-testkit ./release/plugin-testkit.config.mjs
           release_package packages/web-login ./release/web-login.config.mjs
           # world-line's first version (0.1.0, tag world-line-v0.1.0) was

@@ -72,7 +72,7 @@ const CONTRACT = [
     package: '@deepseek-ai/dsh-client-connection',
     members: ['requestRejection'],
     why: 'world-line consults connection.requestRejection before answering its management API',
-    fix: 'packages/world-line/src/web/index.ts (the host.get<…>("connection") shape) and packages/plugin-testkit/src/connection.ts',
+    fix: 'packages/world-line/src/web/identifiers.ts (the ConnectionService contract behind IConnection) and packages/plugin-testkit/src/connection.ts',
   },
   // The browser-side services. The client packages ship declarations too, so
   // the same member check applies.

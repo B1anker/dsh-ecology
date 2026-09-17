@@ -114,6 +114,14 @@ and the only network traffic is loopback.
 The hand-written host contract types and the facts they rest on are documented
 at the top of [`src/client/host-types.ts`](src/client/host-types.ts).
 
+The host face is composed through [`@seaveyon/dsh-di`](../di), like every
+plugin here: [`src/services.ts`](src/services.ts) declares the graph — the
+host's `webServer` under `IWebServer`, a `DesktopLauncher` (`launchDesktopApp`
+over one set of seams) under `IDesktopLauncher`, and the `LaunchRoute` that
+`@inject`s both — and `apply` builds a container over it, registers the route,
+and disposes the container with the plugin. A test resolves the route over a
+launcher double by cloning `createServices(ctx)` and replacing one entry.
+
 ## Development
 
 ```sh

@@ -32,6 +32,7 @@ export default defineConfig({
           // runtime, so the launcher must be an entry or the published
           // package dangles (the trap desktop.ts's header documents).
           launch: './src/launch.ts',
+          services: './src/services.ts',
         },
         tsconfigPath: './tsconfig.build.json',
       },

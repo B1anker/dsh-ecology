@@ -21,6 +21,7 @@ test('the entry exports the doubles and nothing that needs a test runner', async
     'createMockLocale',
     'createMockModuleLoader',
     'createMockObservable',
+    'createMockServices',
     'createMockSessions',
     'createMockSettingsScopeBinder',
     'createMockSlots',

@@ -5,8 +5,9 @@
  * require Node `^20.19.0 || >=22.12.0`, so no job that installs the dev toolchain
  * can start on the 20.11 that `engines.node` promises. This script therefore
  * takes the packed tarball, extracts it somewhere without the workspace
- * toolchain, installs only the package's own production dependencies, and
- * imports it the way a consumer would.
+ * toolchain, installs only what the package needs at load time (its production
+ * dependencies, and the host packages its entry imports), and imports it the
+ * way a consumer would.
  *
  * It is plain JavaScript on purpose: running it under the old Node is the point,
  * and a TypeScript entry would need a loader that has its own version floor.
@@ -23,7 +24,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { argv, execPath, exit, version } from 'node:process'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { load } from 'js-yaml'
 
@@ -369,6 +370,121 @@ const PACKAGES = {
     },
   },
 
+  '@seaveyon/dsh-di': {
+    // No dependencies, no peers, no Node built-ins: every module cold-imports.
+    skip: [],
+    /**
+     * @param _dist - file URL of the extracted `dist/` directory.
+     * @param _root - filesystem path of the extracted package.
+     * @param entry - package namespace resolved through the public exports map.
+     * @param manifest - extracted package.json.
+     * @returns a description of what was exercised.
+     */
+    async check(_dist, _root, entry, manifest) {
+      const {
+        createDecorator,
+        inject,
+        optional,
+        InstantiationService,
+        IInstantiationService,
+        ServiceCollection,
+        SyncDescriptor,
+        isDisposable,
+      } = entry
+      for (const [name, value] of Object.entries({
+        createDecorator,
+        inject,
+        optional,
+        InstantiationService,
+        ServiceCollection,
+        SyncDescriptor,
+        isDisposable,
+      })) {
+        if (typeof value !== 'function') throw new Error(`${name} is not a function`)
+      }
+      if (String(IInstantiationService) !== 'instantiationService') {
+        throw new Error('IInstantiationService lost its name')
+      }
+
+      // A small graph, resolved the way a plugin's apply() would: a ready host
+      // instance, an eager recipe with a static argument, a delayed recipe, and
+      // disposal in reverse order. Declared without decorator syntax because
+      // this file is plain JavaScript — which is also the point: the published
+      // package must not need a decorator transform to be *used*.
+      const IHost = createDecorator('smoke.host')
+      const IStore = createDecorator('smoke.store')
+      const ILazy = createDecorator('smoke.lazy')
+      const IMissing = createDecorator('smoke.missing')
+      const log = []
+      class Store {
+        // Injected positions lead (host, then the optional one), statics follow.
+        constructor(host, missing, path) {
+          this.host = host
+          this.missing = missing
+          this.path = path
+          log.push('create store')
+        }
+        dispose() {
+          log.push('dispose store')
+        }
+      }
+      inject(IHost, optional(IMissing))(Store)
+      class Lazy {
+        constructor(store) {
+          this.store = store
+          log.push('create lazy')
+        }
+        label() {
+          return `lazy over ${this.store.path}`
+        }
+        dispose() {
+          log.push('dispose lazy')
+        }
+      }
+      inject(IStore)(Lazy)
+
+      const host = { name: 'host' }
+      const collection = new ServiceCollection([IHost, host])
+      collection.set(IStore, new SyncDescriptor(Store, ['/tmp/store.json']))
+      collection.set(ILazy, new SyncDescriptor(Lazy, [], true))
+      const services = new InstantiationService(collection)
+      if (services.get(IInstantiationService) !== services) throw new Error('self-registration')
+
+      const lazy = services.get(ILazy)
+      if (log.length !== 0) throw new Error('delayed service was built eagerly')
+      if (lazy.label() !== 'lazy over /tmp/store.json') throw new Error('resolution through proxy')
+      const store = services.get(IStore)
+      if (store.host !== host) throw new Error('ready instance was not injected as-is')
+      if (store.path !== '/tmp/store.json') throw new Error('static argument')
+      if (store.missing !== undefined) throw new Error('optional position was not left undefined')
+      if (services.get(IStore) !== store) throw new Error('singleton caching')
+      if (!isDisposable(store)) throw new Error('isDisposable')
+
+      let threw = null
+      try {
+        services.get(IMissing)
+      } catch (error) {
+        threw = error
+      }
+      if (!(threw instanceof Error) || !/'smoke.missing' is not registered/.test(threw.message)) {
+        throw new Error('unregistered service did not throw by name')
+      }
+
+      services.dispose()
+      if (
+        JSON.stringify(log) !==
+        JSON.stringify(['create store', 'create lazy', 'dispose lazy', 'dispose store'])
+      ) {
+        throw new Error(`disposal order ${JSON.stringify(log)}`)
+      }
+      if (Object.keys(manifest.dependencies ?? {}).length !== 0) {
+        throw new Error('the container grew a runtime dependency')
+      }
+
+      return 'public export, a graph resolved without decorator syntax, laziness, optional, disposal order'
+    },
+  },
+
   '@seaveyon/dsh-plugin-testkit': {
     // The contract suites declare tests, so they import @rstest/core — an
     // optional peer that is deliberately absent here. Everything a consumer can
@@ -521,6 +637,43 @@ const PACKAGES = {
   },
 }
 
+/**
+ * Pack every production dependency of `manifest` that is a package of this
+ * workspace, from its local build.
+ *
+ * The sibling's `dist/` must exist — CI builds the whole workspace before it
+ * packs anything, and so must a developer running this by hand.
+ *
+ * @param manifest - the extracted package.json.
+ * @param destination - directory the tarballs are written to.
+ * @returns the tarball paths, and the names they satisfy.
+ */
+async function packWorkspaceSiblings(manifest, destination) {
+  const packagesDir = new URL('../packages/', import.meta.url)
+  const directories = new Map()
+  for (const entry of await readdir(packagesDir)) {
+    const manifestUrl = new URL(`${entry}/package.json`, packagesDir)
+    const sibling = await readFile(manifestUrl, 'utf8').then(JSON.parse, () => undefined)
+    if (sibling?.name !== undefined)
+      directories.set(sibling.name, fileURLToPath(new URL(`${entry}/`, packagesDir)))
+  }
+
+  const tarballs = []
+  const names = new Set()
+  for (const name of Object.keys(manifest.dependencies ?? {})) {
+    const directory = directories.get(name)
+    if (directory === undefined) continue
+    const { stdout } = await run('npm', ['pack', '--silent', '--pack-destination', destination], {
+      cwd: directory,
+    })
+    const filename = stdout.trim().split('\n').at(-1)
+    if (!filename) throw new Error(`npm pack printed no filename for ${name}`)
+    tarballs.push(join(destination, filename))
+    names.add(name)
+  }
+  return { tarballs, names }
+}
+
 const tarball = argv[2]
 if (tarball === undefined) {
   console.error('usage: node scripts/smoke-tarball.mjs <path-to-tarball>')
@@ -537,25 +690,30 @@ try {
     throw new Error(`no smoke checks are defined for ${manifest.name}`)
   }
 
-  // A real install puts production dependencies next to the package. The other
-  // packages here have none, so this is a no-op for them; world-line needs
-  // js-yaml (and declares playwright-core) before its public export can load.
-  if (Object.keys(manifest.dependencies ?? {}).length > 0) {
-    await run('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
-      cwd: root,
-    })
-  }
-  // Host packages the entry imports at load time (see `peers` above). They go
-  // one level up, where the host's copy would sit relative to an installed
-  // plugin, and before the package link below exists — npm prunes anything in
-  // its `node_modules` that nothing declares, and the link declares nothing.
-  // Installing them into the package root instead would make npm parse the
-  // extracted manifest, whose `workspace:` devDependency specs it rejects.
-  const peers = entry.peers?.(manifest) ?? []
-  if (peers.length > 0) {
+  // Everything the extracted package needs at load time, installed one level
+  // up — where a DSH profile's hoisted linker puts a plugin's dependencies and
+  // the host's own packages sit relative to an installed plugin — and before
+  // the package link below exists, because npm prunes anything in its
+  // `node_modules` that nothing declares, and the link declares nothing.
+  // Installing into the package root instead would make npm parse the
+  // extracted manifest, whose `workspace:` devDependency specs it rejects even
+  // with `--omit=dev`.
+  //
+  // Three kinds of thing land there: host packages the entry imports at load
+  // time (see `peers` above); the package's production dependencies, fetched
+  // from the registry at the range the manifest declares; and, among those, any
+  // that is itself a package of this workspace — packed from the local build
+  // rather than fetched, so the smoke tests the two as they are in this
+  // checkout and does not depend on the registry already carrying the sibling.
+  const siblings = await packWorkspaceSiblings(manifest, work)
+  const fromRegistry = Object.entries(manifest.dependencies ?? {})
+    .filter(([name]) => !siblings.names.has(name))
+    .map(([name, range]) => `${name}@${range}`)
+  const beside = [...(entry.peers?.(manifest) ?? []), ...siblings.tarballs, ...fromRegistry]
+  if (beside.length > 0) {
     await run(
       'npm',
-      ['install', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', ...peers],
+      ['install', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', ...beside],
       { cwd: work },
     )
   }

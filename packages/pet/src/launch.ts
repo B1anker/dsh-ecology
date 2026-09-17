@@ -298,11 +298,22 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 /**
- * The route handler. Guards first (cheapest and most specific last), then the
- * launch attempt; the outcome maps to a status the panel can tell apart —
- * 404 is "go download it", everything else non-2xx is "try manually".
+ * The route handler over {@link launchDesktopApp} with these seams. The
+ * service graph (`./services`) builds the same handler over a launcher
+ * service through {@link launchRouteHandler}; this form is for callers that
+ * hold the seams directly.
  */
 export function createLaunchHandler(deps: LaunchDeps = {}): RouteHandler {
+  return launchRouteHandler(() => launchDesktopApp(deps))
+}
+
+/**
+ * The route handler over any launch attempt. Guards first (cheapest and most
+ * specific last), then the attempt; the outcome maps to a status the panel
+ * can tell apart — 404 is "go download it", everything else non-2xx is "try
+ * manually".
+ */
+export function launchRouteHandler(launch: () => Promise<LaunchOutcome>): RouteHandler {
   return async (req, res) => {
     if (req.method !== 'POST') {
       res.writeHead(405, { allow: 'POST' })
@@ -317,7 +328,7 @@ export function createLaunchHandler(deps: LaunchDeps = {}): RouteHandler {
       sendJson(res, 403, { ok: false, error: 'loopback_only' })
       return
     }
-    switch (await launchDesktopApp(deps)) {
+    switch (await launch()) {
       case 'launched':
         sendJson(res, 200, { ok: true })
         return

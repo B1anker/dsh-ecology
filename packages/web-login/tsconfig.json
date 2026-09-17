@@ -16,6 +16,8 @@
     // passes locally and fails in CI. Mapping to source also means the tests are
     // checked against the testkit as written, not against a stale build of it.
     "paths": {
+      "@seaveyon/dsh-di": ["../di/src/index.ts"],
+      "@seaveyon/dsh-di/host": ["../di/src/host.ts"],
       "@seaveyon/dsh-plugin-testkit": ["../plugin-testkit/src/index.ts"],
       "@seaveyon/dsh-plugin-testkit/contract": ["../plugin-testkit/src/contract.ts"]
     }

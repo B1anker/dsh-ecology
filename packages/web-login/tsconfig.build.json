@@ -7,7 +7,11 @@
   // says it is.
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "rootDir": "./src"
+    "rootDir": "./src",
+    // The workspace siblings `tsconfig.json` maps to source sit outside
+    // `rootDir`; emitted declarations resolve them through node_modules, as a
+    // consumer's compiler will.
+    "paths": {}
   },
   "include": ["src"],
   // The CLI is built by its own rslib entry, which sets `dts: false`. That flag

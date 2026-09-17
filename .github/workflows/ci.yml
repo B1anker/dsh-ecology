@@ -227,7 +227,7 @@ jobs:
       matrix:
         # Each published package makes its own `engines.node` promise, and a
         # promise is worth what the job that tests it is worth.
-        package: [web-login, plugin-testkit, pet, world-line, git-worktree]
+        package: [di, web-login, plugin-testkit, pet, world-line, git-worktree]
     steps:
       - uses: actions/checkout@v7
 

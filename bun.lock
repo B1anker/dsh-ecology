@@ -18,9 +18,23 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/di": {
+      "name": "@seaveyon/dsh-di",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@rslib/core": "^0.23.2",
+        "@rstest/core": "^0.11.9",
+        "@rstest/coverage-v8": "^0.11.9",
+        "@types/node": "^24.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/git-worktree": {
       "name": "@seaveyon/dsh-git-worktree",
       "version": "0.1.0",
+      "dependencies": {
+        "@seaveyon/dsh-di": ">=0.1.0 <1.0.0",
+      },
       "devDependencies": {
         "@deepseek-ai/cordis": "^4.0.2",
         "@deepseek-ai/dsh-client-ui-primitives": "0.1.5-rc.1",
@@ -48,6 +62,9 @@
     "packages/pet": {
       "name": "@seaveyon/dsh-pet",
       "version": "0.3.0",
+      "dependencies": {
+        "@seaveyon/dsh-di": ">=0.1.0 <1.0.0",
+      },
       "devDependencies": {
         "@rsbuild/plugin-react": "^1",
         "@rslib/core": "^0.23.2",
@@ -63,9 +80,9 @@
         "typescript": "^5.9.3",
       },
       "optionalDependencies": {
-        "@seaveyon/dsh-pet-desktop-darwin-arm64": "0.1.0",
-        "@seaveyon/dsh-pet-desktop-darwin-x64": "0.1.0",
-        "@seaveyon/dsh-pet-desktop-win32-x64": "0.1.0",
+        "@seaveyon/dsh-pet-desktop-darwin-arm64": "0.3.0",
+        "@seaveyon/dsh-pet-desktop-darwin-x64": "0.3.0",
+        "@seaveyon/dsh-pet-desktop-win32-x64": "0.3.0",
       },
     },
     "packages/pet-desktop": {
@@ -87,6 +104,9 @@
     "packages/plugin-testkit": {
       "name": "@seaveyon/dsh-plugin-testkit",
       "version": "0.4.0",
+      "dependencies": {
+        "@seaveyon/dsh-di": ">=0.1.0 <1.0.0",
+      },
       "devDependencies": {
         "@rslib/core": "^0.23.2",
         "@rstest/core": "^0.11.9",
@@ -107,6 +127,9 @@
       "bin": {
         "dsh-web-login-hash": "./dist/hash-password.js",
         "dsh-web-login-recovery": "./dist/create-recovery.js",
+      },
+      "dependencies": {
+        "@seaveyon/dsh-di": ">=0.1.0 <1.0.0",
       },
       "devDependencies": {
         "@rsbuild/plugin-react": "^1",
@@ -133,12 +156,13 @@
     },
     "packages/world-line": {
       "name": "@seaveyon/dsh-world-line",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "bin": {
         "dsh-world-line": "./bin/dsh-world-line.mjs",
         "world-line": "./bin/dsh-world-line.mjs",
       },
       "dependencies": {
+        "@seaveyon/dsh-di": ">=0.1.0 <1.0.0",
         "js-yaml": "4.3.1",
         "playwright-core": "^1.62.1",
       },
@@ -387,6 +411,8 @@
     "@rstest/core": ["@rstest/core@0.11.9", "", { "dependencies": { "@rsbuild/core": "~2.1.13", "@types/chai": "^5.2.3" }, "peerDependencies": { "happy-dom": "^20.8.3", "jsdom": ">=15.0.0" }, "optionalPeers": ["happy-dom", "jsdom"], "bin": { "rstest": "./bin/rstest.js" } }, "sha512-bU8jL1TruGsqHs0innQ4CheBmCLclBkifQ/6KhjofZe6ZQNv9/lsDUarnvUjF7ElByDju2rVyCuiQeDTQRatFg=="],
 
     "@rstest/coverage-v8": ["@rstest/coverage-v8@0.11.9", "", { "dependencies": { "@jridgewell/trace-mapping": "0.3.31", "istanbul-lib-coverage": "^3.2.2", "istanbul-lib-report": "^3.0.1", "istanbul-reports": "^3.2.0", "picomatch": "^4.0.5", "yuku-ast": "^0.8.7", "yuku-parser": "^0.8.7" }, "peerDependencies": { "@rstest/core": "^0.11.3" } }, "sha512-QxQ+Lct3KKSHqpqgkKXGl/UQnCNKLiI2xhr9lEUC6cXpeHZBKDUjrefyud3wYyanH7a877Y92ev0UJ3weztfCA=="],
+
+    "@seaveyon/dsh-di": ["@seaveyon/dsh-di@workspace:packages/di"],
 
     "@seaveyon/dsh-git-worktree": ["@seaveyon/dsh-git-worktree@workspace:packages/git-worktree"],
 

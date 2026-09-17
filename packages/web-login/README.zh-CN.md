@@ -227,6 +227,22 @@ CLI 测试会启动 `dist/hash-password.js`，因此需要先构建。`bun run t
 `bun run pack:check` 都会先构建；只有直接执行 `bun run test:unit` 时需要确保已有
 `dist/`。
 
+### 门禁是如何组合的
+
+`src/services.ts` 基于 [`@seaveyon/dsh-di`](../di) 一处声明门禁的服务图：宿主的
+`webServer` 注册为 `IWebServer`，校验后的配置注册为 `ILoginConfig`，以及 `apply`
+过去内联构造的每个协作者——会话存储、尝试限流器、KDF 闸门、OAuth state 存储、回调
+并发闸门、lab 会话闸门，以及（启用时的）安全审计——都以 `FactoryDescriptor` 包在
+原有的闭包工厂之上。`apply` 从同一个 `InstantiationService` 解析它们；容器的 dispose
+在启动越过最后一个可能"失败关闭"的点之后作为第一个 effect 挂载，因此会在所有路由和
+注册表装饰拆除之后才运行。
+
+请求处理函数不是服务：它们闭包了注册与恢复流程会改写的每次启动状态，而且本身就是
+安全边界，因此留在 `src/index.ts`，与说明每项检查依据的规范注释放在一起。测试若想
+让真实存储跑在注入的时钟上，或把某个存储换成替身，调用
+`createServices(ctx, resolveConfig(...), { sessionBinding, env, now })` 再 clone
+集合即可——见 `test/unit/services.test.ts`。
+
 ## 升级与移除
 
 ### 升级

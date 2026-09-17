@@ -5,7 +5,12 @@
     "types": [],
     "jsx": "react-jsx",
     "noEmit": true,
+    // Workspace siblings are typechecked against their source so build order
+    // does not decide whether this package typechecks; tsconfig.build.json
+    // resets `paths` so emitted declarations resolve them like a consumer will.
     "paths": {
+      "@seaveyon/dsh-di": ["../di/src/index.ts"],
+      "@seaveyon/dsh-di/host": ["../di/src/host.ts"],
       "@seaveyon/dsh-plugin-testkit": ["../plugin-testkit/src/index.ts"],
       "@seaveyon/dsh-plugin-testkit/contract": ["../plugin-testkit/src/contract.ts"]
     }

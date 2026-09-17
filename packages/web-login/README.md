@@ -335,6 +335,26 @@ The CLI test spawns `dist/hash-password.js`, so it needs a build to have run.
 `bun run test` and `bun run pack:check` both build first; only a direct
 `bun run test:unit` expects `dist/` to exist already.
 
+### How the gate is composed
+
+`src/services.ts` declares the gate's service graph over
+[`@seaveyon/dsh-di`](../di): the host's `webServer` under `IWebServer`, the
+validated configuration under `ILoginConfig`, and each collaborator `apply`
+used to build inline — the session store, the attempt limiter, the KDF gate,
+the OAuth state store, the callback gate, the lab-session gate, and (when
+enabled) the security audit — as a `FactoryDescriptor` over the existing
+closure factory. `apply` resolves them from one `InstantiationService`, whose
+disposal is mounted as the first effect once startup has passed the last point
+at which it can fail closed, so it runs after every route and the registry
+decoration have been torn down.
+
+The request handlers are not services. They close over per-boot state that
+enrolment and recovery rewrite, and they are the security boundary; they stay
+in `src/index.ts` beside the spec comments that justify each check. A test that
+wants the real stores over an injected clock, or one store replaced by a
+double, calls `createServices(ctx, resolveConfig(...), { sessionBinding, env, now })`
+and clones the collection — see `test/unit/services.test.ts`.
+
 ## Upgrade and removal
 
 ### Upgrade

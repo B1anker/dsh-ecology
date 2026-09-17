@@ -89,6 +89,13 @@ client 模块系统伺服于 `/plugins/@seaveyon/dsh-pet/client.js`。客户端�
 手写宿主契约类型及其依据记录在 [`src/client/host-types.ts`](src/client/host-types.ts)
 顶部。
 
+宿主面与本仓库其他插件一样，通过 [`@seaveyon/dsh-di`](../di) 组合：
+[`src/services.ts`](src/services.ts) 一处声明服务图——宿主的 `webServer` 注册为
+`IWebServer`，`DesktopLauncher`（固定一组 seam 的 `launchDesktopApp`）注册为
+`IDesktopLauncher`，`LaunchRoute` 以 `@inject` 同时取用两者——`apply` 在其上建容器、
+注册路由，并随插件一起 dispose 容器。测试想让路由跑在启动器替身上，只需
+`createServices(ctx).clone()` 后替换一个条目。
+
 ## 开发
 
 ```sh
