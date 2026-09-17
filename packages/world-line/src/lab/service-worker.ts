@@ -1,7 +1,10 @@
-/** Detached supervisor: owns DSH's pipes for its whole lifetime and provides authenticated stop. */
+/**
+ * Detached supervisor: owns DSH's pipes for its whole lifetime and answers
+ * the CLI over the loopback control endpoint (control-server.ts).
+ */
 import { randomBytes } from 'node:crypto'
-import { createServer } from 'node:http'
 import { hostname } from 'node:os'
+import { createControlServer, listenLoopback } from '../control-server.js'
 import { redactText } from '../domain/redaction.js'
 
 import { writeFileAtomic } from '../fs/atomic.js'
@@ -36,7 +39,7 @@ if (!result.handle || result.kind !== 'ready') {
   process.exitCode = 1
 } else {
   const handle = result.handle
-  let record: ServiceRecord
+  let record: ServiceRecord | undefined
   let stopping = false
   let timer: ReturnType<typeof setInterval> | undefined
   const stop = async () => {
@@ -49,25 +52,20 @@ if (!result.handle || result.kind !== 'ready') {
       await writeFileAtomic(servicePath(home, id), JSON.stringify(record), { mode: 0o600 })
     }
   }
-  const server = createServer((request, response) => {
-    if (request.headers.authorization !== `Bearer ${record.controlToken}`) {
-      response.writeHead(403).end()
-      return
-    }
-    if (request.method === 'POST' && request.url === '/stop') {
-      void stop()
-        .then(() => {
-          response.end(JSON.stringify({ id }))
-          server.close()
-          return undefined
-        })
-        .catch(() => {
-          response.writeHead(500).end()
-          server.close()
-        })
-    } else if (request.method === 'GET' && request.url === '/status') {
-      response.end(JSON.stringify({ id, url: handle.url }))
-    } else response.writeHead(404).end()
+  // The token exists only once the record does, after DSH is up; a request
+  // in the window before that is refused (403) rather than crashing on an
+  // unset record.
+  const server = createControlServer({
+    token: () => record?.controlToken,
+    status: () => ({ id, url: handle.url }),
+    stop: async () => {
+      try {
+        await stop()
+        return { id }
+      } finally {
+        server.close()
+      }
+    },
   })
   try {
     if (controller.signal.aborted) throw new Error('startup cancelled')
@@ -75,17 +73,12 @@ if (!result.handle || result.kind !== 'ready') {
       throw new Error('DSH did not retain the requested mirror port')
     const health = await fetch(new URL('/', handle.url), { signal: AbortSignal.timeout(10000) })
     if (health.status >= 500) throw new Error('HTTP readiness failed')
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(0, '127.0.0.1', resolve)
-    })
-    const address = server.address()
-    if (!address || typeof address === 'string') throw new Error('no control port')
+    const controlPort = await listenLoopback(server)
     record = {
       id,
       hostname: hostname(),
       pid: process.pid,
-      controlPort: address.port,
+      controlPort,
       controlToken: randomBytes(32).toString('hex'),
       port: handle.port,
       state: 'running',

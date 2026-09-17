@@ -3,15 +3,27 @@ import { defineConfig } from '@rstest/core'
 /**
  * Test configuration.
  *
- * Node-environment throughout: this package manages DSH profiles on disk and
- * in child processes — there is no DOM anywhere in Phase 0/1 (vault, receipt,
- * redaction, locks, doctor, timeline). Integration with a real `dsh` binary is
- * opt-in via `test:real`; the unit suite must not require DSH to be installed,
- * so every test builds its own fixture DSH home in a temp directory.
+ * Node-environment by default: this package manages DSH profiles on disk and
+ * in child processes, and the CLI/web suites have no DOM. The few client
+ * tests that need one (the panel's error boundary, the world reader) opt in
+ * per file with a `// @rstest-environment jsdom` docblock. Integration with a
+ * real `dsh` binary is opt-in via `test:real`; the unit suite must not require
+ * DSH to be installed, so every test builds its own fixture DSH home in a
+ * temp directory.
  */
 export default defineConfig({
   include: ['test/**/*.test.ts'],
   isolate: true,
+  tools: {
+    swc: {
+      jsc: {
+        // The client sources use the automatic JSX runtime (react is external
+        // in the bundle); SWC's classic default would look for a React
+        // identifier those sources never import.
+        transform: { react: { runtime: 'automatic' } },
+      },
+    },
+  },
   // Many tests spawn real child processes — the shipped CLI, a node-based dsh
   // shim booted through the lab launcher, git — and wait for them to settle.
   // The runner's 5 s default is measured against a quiet machine; the

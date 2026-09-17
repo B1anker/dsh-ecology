@@ -8,6 +8,7 @@
  */
 
 import { accessSync, constants } from 'node:fs'
+import { posix, win32 } from 'node:path'
 
 import type { CliContext } from '../context.js'
 import { UsageError } from '../domain/errors.js'
@@ -54,19 +55,37 @@ export function requireKnownHost(ctx: CliContext): KnownHost {
   return { binary, version, adapterId: adapterDsh01x.id, raw }
 }
 
-/** Locate pnpm on PATH; throws UsageError with guidance when absent. */
-export function requirePnpm(env: NodeJS.ProcessEnv): { path: string } {
-  const pathValue = env.PATH ?? ''
-  const names = process.platform === 'win32' ? ['pnpm.cmd', 'pnpm.exe', 'pnpm'] : ['pnpm']
-  for (const dir of pathValue.split(':').filter((part) => part !== '')) {
-    for (const name of names) {
-      const candidate = `${dir}/${name}`
-      try {
-        accessSync(candidate, constants.X_OK)
-        return { path: candidate }
-      } catch {
-        // Keep walking.
-      }
+/**
+ * Every path a pnpm executable could sit at, in PATH order: each directory
+ * joined with the platform's executable names. PATH is split on the
+ * platform's list separator — `;` on Windows, where a `:` split would cut
+ * every `C:\…` entry in two and report pnpm missing — the same way
+ * {@link findDshBinary} walks it. Pure, so the Windows shape is testable on
+ * any host.
+ */
+export function pnpmCandidates(pathValue: string, platform: NodeJS.Platform): string[] {
+  const names = platform === 'win32' ? ['pnpm.cmd', 'pnpm.exe', 'pnpm'] : ['pnpm']
+  const pathApi = platform === 'win32' ? win32 : posix
+  return pathValue
+    .split(pathApi.delimiter)
+    .filter((dir) => dir !== '')
+    .flatMap((dir) => names.map((name) => pathApi.join(dir, name)))
+}
+
+/**
+ * Locate pnpm on PATH; throws UsageError with guidance when absent.
+ * `platform` selects the PATH dialect (see {@link pnpmCandidates}).
+ */
+export function requirePnpm(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): { path: string } {
+  for (const candidate of pnpmCandidates(env.PATH ?? '', platform)) {
+    try {
+      accessSync(candidate, constants.X_OK)
+      return { path: candidate }
+    } catch {
+      // Keep walking.
     }
   }
   throw new UsageError(
