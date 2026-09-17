@@ -74,7 +74,7 @@
 - `packages/pet/src/launch.ts`：`LAUNCH_ROUTE_PATH = '/dsh-pet/launch-desktop'`，`LAUNCH_HEADER = 'x-dsh-pet-launch'`，`LOOPBACK_ADDRESSES`，`launchDesktopApp(deps, request)` 已能把环境变量（`DSH_PET_DESKTOP_ORIGINS`）经 spawn env 或 `open --env` 交给 App。伴侣令牌走同一条路。
 - `packages/pet/src/client/mood.ts`：纯心情机 `PetStateMachine` / `deriveMood`（优先级：`pending.length > 0` → waiting；`running && runningCalls.length` → working；`running` → thinking；错误 → sad；否则 idle；`CELEBRATE_MS 2400`、`PET_MS 1600`、`SLEEP_AFTER_MS 5 min`）。`mood-source.ts` 在 0.1.5+ 只能读到 `running` 与两个错误槽，`pending` / `runningCalls` 合成为空——所以现在的宠物几乎进不了 waiting / working。
 - `packages/pet/src/client/bridge.ts`：浏览器 → App 的 `POST /state`、`GET /pets`、`/events` 活性流。`DESKTOP_COMPANION_PORT` 取自 `desktop.ts` 的 `DESKTOP_BRIDGE_PORT = 45731`，`test/desktop-contract.test.ts` 与 `server.zig` 钉死一致。
-- `packages/pet-desktop/src/`：`main.zig`（`runner.runWithOptions`，权限 `view`、`command`）、`model.zig`（`Model`、`Msg`、`boot`、`update`；`start_state_server` 是可替换的测试缝）、`server.zig`（入站 HTTP 桥 + `origin.zig` 的 CORS 策略）、`state.zig`（`Mood` 枚举 8 值、通道行编码）、`view.zig`（宠物画布 + 右键"退出"菜单）、`manifest.zig`（≤ 8 只宠物、16 个图像槽）、`persist.zig`（状态行落盘）、`appkit.zig / win32.zig / windowing.zig`（拖拽、置顶、透明三件套）。`docs/zero-native-notes.md` 列了 12 条已踩过的坑，改窗口相关代码前必读。
+- `packages/pet-desktop/src/`：`main.zig`（`runner.runWithOptions`，权限 `view`、`command`）、`model.zig`（`Model`、`Msg`、`boot`、`update`；`start_state_server` 是可替换的测试缝）、`server.zig`（入站 HTTP 桥 + `origin.zig` 的 CORS 策略）、`state.zig`（`Mood` 枚举 8 值、通道行编码）、`view.zig`（宠物画布 + 右键"退出"菜单）、`manifest.zig`（≤ 8 只宠物、16 个图像槽）、`persist.zig`（状态行落盘）、`appkit.zig / win32.zig / windowing.zig`（拖拽、置顶、透明三件套）。`docs/zero-native-notes.md` 是**已落地功能的踩坑记录**（透明窗口、动画、拖拽、右键退出、Windows 适配都已在当前代码里实现并有测试），不是待办清单：改窗口相关代码前读它避免回退，不要按它"补齐"任何东西。
 - `app.zon`：`permissions = { "view", "command" }`，主窗口 `label = "main"`，未设 `close_policy`。
 - 打包：`packages/pet/package.json` 的 `build:desktop` 把 `zig build -Doptimize=ReleaseSmall` 的**裸二进制**装进 `../pet-desktop-{darwin-arm64,darwin-x64,win32-x64}/bin/`；没有 `.app` bundle。现有 macOS arm64 ReleaseFast 产物 6.9 MB。
 - 测试：`packages/plugin-testkit` 的 `createMockContext` 支持 `on / emit / waterfall`（`src/context.ts` 40–122），可直接触发 `approval/request`。CI 的 `desktop-zig` job 跑 `zig build test`；`scripts/smoke-tarball.mjs` 装 tarball 做冒烟。
@@ -381,5 +381,7 @@ Zig（`packages/pet-desktop/src/*_test` 内联 test）：
 | `fx.fetch` 与 spawn 共用 16 槽 | 决定 POST 与流并发占槽 | 同时在飞的 POST ≤ 4，多余排队 |
 
 ## 16. 给接手 agent 的首条任务
+
+**实现对象是本文（菜单栏 / 托盘伴侣），不是 `docs/zero-native-notes.md`**——那份笔记记录的功能已全部实现，只在你改窗口代码时当作回归清单读。
 
 基于 `main` 新建分支，先只做 P0：在 `packages/pet-desktop` 现有 App 上加 `status_item` / `status_item_fn`（标题取现有 mood）、一条测试通知、`close_policy = "hide"`，`app.zon` 权限加 `network`、`notifications`、`credentials`；用 ad-hoc 签名的 `.app` 与裸二进制各跑一次通知，Windows 交叉编译验证托盘；把结论追加到本文第 12 节与 `packages/pet-desktop/docs/zero-native-notes.md`。不要在 P0 写任何协议或插件代码。提交前运行根 `bun run check`、`packages/pet-desktop` 的 `zig build test` 与 `zig fmt --check src/`，PR 里附两平台截图。
