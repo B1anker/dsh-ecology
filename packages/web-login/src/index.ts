@@ -1073,20 +1073,15 @@ export function apply(ctx: PluginContext, config?: unknown): void {
 
             const state = url.searchParams.get('state')
             const code = url.searchParams.get('code')
-            const pending = oauthStates.consume(state)
-            if (pending === undefined || typeof code !== 'string' || code === '') {
-              sendHtml(
-                res,
-                401,
-                renderLoginPage({
-                  title: options.title,
-                  mode: pageModeForAnonymous(),
-                  message: MSG.expired,
-                }),
-              )
-              return
-            }
 
+            // The gate is taken before the state is consumed. The other order
+            // burned a legitimate state on the way to a 503, so a handful of
+            // callbacks held open against GitHub — or a client sending junk
+            // states at the right moment — turned every real login into
+            // "expired". Now a refused callback leaves its state intact and
+            // the browser can simply retry after the header says so. The
+            // state check itself is synchronous, so a bad state never holds
+            // the gate across any network wait.
             if (!callbackGate.tryAcquire()) {
               sendHtml(
                 res,
@@ -1103,6 +1098,20 @@ export function apply(ctx: PluginContext, config?: unknown): void {
 
             let accessToken: string | undefined
             try {
+              const pending = oauthStates.consume(state)
+              if (pending === undefined || typeof code !== 'string' || code === '') {
+                sendHtml(
+                  res,
+                  401,
+                  renderLoginPage({
+                    title: options.title,
+                    mode: pageModeForAnonymous(),
+                    message: MSG.expired,
+                  }),
+                )
+                return
+              }
+
               accessToken = await exchangeCode({
                 code,
                 codeVerifier: pending.codeVerifier,
