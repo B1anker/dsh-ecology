@@ -31,16 +31,32 @@
 //!   OPTIONS *      CORS preflight -> 204
 //!   anything else  -> 404
 //! Bodies over 4 KiB are refused with 413; invalid JSON or an unknown
-//! mood answers 400. Every response carries
-//! `access-control-allow-origin: *` — the plugin POSTs from the shell
-//! page's origin, so without it the fetch never leaves the browser.
+//! mood answers 400.
+//!
+//! The plugin calls from the shell page's origin, so responses carry a
+//! CORS grant — but only to that origin, never `*`: with a blanket grant
+//! every page in the user's browser could repaint the pet, read its name,
+//! enumerate the imported pets, and watch /events to learn the app is
+//! running. origin.zig decides who is allowed (loopback origins always,
+//! plus `DSH_PET_DESKTOP_ORIGINS`); an allowed Origin is echoed back with
+//! `vary: origin`, a request carrying any other Origin is answered 403
+//! before it is read (its preflight gets a bare 204, which the browser
+//! reads as a refusal), and a request with no Origin at all is not a
+//! browser and is served without a grant.
 //!
 //! One request per connection (`keep_alive = false`), and one detached
 //! thread per accepted connection: the /events stream stays open for the
 //! app's whole lifetime and must not starve /state and /pets behind it.
 //! Shared state across those threads is read-only after boot (manifest,
-//! assets root); the channel handle is the thread-safe one from
-//! fx.openChannel.
+//! assets root, the origin allow-list); the channel handle is the
+//! thread-safe one from fx.openChannel.
+//!
+//! The port is fixed: the plugin's bridge dials it, so it lives in exactly
+//! two places — here and `DESKTOP_BRIDGE_PORT` in the plugin, which has a
+//! test reading this file to keep the two equal. A listen failure (most
+//! often a second copy of the app already holding the port) ends the
+//! process with a message rather than leaving a pet on screen that
+//! nothing can reach.
 //!
 //! Socket/io plumbing follows the runtime's own fetch fixture
 //! (src/runtime/effects_fetch_tests.zig Fixture): std.Io.Threaded on
@@ -51,9 +67,11 @@ const std = @import("std");
 const native_sdk = @import("native_sdk");
 const assets = @import("assets.zig");
 const manifest = @import("manifest.zig");
+const origin = @import("origin.zig");
 const state = @import("state.zig");
 
 pub const host = "127.0.0.1";
+/// Mirrored by `DESKTOP_BRIDGE_PORT` in packages/pet/src/desktop.ts.
 pub const port: u16 = 45731;
 pub const max_body_bytes: usize = 4096;
 const head_buffer_bytes: usize = 8192;
@@ -72,22 +90,68 @@ const heartbeat_seconds = 15;
 /// read unbounded.
 pub const max_sprite_bytes: usize = 16 * 1024 * 1024;
 
-const cors_headers = [_]std.http.Header{
-    .{ .name = "access-control-allow-origin", .value = "*" },
+/// The extra headers of one response: a content type when the body has
+/// one, and the CORS grant when the request's Origin was allowed. Built per
+/// request because the grant echoes that origin; the storage is sized for
+/// the preflight, the widest set.
+const Headers = struct {
+    storage: [5]std.http.Header = undefined,
+    len: usize = 0,
+
+    fn add(self: *Headers, name: []const u8, value: []const u8) void {
+        self.storage[self.len] = .{ .name = name, .value = value };
+        self.len += 1;
+    }
+
+    fn slice(self: *const Headers) []const std.http.Header {
+        return self.storage[0..self.len];
+    }
 };
-const json_headers = [_]std.http.Header{
-    .{ .name = "access-control-allow-origin", .value = "*" },
-    .{ .name = "content-type", .value = "application/json" },
-};
-const png_headers = [_]std.http.Header{
-    .{ .name = "access-control-allow-origin", .value = "*" },
-    .{ .name = "content-type", .value = "image/png" },
-};
-const preflight_headers = [_]std.http.Header{
-    .{ .name = "access-control-allow-origin", .value = "*" },
-    .{ .name = "access-control-allow-methods", .value = "GET, POST, OPTIONS" },
-    .{ .name = "access-control-allow-headers", .value = "content-type" },
-};
+
+/// `grant` is the allowed Origin to echo, or null for no CORS headers at
+/// all (no Origin on the request, or one that was refused upstream).
+fn headersFor(grant: ?[]const u8, content_type: ?[]const u8) Headers {
+    var headers = Headers{};
+    if (content_type) |value| headers.add("content-type", value);
+    addGrant(&headers, grant);
+    return headers;
+}
+
+fn addGrant(headers: *Headers, grant: ?[]const u8) void {
+    if (grant) |value| {
+        headers.add("access-control-allow-origin", value);
+        // The grant differs per origin, so no cache may serve one page's
+        // response to another.
+        headers.add("vary", "origin");
+    }
+}
+
+/// Preflight answer: the grant plus what it covers. Without a grant the
+/// 204 is bare, which the browser treats as a CORS refusal.
+fn preflightHeaders(grant: ?[]const u8) Headers {
+    var headers = Headers{};
+    if (grant != null) {
+        addGrant(&headers, grant);
+        headers.add("access-control-allow-methods", "GET, POST, OPTIONS");
+        headers.add("access-control-allow-headers", "content-type");
+    }
+    return headers;
+}
+
+/// The request's Origin header, copied out of the head buffer because the
+/// body read reuses that buffer. Null when the request carries none (not a
+/// browser); an empty slice when it carries one too long to consider,
+/// which the allow check then refuses like any other stranger.
+fn requestOrigin(request: *const std.http.Server.Request, buffer: *[origin.max_origin_bytes]u8) ?[]const u8 {
+    var headers = request.iterateHeaders();
+    while (headers.next()) |header| {
+        if (!std.ascii.eqlIgnoreCase(header.name, "origin")) continue;
+        if (header.value.len > buffer.len) return buffer[0..0];
+        @memcpy(buffer[0..header.value.len], header.value);
+        return buffer[0..header.value.len];
+    }
+    return null;
+}
 
 /// Spawn the server thread, DETACHED on purpose (channel-monitor's
 /// pattern): after app teardown the thread's next `post` answers
@@ -103,13 +167,25 @@ fn serverMain(handle: native_sdk.ChannelHandle) void {
     defer threaded.deinit();
     const io = threaded.io();
 
+    origin.configureFromEnv();
     const address = std.Io.net.IpAddress.parseIp4(host, port) catch return;
     var listener = std.Io.net.IpAddress.listen(&address, io, .{ .reuse_address = true }) catch |err| {
-        std.debug.print("dsh-pet-desktop: state server listen {s}:{d} failed: {s}\n", .{ host, port, @errorName(err) });
-        return;
+        // Without the bridge the pet can never follow the agent, and the
+        // usual cause is a second copy of this app already listening. A
+        // pet that stays on screen but reacts to nothing is the worst
+        // outcome, so say why and go; the copy that owns the port keeps
+        // working.
+        std.debug.print(
+            "dsh-pet-desktop: cannot listen on {s}:{d} ({s}); is another copy of the app running? quitting\n",
+            .{ host, port, @errorName(err) },
+        );
+        std.process.exit(1);
     };
     defer listener.deinit(io);
     std.debug.print("dsh-pet-desktop: state server listening on http://{s}:{d}/state\n", .{ host, port });
+    for (origin.configuredOrigins()) |entry| {
+        std.debug.print("dsh-pet-desktop: bridge origin allowed: {s}\n", .{entry});
+    }
 
     while (true) {
         const stream = listener.accept(io) catch return;
@@ -141,20 +217,35 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream, handle: native_sdk.Ch
     var request = server.receiveHead() catch return;
     const head = request.head;
 
+    // Read before anything touches the body: the head buffer is reused.
+    var origin_buffer: [origin.max_origin_bytes]u8 = undefined;
+    const request_origin = requestOrigin(&request, &origin_buffer);
+    const grant: ?[]const u8 = if (request_origin) |value| (if (origin.isAllowed(value)) value else null) else null;
+    const foreign = request_origin != null and grant == null;
+
     if (head.method == .OPTIONS) {
-        try request.respond("", .{ .status = .no_content, .keep_alive = false, .extra_headers = &preflight_headers });
+        const headers = preflightHeaders(grant);
+        try request.respond("", .{ .status = .no_content, .keep_alive = false, .extra_headers = headers.slice() });
+        return;
+    }
+    if (foreign) {
+        // A page this bridge does not serve. Refused before the route is
+        // even looked at, so a "simple" cross-origin POST changes nothing
+        // and a foreign EventSource never holds a thread.
+        try request.respond("origin not allowed\n", .{ .status = .forbidden, .keep_alive = false });
         return;
     }
     if (head.method == .GET) {
-        try handleGet(io, &request, &conn_writer.interface, head.target);
+        try handleGet(io, &request, &conn_writer.interface, head.target, grant);
         return;
     }
+    const plain = headersFor(grant, null);
     if (head.method != .POST or !std.mem.eql(u8, head.target, "/state")) {
-        try request.respond("not found\n", .{ .status = .not_found, .keep_alive = false, .extra_headers = &cors_headers });
+        try request.respond("not found\n", .{ .status = .not_found, .keep_alive = false, .extra_headers = plain.slice() });
         return;
     }
     if ((head.content_length orelse 0) > max_body_bytes) {
-        try request.respond("body too large\n", .{ .status = .payload_too_large, .keep_alive = false, .extra_headers = &cors_headers });
+        try request.respond("body too large\n", .{ .status = .payload_too_large, .keep_alive = false, .extra_headers = plain.slice() });
         return;
     }
 
@@ -166,7 +257,7 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream, handle: native_sdk.Ch
     const body_reader = request.readerExpectNone(&recv_buffer);
     const body_len = body_reader.readSliceShort(&body_buffer) catch return;
     if (body_len > max_body_bytes) {
-        try request.respond("body too large\n", .{ .status = .payload_too_large, .keep_alive = false, .extra_headers = &cors_headers });
+        try request.respond("body too large\n", .{ .status = .payload_too_large, .keep_alive = false, .extra_headers = plain.slice() });
         return;
     }
 
@@ -177,7 +268,7 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream, handle: native_sdk.Ch
             error.UnknownMood => "unknown mood\n",
             else => "invalid json\n",
         };
-        try request.respond(message, .{ .status = .bad_request, .keep_alive = false, .extra_headers = &cors_headers });
+        try request.respond(message, .{ .status = .bad_request, .keep_alive = false, .extra_headers = plain.slice() });
         return;
     };
     if (update.mood) |mood| _ = state.sanitizeField(mood);
@@ -191,9 +282,9 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream, handle: native_sdk.Ch
     // valid and accepted either way; only a dead channel (app tearing
     // down) changes what we tell the caller.
     switch (handle.post(line)) {
-        .accepted => try request.respond("{\"ok\":true}\n", .{ .keep_alive = false, .extra_headers = &cors_headers }),
-        .dropped_full, .dropped_oversized => try request.respond("{\"ok\":true,\"dropped\":true}\n", .{ .keep_alive = false, .extra_headers = &cors_headers }),
-        .closed => try request.respond("{\"ok\":false}\n", .{ .status = .service_unavailable, .keep_alive = false, .extra_headers = &cors_headers }),
+        .accepted => try request.respond("{\"ok\":true}\n", .{ .keep_alive = false, .extra_headers = plain.slice() }),
+        .dropped_full, .dropped_oversized => try request.respond("{\"ok\":true,\"dropped\":true}\n", .{ .keep_alive = false, .extra_headers = plain.slice() }),
+        .closed => try request.respond("{\"ok\":false}\n", .{ .status = .service_unavailable, .keep_alive = false, .extra_headers = plain.slice() }),
     }
 }
 
@@ -206,24 +297,26 @@ fn handleGet(
     request: *std.http.Server.Request,
     raw_writer: *std.Io.Writer,
     target: []const u8,
+    grant: ?[]const u8,
 ) !void {
     const path = target[0 .. std.mem.indexOfScalar(u8, target, '?') orelse target.len];
-    if (std.mem.eql(u8, path, "/pets")) return servePets(request);
-    if (std.mem.eql(u8, path, events_path)) return serveEvents(io, raw_writer);
-    if (std.mem.startsWith(u8, path, sprites_prefix)) return serveSprite(io, request, path[sprites_prefix.len..]);
-    try request.respond("not found\n", .{ .status = .not_found, .keep_alive = false, .extra_headers = &cors_headers });
+    if (std.mem.eql(u8, path, "/pets")) return servePets(request, grant);
+    if (std.mem.eql(u8, path, events_path)) return serveEvents(io, raw_writer, grant);
+    if (std.mem.startsWith(u8, path, sprites_prefix)) return serveSprite(io, request, path[sprites_prefix.len..], grant);
+    const headers = headersFor(grant, null);
+    try request.respond("not found\n", .{ .status = .not_found, .keep_alive = false, .extra_headers = headers.slice() });
 }
 
 /// The SSE response head, written raw: std.http's chunked BodyWriter only
 /// emits on a full buffer or end-of-stream, neither of which a heartbeat
 /// ever reaches, so the streaming API cannot serve a trickle. Close-
 /// delimited (no content-length, no chunking) is exactly right here — the
-/// stream ends when the process dies, which is the event itself.
-const sse_head = "HTTP/1.1 200 OK\r\n" ++
+/// stream ends when the process dies, which is the event itself. The CORS
+/// grant goes between the two halves when the request earned one.
+const sse_head_start = "HTTP/1.1 200 OK\r\n" ++
     "content-type: text/event-stream\r\n" ++
-    "cache-control: no-cache\r\n" ++
-    "access-control-allow-origin: *\r\n" ++
-    "connection: close\r\n" ++
+    "cache-control: no-cache\r\n";
+const sse_head_end = "connection: close\r\n" ++
     "\r\n";
 
 /// The liveness route the panel's EventSource holds (see the module
@@ -231,10 +324,12 @@ const sse_head = "HTTP/1.1 200 OK\r\n" ++
 /// panel is gone, and this connection's thread exits with it. The app
 /// quitting kills the process and every socket with it, which is the event
 /// the panel is really after.
-fn serveEvents(io: std.Io, writer: *std.Io.Writer) !void {
+fn serveEvents(io: std.Io, writer: *std.Io.Writer, grant: ?[]const u8) !void {
+    try writer.writeAll(sse_head_start);
+    if (grant) |value| try writer.print("access-control-allow-origin: {s}\r\nvary: origin\r\n", .{value});
     // retry: fast EventSource reconnection after an app restart; the first
     // comment gives the browser bytes to fire `open` on.
-    try writer.writeAll(sse_head ++ "retry: 1000\n\n: ready\n\n");
+    try writer.writeAll(sse_head_end ++ "retry: 1000\n\n: ready\n\n");
     try writer.flush();
     while (true) {
         std.Io.sleep(io, .fromSeconds(heartbeat_seconds), .awake) catch return;
@@ -243,26 +338,29 @@ fn serveEvents(io: std.Io, writer: *std.Io.Writer) !void {
     }
 }
 
-fn servePets(request: *std.http.Server.Request) !void {
+fn servePets(request: *std.http.Server.Request, grant: ?[]const u8) !void {
+    const plain = headersFor(grant, null);
     const m = manifest.current() orelse {
         // The bridge still runs when the manifest failed to load (see
         // manifest.current's contract); there is simply nothing to list.
-        try request.respond("manifest unavailable\n", .{ .status = .service_unavailable, .keep_alive = false, .extra_headers = &cors_headers });
+        try request.respond("manifest unavailable\n", .{ .status = .service_unavailable, .keep_alive = false, .extra_headers = plain.slice() });
         return;
     };
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const body = petsJson(arena.allocator(), m) catch return;
-    try request.respond(body, .{ .keep_alive = false, .extra_headers = &json_headers });
+    const json = headersFor(grant, "application/json");
+    try request.respond(body, .{ .keep_alive = false, .extra_headers = json.slice() });
 }
 
-fn serveSprite(io: std.Io, request: *std.http.Server.Request, tail: []const u8) !void {
+fn serveSprite(io: std.Io, request: *std.http.Server.Request, tail: []const u8, grant: ?[]const u8) !void {
+    const plain = headersFor(grant, null);
     const m = manifest.current() orelse {
-        try request.respond("manifest unavailable\n", .{ .status = .service_unavailable, .keep_alive = false, .extra_headers = &cors_headers });
+        try request.respond("manifest unavailable\n", .{ .status = .service_unavailable, .keep_alive = false, .extra_headers = plain.slice() });
         return;
     };
     const file = declaredSpriteFile(m, tail) orelse {
-        try request.respond("not found\n", .{ .status = .not_found, .keep_alive = false, .extra_headers = &cors_headers });
+        try request.respond("not found\n", .{ .status = .not_found, .keep_alive = false, .extra_headers = plain.slice() });
         return;
     };
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -271,10 +369,11 @@ fn serveSprite(io: std.Io, request: *std.http.Server.Request, tail: []const u8) 
     // import) answers 404 like any unlisted name — the plugin cannot
     // tell the difference and does not need to.
     const bytes = readSprite(io, std.Io.Dir.cwd(), arena.allocator(), file) catch {
-        try request.respond("not found\n", .{ .status = .not_found, .keep_alive = false, .extra_headers = &cors_headers });
+        try request.respond("not found\n", .{ .status = .not_found, .keep_alive = false, .extra_headers = plain.slice() });
         return;
     };
-    try request.respond(bytes, .{ .keep_alive = false, .extra_headers = &png_headers });
+    const png = headersFor(grant, "image/png");
+    try request.respond(bytes, .{ .keep_alive = false, .extra_headers = png.slice() });
 }
 
 /// The /pets body: {"eventsUrl":"/events","pets":[{"id":..., "moods":
@@ -410,6 +509,66 @@ test "sprite file reads through the assets/sprites prefix, bounded" {
     defer std.testing.allocator.free(bytes);
     try std.testing.expectEqualStrings("fake-png-bytes", bytes);
     try std.testing.expectError(error.FileNotFound, readSprite(std.testing.io, tmp.dir, std.testing.allocator, "wolf/missing.png"));
+}
+
+test "response headers echo an allowed origin and carry none otherwise" {
+    const granted = headersFor("http://127.0.0.1:3000", "application/json");
+    try std.testing.expectEqual(3, granted.slice().len);
+    try std.testing.expectEqualStrings("content-type", granted.slice()[0].name);
+    try std.testing.expectEqualStrings("access-control-allow-origin", granted.slice()[1].name);
+    try std.testing.expectEqualStrings("http://127.0.0.1:3000", granted.slice()[1].value);
+    try std.testing.expectEqualStrings("vary", granted.slice()[2].name);
+    try std.testing.expectEqualStrings("origin", granted.slice()[2].value);
+
+    // No origin (not a browser) or a refused one: nothing CORS at all, and
+    // never the old wildcard.
+    const bare = headersFor(null, "image/png");
+    try std.testing.expectEqual(1, bare.slice().len);
+    try std.testing.expectEqualStrings("content-type", bare.slice()[0].name);
+    for (bare.slice()) |header| try std.testing.expect(!std.mem.eql(u8, header.value, "*"));
+    try std.testing.expectEqual(0, headersFor(null, null).slice().len);
+
+    const preflight = preflightHeaders("https://dsh.example.com");
+    try std.testing.expectEqual(4, preflight.slice().len);
+    try std.testing.expectEqualStrings("https://dsh.example.com", preflight.slice()[0].value);
+    try std.testing.expectEqualStrings("access-control-allow-methods", preflight.slice()[2].name);
+    try std.testing.expectEqualStrings("access-control-allow-headers", preflight.slice()[3].name);
+    try std.testing.expectEqual(0, preflightHeaders(null).slice().len);
+}
+
+test "the origin header is read from the request head, case-insensitively" {
+    var recv: [head_buffer_bytes]u8 = undefined;
+    var send: [head_buffer_bytes]u8 = undefined;
+    const request_bytes = "POST /state HTTP/1.1\r\n" ++
+        "Host: 127.0.0.1:45731\r\n" ++
+        "ORIGIN: http://localhost:3000\r\n" ++
+        "content-length: 0\r\n\r\n";
+    var reader = std.Io.Reader.fixed(request_bytes);
+    var writer = std.Io.Writer.fixed(&send);
+    var server = std.http.Server.init(&reader, &writer);
+    _ = &recv;
+    var request = try server.receiveHead();
+    var buffer: [origin.max_origin_bytes]u8 = undefined;
+    const value = requestOrigin(&request, &buffer) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("http://localhost:3000", value);
+    // The copy is the caller's buffer, not the head.
+    try std.testing.expect(value.ptr == &buffer);
+
+    const bare_bytes = "GET /pets HTTP/1.1\r\nHost: 127.0.0.1:45731\r\n\r\n";
+    var bare_reader = std.Io.Reader.fixed(bare_bytes);
+    var bare_writer = std.Io.Writer.fixed(&send);
+    var bare_server = std.http.Server.init(&bare_reader, &bare_writer);
+    var bare_request = try bare_server.receiveHead();
+    try std.testing.expect(requestOrigin(&bare_request, &buffer) == null);
+
+    const long_bytes = "GET /pets HTTP/1.1\r\nOrigin: https://" ++ "x" ** origin.max_origin_bytes ++ "\r\n\r\n";
+    var long_reader = std.Io.Reader.fixed(long_bytes);
+    var long_writer = std.Io.Writer.fixed(&send);
+    var long_server = std.http.Server.init(&long_reader, &long_writer);
+    var long_request = try long_server.receiveHead();
+    const too_long = requestOrigin(&long_request, &buffer) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(0, too_long.len);
+    try std.testing.expect(!origin.isAllowed(too_long));
 }
 
 test "body over the cap is refused before reading" {

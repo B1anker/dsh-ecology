@@ -20,12 +20,16 @@ import {
   inject,
 } from '../src/index.js'
 import {
+  BRIDGE_ORIGINS_ENV,
+  bridgeOriginsEnv,
   bundledDesktopBinary,
   createLaunchHandler,
   DESKTOP_BUNDLE_ID,
   desktopAssetsDir,
   desktopAssetsEnv,
+  isLoopbackOrigin,
   LAUNCH_ROUTE_PATH,
+  type LaunchRequest,
   launchCandidates,
   launchDesktopApp,
   platformPackageBinary,
@@ -361,6 +365,87 @@ describe('launchDesktopApp', () => {
     expect(calls).toHaveLength(0)
   })
 
+  test('the bridge allow-list names only well-formed, non-loopback origins', () => {
+    for (const loopback of [
+      'http://127.0.0.1:3000',
+      'http://localhost:3000',
+      'https://localhost',
+      'http://[::1]:3000',
+    ]) {
+      expect(isLoopbackOrigin(loopback), loopback).toBe(true)
+    }
+    for (const other of [
+      'https://dsh.example.com',
+      'http://127.0.0.1.evil.example',
+      'http://127.0.0.1:3000/',
+      'http://user@127.0.0.1:3000',
+      'http://127.0.0.1:3000,https://evil.example',
+      'null',
+      '',
+    ]) {
+      expect(isLoopbackOrigin(other), other).toBe(false)
+    }
+
+    // Loopback is what the app grants on its own: nothing to pass.
+    expect(bridgeOriginsEnv(['http://127.0.0.1:3000'])).toEqual({})
+    expect(bridgeOriginsEnv()).toEqual({})
+    // A proxy or LAN name in front of the same machine is what the variable
+    // is for; junk from a request header never reaches the environment.
+    expect(
+      bridgeOriginsEnv([
+        'https://dsh.example.com',
+        'http://mymac.local:3000',
+        'https://dsh.example.com',
+        'http://127.0.0.1:3000/',
+        'ftp://files.example',
+        'http://127.0.0.1:3000,https://evil.example',
+        'not an origin',
+      ]),
+    ).toEqual({ [BRIDGE_ORIGINS_ENV]: 'https://dsh.example.com,http://mymac.local:3000' })
+  })
+
+  test('the requesting page reaches the spawned binary as the bridge allow-list', async () => {
+    const spawns: { path: string; env: Record<string, string> | undefined }[] = []
+    const deps = {
+      platform: 'darwin' as const,
+      exists: (path: string) => path === '/pkg/desktop/dsh-pet-desktop',
+      bundledBinary: '/pkg/desktop/dsh-pet-desktop',
+      platformBinary: null,
+      spawnDetached: (path: string, env?: Record<string, string>) => {
+        spawns.push({ path, env })
+        return Promise.resolve()
+      },
+    }
+    await launchDesktopApp(deps, { origins: ['https://dsh.example.com'] })
+    await launchDesktopApp(deps, { origins: ['http://127.0.0.1:3000'] })
+    await launchDesktopApp(deps)
+    expect(spawns.map(({ env }) => env)).toEqual([
+      { [BRIDGE_ORIGINS_ENV]: 'https://dsh.example.com' },
+      {},
+      {},
+    ])
+  })
+
+  test('the installed-copy paths pass the allow-list through open --env', async () => {
+    const { calls, run } = runStub(['fail', 'ok'])
+    const outcome = await launchDesktopApp(
+      {
+        platform: 'darwin',
+        run,
+        exists: (path) => path === '/Applications/DSH Pet.app',
+        bundledBinary: null,
+        platformBinary: null,
+      },
+      { origins: ['https://dsh.example.com'] },
+    )
+    expect(outcome).toBe('launched')
+    const envArg = `${BRIDGE_ORIGINS_ENV}=https://dsh.example.com`
+    expect(calls).toEqual([
+      { command: 'open', args: ['--env', envArg, '-b', DESKTOP_BUNDLE_ID] },
+      { command: 'open', args: ['--env', envArg, '/Applications/DSH Pet.app'] },
+    ])
+  })
+
   test('candidates cover the two standard Applications folders after the env override', () => {
     expect(launchCandidates({ env: {}, home: '/home/u' })).toEqual([
       '/Applications/DSH Pet.app',
@@ -457,11 +542,11 @@ describe('service graph', () => {
       },
     })
     const collection = createServices(ctx).clone()
-    const launches: number[] = []
+    const launches: LaunchRequest[] = []
     const launcher: IDesktopLauncher = {
       _serviceBrand: undefined,
-      launch: () => {
-        launches.push(1)
+      launch: (request = {}) => {
+        launches.push(request)
         return Promise.resolve('not-installed')
       },
     }
@@ -493,7 +578,19 @@ describe('service graph', () => {
       answered,
     )
     expect(answered.status).toBe(404)
-    expect(launches).toHaveLength(1)
+    expect(launches).toEqual([{}])
+
+    // The page that asked is the page the bridge should grant, so its
+    // Origin travels with the launch.
+    await handler(
+      fakeRequest({
+        method: 'POST',
+        headers: { 'x-dsh-pet-launch': '1', origin: 'https://dsh.example.com' },
+        remoteAddress: LOOPBACK,
+      }),
+      fakeResponse(),
+    )
+    expect(launches[1]).toEqual({ origins: ['https://dsh.example.com'] })
 
     dispose()
     expect(registered).toEqual([])

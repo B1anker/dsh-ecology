@@ -147,6 +147,60 @@ export function desktopAssetsEnv(
 }
 
 /**
+ * The environment variable the desktop app reads its bridge allow-list from
+ * (packages/pet-desktop/src/origin.zig): a comma-separated list of exact
+ * browser origins granted CORS at the bridge beyond the loopback origins it
+ * grants on its own.
+ */
+export const BRIDGE_ORIGINS_ENV = 'DSH_PET_DESKTOP_ORIGINS'
+
+/**
+ * Whether a serialized origin names this machine's browser-visible loopback
+ * — what the bridge already allows without being told. Structural: the
+ * value must round-trip through `URL.origin`, so a path, a userinfo part, a
+ * comma-joined pair, or anything else a browser would never put in an
+ * Origin header is not one.
+ */
+export function isLoopbackOrigin(origin: string): boolean {
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    return false
+  }
+  if (url.origin !== origin) return false
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+  const host = url.hostname.toLowerCase()
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]'
+}
+
+/**
+ * The environment addition that names the bridge's extra allowed origins:
+ * `{ DSH_PET_DESKTOP_ORIGINS: "<a>,<b>" }` for the well-formed, non-loopback
+ * origins in `origins`, `{}` when there are none. Loopback origins are left
+ * out because the app grants them anyway; malformed values are left out
+ * because the app would ignore them and a request header is not a place to
+ * take an allow-list from unchecked.
+ */
+export function bridgeOriginsEnv(origins: readonly string[] = []): Record<string, string> {
+  const extra = origins.filter((origin) => {
+    if (isLoopbackOrigin(origin)) return false
+    try {
+      const url = new URL(origin)
+      return url.origin === origin && (url.protocol === 'http:' || url.protocol === 'https:')
+    } catch {
+      return false
+    }
+  })
+  return extra.length === 0 ? {} : { [BRIDGE_ORIGINS_ENV]: [...new Set(extra)].join(',') }
+}
+
+/** `open`'s `--env NAME=VALUE` arguments for an environment addition. */
+function openEnvArgs(env: Record<string, string>): string[] {
+  return Object.entries(env).flatMap(([name, value]) => ['--env', `${name}=${value}`])
+}
+
+/**
  * Bundle id the packaged desktop app registers
  * (packages/pet-desktop/app.zon). Launch Services resolves it wherever the
  * .app lives, so it is tried before any hard-coded path.
@@ -154,6 +208,17 @@ export function desktopAssetsEnv(
 export const DESKTOP_BUNDLE_ID = 'dev.seaveyon.dsh-pet-desktop'
 
 export type LaunchOutcome = 'launched' | 'not-installed' | 'unsupported-platform' | 'launch-failed'
+
+/** What one launch is asked for, beyond the seams it runs on. */
+export interface LaunchRequest {
+  /**
+   * Browser origins the bridge should grant in addition to loopback — in
+   * practice the origin of the page that asked for the launch, which is the
+   * page the bridge is about to hear from. Reaches the app as
+   * {@link BRIDGE_ORIGINS_ENV}; see {@link bridgeOriginsEnv} for the filter.
+   */
+  origins?: readonly string[]
+}
 
 /** Every effectful seam, injectable so tests never touch Launch Services. */
 export interface LaunchDeps {
@@ -180,11 +245,12 @@ export interface LaunchDeps {
   /**
    * Starts a desktop binary as a detached child that outlives the request
    * (and even the DSH server). Resolves once the process is spawned, rejects
-   * on spawn error. Defaults to a detached, stdio-ignored spawn whose
-   * environment points DSH_PET_DESKTOP_ASSETS at the `assets/` directory
-   * beside the binary — see {@link desktopAssetsEnv}.
+   * on spawn error. `env` is the addition the launch asks for beyond the
+   * binary's own — today {@link bridgeOriginsEnv}. Defaults to a detached,
+   * stdio-ignored spawn whose environment also points DSH_PET_DESKTOP_ASSETS
+   * at the `assets/` directory beside the binary — see {@link desktopAssetsEnv}.
    */
-  spawnDetached?: (path: string) => Promise<void>
+  spawnDetached?: (path: string, env?: Record<string, string>) => Promise<void>
 }
 
 async function defaultRun(command: string, args: string[]): Promise<void> {
@@ -193,12 +259,12 @@ async function defaultRun(command: string, args: string[]): Promise<void> {
   })
 }
 
-async function defaultSpawnDetached(path: string): Promise<void> {
+async function defaultSpawnDetached(path: string, env: Record<string, string> = {}): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(path, [], {
       detached: true,
       stdio: 'ignore',
-      env: { ...process.env, ...desktopAssetsEnv(path) },
+      env: { ...process.env, ...desktopAssetsEnv(path), ...env },
     })
     child.once('error', reject)
     child.once('spawn', () => resolve())
@@ -209,10 +275,11 @@ async function defaultSpawnDetached(path: string): Promise<void> {
 /** Spawn one binary, mapping a spawn failure onto the outcome vocabulary. */
 async function spawnOutcome(
   path: string,
-  spawnDetached: (path: string) => Promise<void>,
+  spawnDetached: NonNullable<LaunchDeps['spawnDetached']>,
+  env: Record<string, string>,
 ): Promise<LaunchOutcome> {
   try {
-    await spawnDetached(path)
+    await spawnDetached(path, env)
     return 'launched'
   } catch {
     return 'launch-failed'
@@ -241,19 +308,26 @@ export function launchCandidates(deps: LaunchDeps = {}): string[] {
  * DSH_PET_DESKTOP_APP heading the path search (development and non-standard
  * installs). On Windows there is no `open -b` and no installer record, so
  * DSH_PET_DESKTOP_APP pointing at an exe is the whole fallback.
+ *
+ * Every path hands the app {@link bridgeOriginsEnv} for `request.origins`:
+ * the spawns through their environment, the `open` forms through `--env`.
  */
-export async function launchDesktopApp(deps: LaunchDeps = {}): Promise<LaunchOutcome> {
+export async function launchDesktopApp(
+  deps: LaunchDeps = {},
+  request: LaunchRequest = {},
+): Promise<LaunchOutcome> {
   const platform = deps.platform ?? process.platform
   if (platform !== 'darwin' && platform !== 'win32') return 'unsupported-platform'
   const exists = deps.exists ?? existsSync
   const spawnDetached = deps.spawnDetached ?? defaultSpawnDetached
+  const env = bridgeOriginsEnv(request.origins)
 
   const platformBinary =
     deps.platformBinary === undefined
       ? platformPackageBinary(platform, deps.arch)
       : deps.platformBinary
   if (platformBinary !== null && exists(platformBinary)) {
-    return spawnOutcome(platformBinary, spawnDetached)
+    return spawnOutcome(platformBinary, spawnDetached, env)
   }
 
   const bundled =
@@ -261,18 +335,19 @@ export async function launchDesktopApp(deps: LaunchDeps = {}): Promise<LaunchOut
       ? bundledDesktopBinary(deps.arch, platform)
       : deps.bundledBinary
   if (bundled !== null && exists(bundled)) {
-    return spawnOutcome(bundled, spawnDetached)
+    return spawnOutcome(bundled, spawnDetached, env)
   }
 
   if (platform === 'win32') {
     const fromEnv = (deps.env ?? process.env).DSH_PET_DESKTOP_APP
     if (fromEnv === undefined || fromEnv === '' || !exists(fromEnv)) return 'not-installed'
-    return spawnOutcome(fromEnv, spawnDetached)
+    return spawnOutcome(fromEnv, spawnDetached, env)
   }
 
   const run = deps.run ?? defaultRun
+  const envArgs = openEnvArgs(env)
   try {
-    await run('open', ['-b', DESKTOP_BUNDLE_ID])
+    await run('open', [...envArgs, '-b', DESKTOP_BUNDLE_ID])
     return 'launched'
   } catch {
     // Not indexed (or never installed): fall through to the path search.
@@ -280,7 +355,7 @@ export async function launchDesktopApp(deps: LaunchDeps = {}): Promise<LaunchOut
   for (const candidate of launchCandidates(deps)) {
     if (!exists(candidate)) continue
     try {
-      await run('open', [candidate])
+      await run('open', [...envArgs, candidate])
       return 'launched'
     } catch {
       return 'launch-failed'
@@ -304,7 +379,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
  * hold the seams directly.
  */
 export function createLaunchHandler(deps: LaunchDeps = {}): RouteHandler {
-  return launchRouteHandler(() => launchDesktopApp(deps))
+  return launchRouteHandler((request) => launchDesktopApp(deps, request))
 }
 
 /**
@@ -312,8 +387,14 @@ export function createLaunchHandler(deps: LaunchDeps = {}): RouteHandler {
  * specific last), then the attempt; the outcome maps to a status the panel
  * can tell apart — 404 is "go download it", everything else non-2xx is "try
  * manually".
+ *
+ * The request's Origin — the shell page about to drive the bridge — rides
+ * along as the origin the app should grant; a same-origin fetch may omit the
+ * header, in which case the app's own loopback grant is what applies.
  */
-export function launchRouteHandler(launch: () => Promise<LaunchOutcome>): RouteHandler {
+export function launchRouteHandler(
+  launch: (request: LaunchRequest) => Promise<LaunchOutcome>,
+): RouteHandler {
   return async (req, res) => {
     if (req.method !== 'POST') {
       res.writeHead(405, { allow: 'POST' })
@@ -328,7 +409,10 @@ export function launchRouteHandler(launch: () => Promise<LaunchOutcome>): RouteH
       sendJson(res, 403, { ok: false, error: 'loopback_only' })
       return
     }
-    switch (await launch()) {
+    const origin = req.headers.origin
+    switch (
+      await launch(typeof origin === 'string' && origin !== '' ? { origins: [origin] } : {})
+    ) {
       case 'launched':
         sendJson(res, 200, { ok: true })
         return
